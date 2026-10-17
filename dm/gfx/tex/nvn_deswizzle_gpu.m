@@ -10,7 +10,7 @@ static const char *const k_nvn_deswz_msl =
     " uint bh = 1u << p.th, bd = 1u << p.td, gobs_x = (p.row_bytes + 63u) >> 6, blocks_y = (p.rows + (8u * bh) - 1u) >> (3u + p.th);\n"
     " uint tid = id.x & 31u, gob_x = id.x >> 5, gob_y = id.y, z = id.z; uint xseg = ((tid >> 4) << 1) | ((tid >> 1) & 1u), y = (gob_y << 3) | (((tid >> 2) & 3u) << 1) | (tid & 1u), x = (gob_x << 6) | (xseg << 4);\n"
     " if (x >= p.row_bytes || y >= p.rows || z >= p.slices) return;\n"
-    " uint n = min(16u, p.row_bytes - x); ulong block = 512ul * bh * bd; ulong gob_in_block = ((ulong)(z & (bd - 1u)) << p.th) + (gob_y & (bh - 1u)); ulong so = p.src_off + p.base + ((ulong)(z >> p.td) * gobs_x * blocks_y + (gob_y >> p.th) * gobs_x + gob_x) * block + gob_in_block * 512ul + (ulong)tid * 16ul; ulong doff = p.dst_off + ((ulong)z * p.rows + y) * p.pitch + x;\n"
+    " uint gob_off = ((x & 63u) >> 5) * 256u + (((y & 7u) >> 1) * 64u) + (((x & 31u) >> 4) * 32u) + ((y & 1u) * 16u) + (x & 15u); uint n = min(16u, p.row_bytes - x); ulong block = 512ul * bh * bd; ulong gob_in_block = ((ulong)(z & (bd - 1u)) << p.th) + (gob_y & (bh - 1u)); ulong so = p.src_off + p.base + ((ulong)(z >> p.td) * gobs_x * blocks_y + (gob_y >> p.th) * gobs_x + gob_x) * block + gob_in_block * 512ul + gob_off; ulong doff = p.dst_off + ((ulong)z * p.rows + y) * p.pitch + x;\n"
     " if (n == 16u && ((so | doff) & 15ul) == 0ul) *(device uint4 *)(dst + doff) = *(device const uint4 *)(src + so);\n"
     " else for (uint i = 0; i < n; i++) dst[doff + i] = src[so + i];\n"
     "}\n";
