@@ -20,7 +20,7 @@
 enum { PG_NONE = 0, PG_PROT = 1, PG_BUSY = 2 };
 enum { BUSY_WAIT_MS = 2000 };
 // Tracked ranges = the memory pools (registered by MemoryPoolInitialize). After a pool is destroyed its live=0 slot is reused; the signal handler scans without locks.
-#define MAX_RANGE 4096   // was 256: with more memory pools than that the excess pools are untracked and their textures are treated as dirty and re-uploaded on every use (for Diablo's measured peak see "memory pools" in the memory readout line; Zelda has about 300 and hit this). The scan only covers slots in use, so a larger capacity costs nothing
+#define MAX_RANGE 16384  // The game can keep more than 4096 pools alive (Dark Souls reached the old cap), so leave room for large title screens and streaming heaps. The scan only covers slots in use, so a larger capacity costs nothing
 // Ranges are rounded to host pages (16 KB) but guest memory pools are only 4 KB aligned: adjacent pools share their first / last pages, so one address can fall in several registered ranges.
 // So: "is this texture tracked" looks for a range that holds its whole span; a fault / host pre-write unprotects and stamps every range covering that page; pool destruction identifies its range by the pool's exact start mem.
 // (Previously the first range containing the address was always taken: two SMBW ASTC 6x5 textures whose pool's first page is shared with a small preceding pool were judged untracked and re-uploaded on every use, about 6 MB per frame)
