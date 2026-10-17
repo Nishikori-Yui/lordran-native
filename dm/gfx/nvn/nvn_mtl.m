@@ -2102,7 +2102,8 @@ static void shmap_load(void) {
 @interface NvShader : NSObject { @public id<MTLFunction> fn; nvn_refl rf; id<MTLArgumentEncoder> ae; NSUInteger arg_len; int stage, range_ro, afr; const char *builtin; uint64_t logged; char key[24]; id<MTLBuffer> c1buf; uint64_t c1_gpu; size_t c1off;
     // The argument buffer encoded last time
     id<MTLBuffer> ab_buf; uint64_t ab_gpu; size_t ab_off; uint64_t ab_pass;   // ab_pass: serial of the render pass that encoded this argument block - reused only within the same pass (the arena holding a block from another pass / another submission may already have been reclaimed and rewritten)
-    id<MTLLibrary> bflib; int bflib_tried; NSMutableDictionary<NSString *, id<MTLFunction>> *bffn; } @end   // bflib: readable-tile version <key>_bf (merge B step 2)
+    id<MTLLibrary> bflib; int bflib_tried; NSMutableDictionary<NSString *, id<MTLFunction>> *bffn;
+    id<MTLLibrary> vlib; NSMutableDictionary<NSNumber *, id<MTLFunction>> *vfn; } @end   // vlib: format-specialized vertex fetch; bflib: readable-tile version
 @implementation NvShader @end
 #include "nvn_pso_skey.h"
 @interface NvProg : NSObject { @public NvShader *sh[6]; } @end
@@ -2238,6 +2239,7 @@ static NvShader *shader_load(NSString *pc, int stage) {
     if (nvn_refl_from_json(j, &o->rf, err, sizeof err)) { MLOG("【红】着色器 %s 反射转换失败：%s", pc.UTF8String, err); return nil; }
     if (rt_range_on()) o->range_ro=rt_range_bindings_ro(j);
     o->fn = [lib newFunctionWithName:j[@"entry"]]; o->stage = stage; strlcpy(o->key, pc.UTF8String, sizeof o->key);
+    if (stage == 0 && [j[@"vertex_fetch"] boolValue]) o->vlib = lib;
     if (o->rf.nb) {
         o->ae = [o->fn newArgumentEncoderWithBufferIndex:o->rf.abi];
         int max_aid = -1;
@@ -2673,6 +2675,41 @@ static MTLVertexFormat vfmt(int f) {
     }
     return MTLVertexFormatInvalid;
 }
+static int vertex_fetch_ct(int fmt) {
+    // Unnormalized narrow integers must be extended with their original sign.
+    // All normalized, packed normalized, half and float formats deliver floats.
+    switch (fmt) {
+        case 0x03: case 0x08: case 0x0B: case 0x0F: case 0x14: case 0x17:
+        case 0x1B: case 0x20: case 0x23: case 0x27: case 0x2C: case 0x2F: return NVN_CT_UINT;
+        case 0x04: case 0x09: case 0x0C: case 0x10: case 0x15: case 0x18:
+        case 0x1C: case 0x21: case 0x24: case 0x28: case 0x2D: case 0x30: return NVN_CT_INT;
+        default: return NVN_CT_FLOAT;
+    }
+}
+static int vertex_input_ct(const pso_key *k, NvShader *vs, int v) {
+    int a = vs->rf.v[v].nvn;
+    return a < 16 && vfmt(k->attr[a].fmt) != MTLVertexFormatInvalid ? vertex_fetch_ct(k->attr[a].fmt) : vs->rf.v[v].ct;
+}
+static id<MTLFunction> vertex_fn(const pso_key *k, NvShader *vs) {
+    if (!vs->vlib) return vs->fn;
+    uint64_t bits = 0;
+    for (int v = 0; v < vs->rf.nv; v++) bits |= (uint64_t)vertex_input_ct(k, vs, v) << (2 * vs->rf.v[v].loc);
+    @synchronized(vs) {
+        if (!vs->vfn) vs->vfn = [NSMutableDictionary dictionary];
+        id<MTLFunction> fn = vs->vfn[@(bits)];
+        if (fn) return fn;
+        MTLFunctionConstantValues *values = [MTLFunctionConstantValues new];
+        for (int v = 0; v < vs->rf.nv; v++) {
+            uint32_t ct = vertex_input_ct(k, vs, v);
+            [values setConstantValue:&ct type:MTLDataTypeUInt atIndex:128 + vs->rf.v[v].loc];
+        }
+        NSError *e = nil;
+        fn = [vs->vlib newFunctionWithName:vs->fn.name constantValues:values error:&e];
+        if (!fn) MLOG("【红】顶点格式专门化失败 %s：%s", vs->key, e.localizedDescription.UTF8String);
+        else vs->vfn[@(bits)] = fn;
+        return fn;
+    }
+}
 static MTLBlendFactor bfac(int f) {
     switch (f) { case 1: return MTLBlendFactorZero; case 2: return MTLBlendFactorOne; case 3: return MTLBlendFactorSourceColor; case 4: return MTLBlendFactorOneMinusSourceColor;
         case 5: return MTLBlendFactorSourceAlpha; case 6: return MTLBlendFactorOneMinusSourceAlpha; case 7: return MTLBlendFactorDestinationAlpha; case 8: return MTLBlendFactorOneMinusDestinationAlpha;
@@ -2692,7 +2729,7 @@ static nvn_hmap g_pso = {.klen = sizeof(pso_key)}, g_dss;
 static nvn_hmap g_pso_fail = {.klen = sizeof(pso_key)};   // pipelines that failed to build: remembered and never retried (previously every draw recompiled it, over 10,000 times in one iPhone session)
 static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvShader *fs, id<MTLFunction> fsfn, int merged) {
     MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
-    d.vertexFunction = vs->fn; d.fragmentFunction = fsfn ? fsfn : fs ? fs->fn : nil;
+    d.vertexFunction = vertex_fn(k, vs); d.fragmentFunction = fsfn ? fsfn : fs ? fs->fn : nil;
     // Diagnostic DM_NVN_HILITE=fragment shader key,...: these draws use a solid-color fragment instead (keys 1–6 in order magenta / green / cyan / yellow / blue / white), to see where the geometry lands
     if (fs) { static char keys[6][24]; static int nk = -1; static id<MTLLibrary> hl;
         if (nk < 0) { nk = 0; const char *e = getenv("DM_NVN_HILITE");
@@ -2742,7 +2779,7 @@ static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvS
             continue;
         }
         int st = k->attr[a].stream;
-        vf = vfmt_for_ct(vf, rf->v[v].ct, k->attr[a].fmt, vs->key, a);
+        if (!vs->vlib) vf = vfmt_for_ct(vf, rf->v[v].ct, k->attr[a].fmt, vs->key, a);
         vd.attributes[loc].format = vf; vd.attributes[loc].offset = k->attr[a].offset; vd.attributes[loc].bufferIndex = VB_SLOT(st);
         vd.layouts[VB_SLOT(st)].stride = k->stream[st].stride ? k->stream[st].stride : 4;
         vd.layouts[VB_SLOT(st)].stepFunction = k->stream[st].stride == 0 ? MTLVertexStepFunctionConstant : k->stream[st].divisor ? MTLVertexStepFunctionPerInstance : MTLVertexStepFunctionPerVertex;

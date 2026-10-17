@@ -480,6 +480,34 @@ def vs_pad(key, src):
     k = src.find('main0_out out = {};') + len('main0_out out = {};')
     return src[:k] + ''.join(f'\n    out.dm_pad{l} = float4(0.0, 0.0, 0.0, 1.0);' for l in miss) + src[k:], miss
 
+def vertex_fetch(src):
+    """Specialize vertex fetch by NVN format while preserving Maxwell register bits."""
+    fields = list(re.finditer(r'\b((?:float|int|uint)[1-4]?)\s+(\w+)\s*\[\[attribute\((\d+)\)\]\]', src))
+    if not fields: return src, False
+    entry = re.search(r'\bvertex\s+\w+\s+\w+\(main0_in in \[\[stage_in\]\]', src)
+    if not entry: raise ValueError('Unsupported vertex entry for format specialization')
+    declarations, members, loads = [], [], []
+    for f in fields:
+        typ, name, loc = f.groups()
+        width = typ[-1] if typ[-1].isdigit() else ''
+        default = 1 if typ.startswith('uint') else 2 if typ.startswith('int') else 0
+        declarations.append(f'constant uint dm_vfmt{loc} [[function_constant({128 + int(loc)})]];\n')
+        for ct, base in enumerate(('float', 'uint', 'int')):
+            flag = f'dm_v{loc}_{ct}'
+            declarations.append(f'constant bool {flag} = is_function_constant_defined(dm_vfmt{loc}) ? dm_vfmt{loc} == {ct} : {str(ct == default).lower()};\n')
+            members.append(f'    {base}{width} dm_v{loc}_{ct} [[attribute({loc}), function_constant({flag})]];\n')
+        values = [f'as_type<{typ}>(dm_fetch.dm_v{loc}_{ct})' for ct in range(3)]
+        loads.append(f'    in.{name} = dm_v{loc}_0 ? {values[0]} : dm_v{loc}_1 ? {values[1]} : {values[2]};\n')
+    for f in reversed(fields):
+        src = src[:f.start()] + f'{f[1]} {f[2]}' + src[f.end():]
+    pos = src.index('struct main0_in')
+    src = src[:pos] + ''.join(declarations) + 'struct dm_vertex_fetch\n{\n' + ''.join(members) + '};\n\n' + src[pos:]
+    src = src.replace('main0_in in [[stage_in]]', 'dm_vertex_fetch dm_fetch [[stage_in]]', 1)
+    entry = re.search(r'\bvertex\s+\w+\s+\w+\(', src)
+    pos = src.index('{', entry.end()) + 1
+    src = src[:pos] + '\n    main0_in in = {};\n' + ''.join(loads) + src[pos:]
+    return src, True
+
 def finish(key, w, j, c1):
     name, k = loc[key]
     msl = os.path.join(w, key + '.metal'); air = msl[:-6] + '.air'; lib = os.path.join(out, key + '_b.metallib')
@@ -499,6 +527,14 @@ def finish(key, w, j, c1):
     if j['stage'] == 'vs' and PAIRS.get(key):   # 像素着色器读而顶点没写的输出补成 (0,0,0,1)（见 vs_pad） | outputs the pixel shader reads but the vertex shader does not write get (0,0,0,1) (see vs_pad)
         src, pad = vs_pad(key, src)
         if pad: open(msl, 'w').write(src)
+    # Reflection describes the shader's register interpretation; the specialized
+    # stage input separately describes the conversion performed by vertex fetch.
+    vertex_inputs = [{'location': int(m.group(2)), 'msl_type': m.group(1)} for m in re.finditer(r'(\w+)\s+\w+\s*\[\[attribute\((\d+)\)\]\]', src)]
+    raster = raster_facts(j['stage'], src)
+    fetch = False
+    if j['stage'] == 'vs':
+        src, fetch = vertex_fetch(src)
+        if fetch: open(msl, 'w').write(src)
     res = json.load(open(os.path.join(w, key + '.res.json')))
     try:
         subprocess.run(['xcrun', '-sdk', 'macosx', 'metal', '-c', msl, '-o', air], check=True)
@@ -520,8 +556,8 @@ def finish(key, w, j, c1):
             'entry': entry.group(2) if entry else 'main0', 'msl_entry_kind': entry.group(1) if entry else None,
             'threadgroup_size': j.get('local'), 'c1': c1.hex(), 'notes': res['notes'] + (['无配对 PC 反射，查询按缺省'] if j.get('pc_missing') else []), 'drv_reads': dr, 'drv_unfillable': unfillable(dr),
             'bindings': reflect(key, j['stage'], src, res),
-            'vertex_inputs': [{'location': int(m.group(2)), 'msl_type': m.group(1)} for m in re.finditer(r'(\w+)\s+\w+\s*\[\[attribute\((\d+)\)\]\]', src)],
-            'raster': raster_facts(j['stage'], src), 'vs_pad': pad}
+            'vertex_inputs': vertex_inputs, 'vertex_fetch': fetch,
+            'raster': raster, 'vs_pad': pad}
     write_refl(key, refl)
     fetch_finish(key, src, refl)
     return 'ok', '', refl

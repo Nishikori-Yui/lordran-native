@@ -1,9 +1,9 @@
 # DARK SOULS: REMASTERED bring-up
 
-Status on 2026-10-17: experimental. An unsigned iOS IPA builds, and the Mac
-host reaches the offline title menu and brightness settings. Character creation,
-gameplay and on-device iOS operation have not been verified. Do not list this
-profile as playable.
+Status on 2026-10-18: experimental. An unsigned iOS IPA builds. User captures
+show Mac character creation and asylum gameplay, with incorrect world textures,
+opaque ground patches and unstable water. On-device iOS operation has not been
+verified. Do not list this profile as playable.
 
 ## Inputs and shaders
 
@@ -11,7 +11,7 @@ profile as playable.
 - Tested main build: `df3766a2bb651a3e822828abf10b6f7b`.
 - SDK 4.5 build: `d95547528dcd684e2813ec83d338a472`.
 - NEX module: `73f98f5f7a34d4c520bda7c1a19cd9bd`.
-- Shader chain: `924286814443`; 3,099 libraries built for Mac and iOS.
+- Shader chain: `353d61b89bf3`; 3,099 libraries built for Mac and iOS.
 - Archives use BHD5/BDT, DCX-DFLT and BND3; the reader is
   `dm/gfx/tools/fromsoftware.py`.
 - The measured shader corpus uses bindless handles in guest c13 and no c2
@@ -77,3 +77,43 @@ dm/ios/tools/build_ipa.sh "<NSP folder>/DarkSoulsRemastered.ipa"
   then verify graphics, audio, saves and memory over a longer run.
 - Have the user sideload the unsigned IPA and return `Documents/log.txt`.
   Mac results alone do not establish iPhone compatibility.
+
+## Vertex fetch investigation (2026-10-18)
+
+`run/current-gpu.log` reports an `RG16I` (0x15) attribute bound to a float
+input of `vs_engine.bin#204` (`FRPG_Phn_PIN_D_Non.vpo`). Its shader bitcasts
+the input to signed int, converts that int numerically to float, then scales
+the UV by 1/1024. Numeric conversion by Metal vertex fetch before this bitcast
+corrupts the UV. For example, a stored short of -1024 must reach the register
+as `0xfffffc00`, rather than the float representation `0xc4800000`.
+
+The same shader has also been seen with normalized UChar4 in
+`run/live-vertex-diagnostic.log`. A single static float/uint declaration cannot
+serve both layouts. Reinterpreting signed shorts as unsigned shorts also loses
+sign extension. There are 258 vertex shaders in this corpus containing signed
+integer conversion and the 1/1024 UV scale.
+
+The offline compiler now generates conditional float/int/uint stage inputs.
+The host specializes them using the actual NVN attribute formats already in
+the pipeline cache key. The adapter preserves register bits before the
+translated shader interprets them. Specialization uses compiled metallibs,
+including on iOS; it does not translate game shaders at runtime.
+
+Validation:
+
+- The GPU test `tests/test_vertex_fetch.py` uses the production pipeline
+  descriptor and checks signed Short2, normalized UChar4, unsigned UChar4,
+  float4 and returning to a cached layout. All 15 pixel comparisons pass
+  under Metal API validation, for float, uint and int shader declarations.
+- All 3,099 Mac and 3,099 iOS shaders build; 390 vertex shaders have
+  format-specialized fetch, and one procedural vertex shader has no inputs.
+  Bindings, original input types, raster facts and c1 constants match the
+  preceding chain for every shader.
+- `c1_full.tsv` has been regenerated and the Mac host rebuilt.
+
+This establishes the vertex-fetch defect and the adapter's behavior, not a
+visual pass for the new gameplay build. The existing game process was left
+running on its previous build. The latest live log has only 18 draws/frame;
+absence of pipeline failures there is not evidence about the faulty gameplay
+scene. The pass diagnostic log also lacks the per-draw vertex/alpha state
+needed to attribute each visible ground patch or water draw.
