@@ -54,7 +54,7 @@ The game's work folder is `<NSP folder>/01004AB00A260000-work`.
 - Artifact metadata and SHA-256 are saved in
   `build/ios/pkg/validation.json` under the work folder.
 - The repaired 2026-10-18 artifact is
-  `<NSP folder>/DarkSoulsRemastered-gfx-20261018.ipa` (4,183,998,448 bytes),
+  `<NSP folder>/DarkSoulsRemastered-gfx-20261018.ipa`,
   with shader chain `0eefab8cf997`. ZIP CRCs, all 3,099 packaged reflection
   versions, the embedded host's chain, and unsigned status were checked.
   Its validation record is also saved in
@@ -216,6 +216,13 @@ relationship to water or the ground patches is unknown. The texture fitter
 already supports compatible 2D/array views; a single 2D image supplies no
 evidence for six cube faces. Do not manufacture faces or suppress the warning
 without capturing the draw and its bindless handle.
+
+New builds log the first incompatible texture for each shader binding,
+including the shader key, stage, argument ID, bound slot or uniform offset,
+raw handle, texture ID and dimensions, expected/actual type, frame, pass,
+draw and alpha state. This runs without PASSDUMP and preserves the original
+binding behavior, so the next gameplay log can identify a specific shader
+for `DM_NVN_KEYDUMP` without recording every draw indefinitely.
 
 ## iOS build compatibility (2026-10-18)
 
