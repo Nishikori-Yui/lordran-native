@@ -95,51 +95,178 @@ HLE_FORCE("_ZN2nn5swkbd12ShowKeyboardEPNS0_6StringERKNS0_15ShowKeyboardArgE", "�
     return swkbd_show(out, arg, front_text_input);
 }
 
-// ---------- InlineKeyboard (Super Mario 3D World + Bowser's Fury) ----------
-// On hardware Initialize starts a resident keyboard applet (swkbd::detail::InlineKeyboardImpl::Launch -> applet::CreateLibraryApplet); after that Calc collects its results every frame and calls the callbacks the game registered,
-// Appear / Disappear / SetInputText / SetCursorPos send requests through applet storage, and GetImage takes the keyboard picture from shared memory. The host has no applet proxy: entering the save select after the character select, Initialize crashed on a null pointer in CreateLibraryApplet.
-// Every entry that touches the applet is taken over here and behaves as a keyboard the player always cancels right away: Appear arms one cancel, and the next Calc (on hardware the callbacks are called from Calc too) calls the game's cancel callback; no picture (GetImage reports none).
-// The constructor, GetRequiredWorkBufferSize / GetImageMemoryRequirement / GetRequiredStringBufferSize and InputText::Set are pure computations and keep running in the SDK
+// InlineKeyboard uses the same native dialog; results are delivered from Calc on
+// the calling guest thread. Keep state outside the SDK object (no applet proxy).
+// SDK 4.5 d9554752: CalcDecidedEnter_ +0x1cb744 reads 0x3f0 bytes;
+// Dark Souls 1.0.3 main+0x686064 reads its UTF-16 length at +0x3ec.
+// ChangedString adds composition begin/end and cursor at +0x3f0/4/8.
+// UTF-8 replies use the same trailing fields after a 0x7d4-byte text area.
+// AppearArg is 0x48 bytes; main+0x685de0 writes max length at +0x20.
 typedef void (*ikb_cb0)(void);
-static struct { const void *kb; ikb_cb0 cancel; int pending; } g_ikb[4];
+typedef void (*ikb_cb)(const void *);
+typedef struct {
+    const void *kb;
+    uint64_t epoch;
+    ikb_cb0 initialized, finished, cancel;
+    ikb_cb changed[2], moved[2], enter[2];
+    uint16_t text[501];
+    int utf8, maxlen, minlen, cursor, pending, init_pending;
+} ikb_state;
+static ikb_state g_ikb[4];
+static uint64_t g_ikb_epoch;
 static pthread_mutex_t g_ikb_mu = PTHREAD_MUTEX_INITIALIZER;
-static int ikb_slot(const void *kb) {   // the caller holds the lock
+static int ikb_find(const void *kb) {
     for (int i = 0; i < 4; i++) if (g_ikb[i].kb == kb) return i;
-    for (int i = 0; i < 4; i++) if (!g_ikb[i].kb) { g_ikb[i].kb = kb; return i; }
     return -1;
 }
-HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard10InitializeEPv", "内嵌键盘：不起小程序（宿主无小程序代理），报成功", unsigned, h_ikb_Init, void *kb, void *work) {
-    (void)work; pthread_mutex_lock(&g_ikb_mu); int i = ikb_slot(kb); pthread_mutex_unlock(&g_ikb_mu);
-    LOG("swkbd：内嵌键盘 Initialize %p（宿主不起小程序；Appear 一律按玩家取消）%s", kb, i < 0 ? "【红】登记表满" : "");
-    return 1;
+static int ikb_slot(const void *kb) { // Caller holds the lock.
+    int i = ikb_find(kb);
+    if (i >= 0) return i;
+    for (i = 0; i < 4; i++) if (!g_ikb[i].kb) {
+        g_ikb[i] = (ikb_state){.kb = kb, .epoch = ++g_ikb_epoch, .maxlen = 500};
+        return i;
+    }
+    return -1;
 }
-HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard8FinalizeEv", "内嵌键盘：没起小程序，无可关", void, h_ikb_Fin, void *kb) {
-    pthread_mutex_lock(&g_ikb_mu); for (int i = 0; i < 4; i++) if (g_ikb[i].kb == kb) memset(&g_ikb[i], 0, sizeof g_ikb[i]); pthread_mutex_unlock(&g_ikb_mu);
-}
-HLE_FORCE("_ZN2nn5swkbd14InlineKeyboardD1Ev", "内嵌键盘析构：没起小程序，只清登记", void, h_ikb_Dtor, void *kb) { h_ikb_Fin(kb); }
-HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard24SetDecidedCancelCallbackEPFvvE", "内嵌键盘：记下取消回调", void, h_ikb_SetCancel, void *kb, ikb_cb0 fn) {
-    pthread_mutex_lock(&g_ikb_mu); int i = ikb_slot(kb); if (i >= 0) g_ikb[i].cancel = fn; pthread_mutex_unlock(&g_ikb_mu);
-}
-#define IKB_IGNORE_CB(mangled, cname) \
-    HLE_FORCE(mangled, "内嵌键盘：回调只记不调（键盘从不确定 / 改字 / 移光标）", void, cname, void *kb, void *fn) { (void)kb; (void)fn; }
-IKB_IGNORE_CB("_ZN2nn5swkbd14InlineKeyboard22SetMovedCursorCallbackEPFvPKNS0_14MovedCursorArgEE", h_ikb_SetMoved)
-IKB_IGNORE_CB("_ZN2nn5swkbd14InlineKeyboard23SetDecidedEnterCallbackEPFvPKNS0_15DecidedEnterArgEE", h_ikb_SetEnter)
-IKB_IGNORE_CB("_ZN2nn5swkbd14InlineKeyboard24SetChangedStringCallbackEPFvPKNS0_16ChangedStringArgEE", h_ikb_SetChanged)
-IKB_IGNORE_CB("_ZN2nn5swkbd14InlineKeyboard27SetFinishedKeyboardCallbackEPFvvE", h_ikb_SetFinished)
-HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard6AppearERKNS0_9AppearArgE", "内嵌键盘出现：宿主不显示，下一次 Calc 按玩家取消", void, h_ikb_Appear, void *kb, const void *arg) {
-    (void)arg; pthread_mutex_lock(&g_ikb_mu); int i = ikb_slot(kb); if (i >= 0) g_ikb[i].pending = 1; pthread_mutex_unlock(&g_ikb_mu);
-    LOG("swkbd：内嵌键盘 Appear %p → 下一拍按取消", kb);
-}
-HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard9DisappearEv", "内嵌键盘收起：宿主本就不显示", void, h_ikb_Disappear, void *kb) {
-    pthread_mutex_lock(&g_ikb_mu); int i = ikb_slot(kb); if (i >= 0) g_ikb[i].pending = 0; pthread_mutex_unlock(&g_ikb_mu);
-}
-HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard4CalcEv", "内嵌键盘每帧更新：有待取消的就调游戏的取消回调", void, h_ikb_Calc, void *kb) {
-    ikb_cb0 fn = NULL; pthread_mutex_lock(&g_ikb_mu); int i = ikb_slot(kb);
-    if (i >= 0 && g_ikb[i].pending) { g_ikb[i].pending = 0; fn = g_ikb[i].cancel; }
+static int ikb_current(const ikb_state *s) {
+    pthread_mutex_lock(&g_ikb_mu);
+    int i = ikb_find(s->kb), current = i >= 0 && g_ikb[i].epoch == s->epoch;
     pthread_mutex_unlock(&g_ikb_mu);
-    if (fn) fn();   // guest code, called on the guest thread that called Calc (as on hardware)
+    return current;
 }
-HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard12SetInputTextERKNS0_9InputTextE", "内嵌键盘：设文本（宿主不显示，忽略）", void, h_ikb_SetText, void *kb, const void *t) { (void)kb; (void)t; }
-HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard12SetCursorPosEi", "内嵌键盘：设光标（宿主不显示，忽略）", void, h_ikb_SetCursor, void *kb, int pos) { (void)kb; (void)pos; }
-HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard8GetImageEPvm", "内嵌键盘画面：无（返回 false）", unsigned, h_ikb_GetImage, void *kb, void *buf, size_t n) { (void)kb; (void)buf; (void)n; return 0; }
-HLE_FORCE("_ZNK2nn5swkbd14InlineKeyboard13GetWindowSizeEPiS2_", "内嵌键盘窗口尺寸：0 × 0", void, h_ikb_WinSize, const void *kb, int *w, int *h) { (void)kb; if (w) *w = 0; if (h) *h = 0; }
+HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard10InitializeEPv", "内嵌键盘：登记原生输入状态", unsigned, h_ikb_Init, void *kb, void *work) {
+    (void)work;
+    pthread_mutex_lock(&g_ikb_mu);
+    int i = ikb_slot(kb);
+    if (i >= 0) { g_ikb[i].epoch = ++g_ikb_epoch; g_ikb[i].pending = g_ikb[i].init_pending = 0; }
+    pthread_mutex_unlock(&g_ikb_mu);
+    LOG("swkbd：内嵌键盘 Initialize %p%s", kb, i < 0 ? "【红】登记表满" : "");
+    return i >= 0;
+}
+HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard6LaunchEv", "内嵌键盘：下一次 Calc 通知初始化完成", void, h_ikb_Launch, void *kb) {
+    pthread_mutex_lock(&g_ikb_mu);
+    int i = ikb_find(kb); if (i >= 0) g_ikb[i].init_pending = 1;
+    pthread_mutex_unlock(&g_ikb_mu);
+}
+HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard8FinalizeEv", "内嵌键盘：清理原生输入状态", void, h_ikb_Fin, void *kb) {
+    pthread_mutex_lock(&g_ikb_mu);
+    int i = ikb_find(kb); if (i >= 0) memset(&g_ikb[i], 0, sizeof g_ikb[i]);
+    pthread_mutex_unlock(&g_ikb_mu);
+}
+HLE_FORCE("_ZN2nn5swkbd14InlineKeyboardD1Ev", "内嵌键盘析构：清理输入状态", void, h_ikb_Dtor, void *kb) { h_ikb_Fin(kb); }
+#define IKB_CB(mangled, cname, type, member) \
+    HLE_FORCE(mangled, "内嵌键盘：登记游戏回调", void, cname, void *kb, type fn) { \
+        pthread_mutex_lock(&g_ikb_mu); int i = ikb_slot(kb); \
+        if (i >= 0) g_ikb[i].member = fn; pthread_mutex_unlock(&g_ikb_mu); \
+    }
+IKB_CB("_ZN2nn5swkbd14InlineKeyboard29SetFinishedInitializeCallbackEPFvvE", h_ikb_SetInitialized, ikb_cb0, initialized)
+IKB_CB("_ZN2nn5swkbd14InlineKeyboard27SetFinishedKeyboardCallbackEPFvvE", h_ikb_SetFinished, ikb_cb0, finished)
+IKB_CB("_ZN2nn5swkbd14InlineKeyboard24SetDecidedCancelCallbackEPFvvE", h_ikb_SetCancel, ikb_cb0, cancel)
+IKB_CB("_ZN2nn5swkbd14InlineKeyboard23SetDecidedEnterCallbackEPFvPKNS0_15DecidedEnterArgEE", h_ikb_SetEnter, ikb_cb, enter[0])
+IKB_CB("_ZN2nn5swkbd14InlineKeyboard27SetDecidedEnterCallbackUtf8EPFvPKNS0_19DecidedEnterArgUtf8EE", h_ikb_SetEnter8, ikb_cb, enter[1])
+IKB_CB("_ZN2nn5swkbd14InlineKeyboard24SetChangedStringCallbackEPFvPKNS0_16ChangedStringArgEE", h_ikb_SetChanged, ikb_cb, changed[0])
+IKB_CB("_ZN2nn5swkbd14InlineKeyboard28SetChangedStringCallbackUtf8EPFvPKNS0_20ChangedStringArgUtf8EE", h_ikb_SetChanged8, ikb_cb, changed[1])
+IKB_CB("_ZN2nn5swkbd14InlineKeyboard22SetMovedCursorCallbackEPFvPKNS0_14MovedCursorArgEE", h_ikb_SetMoved, ikb_cb, moved[0])
+IKB_CB("_ZN2nn5swkbd14InlineKeyboard26SetMovedCursorCallbackUtf8EPFvPKNS0_18MovedCursorArgUtf8EE", h_ikb_SetMoved8, ikb_cb, moved[1])
+#undef IKB_CB
+HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard11SetUtf8ModeEb", "内嵌键盘：选择回调文本编码", void, h_ikb_SetUtf8, void *kb, unsigned enabled) {
+    pthread_mutex_lock(&g_ikb_mu);
+    int i = ikb_slot(kb); if (i >= 0) g_ikb[i].utf8 = (enabled & 0xff) != 0;
+    pthread_mutex_unlock(&g_ikb_mu);
+}
+HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard6AppearERKNS0_9AppearArgE", "内嵌键盘：下一次 Calc 显示原生输入框", void, h_ikb_Appear, void *kb, const void *arg) {
+    int32_t maxlen, minlen;
+    memcpy(&maxlen, (const uint8_t *)arg + 0x20, 4);
+    memcpy(&minlen, (const uint8_t *)arg + 0x24, 4);
+    pthread_mutex_lock(&g_ikb_mu);
+    int i = ikb_find(kb);
+    if (i >= 0) {
+        g_ikb[i].maxlen = maxlen > 0 && maxlen <= 500 ? maxlen : 500;
+        g_ikb[i].minlen = minlen > 0 && minlen <= g_ikb[i].maxlen ? minlen : 0;
+        g_ikb[i].pending = 1;
+        g_ikb[i].epoch = ++g_ikb_epoch;
+    }
+    pthread_mutex_unlock(&g_ikb_mu);
+    LOG("swkbd：内嵌键盘 Appear %p → 原生输入框，上限 %d 下限 %d", kb, maxlen, minlen);
+}
+HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard9DisappearEv", "内嵌键盘：撤销待处理输入", void, h_ikb_Disappear, void *kb) {
+    pthread_mutex_lock(&g_ikb_mu);
+    int i = ikb_find(kb);
+    if (i >= 0) { g_ikb[i].pending = 0; g_ikb[i].epoch = ++g_ikb_epoch; }
+    pthread_mutex_unlock(&g_ikb_mu);
+}
+HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard12SetInputTextERKNS0_9InputTextE", "内嵌键盘：保留初始文本", void, h_ikb_SetText, void *kb, const void *text) {
+    pthread_mutex_lock(&g_ikb_mu);
+    int i = ikb_slot(kb);
+    if (i >= 0) { memcpy(g_ikb[i].text, text, 500 * 2); g_ikb[i].text[500] = 0; }
+    pthread_mutex_unlock(&g_ikb_mu);
+}
+HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard12SetCursorPosEi", "内嵌键盘：保留光标位置", void, h_ikb_SetCursor, void *kb, int pos) {
+    pthread_mutex_lock(&g_ikb_mu);
+    int i = ikb_slot(kb); if (i >= 0) g_ikb[i].cursor = pos;
+    pthread_mutex_unlock(&g_ikb_mu);
+}
+static void ikb_calc(void *kb, swkbd_input_fn input) {
+    // Heap storage also keeps this hook safe on small guest thread stacks.
+    struct ikb_job { ikb_state s; char text[2004], initial[2004]; uint32_t reply[0x7e4 / 4]; };
+    pthread_mutex_lock(&g_ikb_mu);
+    int i = ikb_find(kb);
+    if (i < 0 || (!g_ikb[i].pending && !g_ikb[i].init_pending)) { pthread_mutex_unlock(&g_ikb_mu); return; }
+    struct ikb_job *job = calloc(1, sizeof *job);
+    if (!job) { pthread_mutex_unlock(&g_ikb_mu); return; }
+    job->s = g_ikb[i];
+    g_ikb[i].init_pending = 0;
+    if (!job->s.init_pending) g_ikb[i].pending = 0;
+    pthread_mutex_unlock(&g_ikb_mu);
+    ikb_state *s = &job->s;
+    if (s->init_pending) {
+        if (s->initialized) s->initialized();
+        free(job); return;
+    }
+    if (!s->pending) { free(job); return; }
+    swkbd_u16_to_u8(s->text, 500, job->initial, sizeof job->initial);
+    const char *script = getenv("DM_KBD");
+    char guide[128];
+    snprintf(guide, sizeof guide, "Length: %d-%d characters", s->minlen, s->maxlen);
+    if (!script) guest_clock_freeze_for(2, 1);
+    int r;
+    size_t units = 0;
+    do {
+        r = script ? (snprintf(job->text, sizeof job->text, "%s", script), 1)
+                   : input("Text input", "", guide, job->initial, s->maxlen, job->text, sizeof job->text);
+        if (r <= 0 || !ikb_current(s)) break;
+        units = swkbd_u8_to_u16(job->text, s->maxlen, s->text, 501);
+        swkbd_u16_to_u8(s->text, units, job->initial, sizeof job->initial);
+        if (units >= (size_t)s->minlen) break;
+        if (script) { r = 0; break; }
+        snprintf(guide, sizeof guide, "Enter at least %d characters (maximum %d).", s->minlen, s->maxlen);
+    } while (ikb_current(s));
+    if (!script) guest_clock_freeze_for(2, 0);
+    if (!ikb_current(s)) { free(job); return; }
+    LOG("swkbd：内嵌键盘 %p → %s，长度 %zu", kb, r > 0 ? "确定" : "取消", r > 0 ? units : 0);
+    if (r <= 0) {
+        if (s->cancel) s->cancel();
+        free(job); return;
+    }
+    pthread_mutex_lock(&g_ikb_mu);
+    i = ikb_find(kb);
+    if (i >= 0 && g_ikb[i].epoch == s->epoch) memcpy(g_ikb[i].text, s->text, sizeof s->text);
+    pthread_mutex_unlock(&g_ikb_mu);
+    uint8_t *reply = (uint8_t *)job->reply;
+    size_t text_size = s->utf8 ? 0x7d4 : 0x3ec;
+    int32_t len = (int32_t)units, unmarked = -1;
+    if (s->utf8) swkbd_u16_to_u8(s->text, units, (char *)reply, text_size);
+    else memcpy(reply, s->text, (units + 1) * 2);
+    memcpy(reply + text_size, &len, 4);
+    memcpy(reply + text_size + 4, &unmarked, 4);
+    memcpy(reply + text_size + 8, &unmarked, 4);
+    memcpy(reply + text_size + 12, &len, 4);
+    if (s->changed[s->utf8]) s->changed[s->utf8](reply);
+    if (ikb_current(s) && s->enter[s->utf8]) s->enter[s->utf8](reply);
+    free(job);
+}
+HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard4CalcEv", "内嵌键盘：原生输入与游戏线程回调", void, h_ikb_Calc, void *kb) {
+    ikb_calc(kb, front_text_input);
+}
+HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard8GetImageEPvm", "内嵌键盘画面：由原生输入框代替", unsigned, h_ikb_GetImage, void *kb, void *buf, size_t n) { (void)kb; (void)buf; (void)n; return 0; }
+HLE_FORCE("_ZNK2nn5swkbd14InlineKeyboard13GetWindowSizeEPiS2_", "内嵌键盘窗口尺寸：原生对话框不占游戏画面", void, h_ikb_WinSize, const void *kb, int *w, int *h) { (void)kb; if (w) *w = 0; if (h) *h = 0; }

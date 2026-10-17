@@ -100,6 +100,13 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
 static int states(NpadState *out, int n, uint32_t id, uint32_t style) { if (n <= 0) return 0; fill(out, id, style); return 1; }
 
 HLE_FORCE("_ZN2nn3hid14InitializeNpadEv", "连 hid 服务；宿主从前端状态取输入", void, h_hid_InitNpad, void) {}
+// SDK 4.5 DebugPadState is 32 bytes (GetDebugPadState copies four words).
+// Retail input uses Npad; the optional development controller is disconnected.
+HLE_FORCE("_ZN2nn3hid18InitializeDebugPadEv", "No development controller attached", void, h_hid_InitDebugPad, void) {}
+HLE_FORCE("_ZN2nn3hid16GetDebugPadStateEPNS0_13DebugPadStateE", "Development controller disconnected", void, h_hid_DebugPad, uint64_t *out) {
+    static _Atomic uint64_t sample;
+    memset(out, 0, 32); out[0] = atomic_fetch_add(&sample, 1) + 1;
+}
 HLE_FORCE("_ZN2nn3hid22SetSupportedNpadIdTypeEPKjm", "支持的手柄号；宿主固定", void, h_hid_SetIds, const uint32_t *ids, uint64_t n) { (void)ids; (void)n; }
 static uint32_t g_styles_supported = 0xffffffffu;
 HLE_FORCE("_ZN2nn3hid24SetSupportedNpadStyleSetENS_4util10BitFlagSetILi32ENS0_12NpadStyleTagEEE", "支持的手柄样式；宿主记下，按它选报的样式", void, h_hid_SetStyles, uint32_t styles) {

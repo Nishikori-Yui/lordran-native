@@ -1,7 +1,8 @@
 // swkbd unit test (takes seconds): lay out a ShowKeyboardArg by hand following the SDK layout, have swkbd_show write back the String, and all expected bytes are computed by hand.
-// Build and run: cd dm/host/tests && clang -O1 -I.. -o /tmp/t_swkbd t_swkbd.c ../hle_swkbd.c && /tmp/t_swkbd
+// Build: make -C dm/host/tests GAME=<title ID> build/t_swkbd
 #include "../hle.h"
 #include <stdio.h>
+#include "../hle_swkbd.c"
 
 Result swkbd_show(void *out, const void *arg, int (*input)(const char *, const char *, const char *, const char *, int, char *, int));
 void dm_ui_text_entered(const char *text) { (void)text; }   // the real implementation is in dm_cursor.c (the naming page auto-accepts once input is finished)
@@ -12,9 +13,11 @@ static int fails, checks;
 
 // Input stub: record the arguments received and return as configured
 static const char *g_reply; static int g_ret, g_called; static char g_title[256], g_init[256]; static int g_max;
+static void *finalize_during_input;
 static int stub(const char *t, const char *s, const char *g, const char *i, int m, char *o, int c) {
     (void)s; (void)g; g_called++; snprintf(g_title, sizeof g_title, "%s", t); snprintf(g_init, sizeof g_init, "%s", i); g_max = m;
     if (g_ret > 0) snprintf(o, c, "%s", g_reply);
+    if (finalize_during_input) h_ikb_Fin(finalize_during_input);
     return g_ret;
 }
 
@@ -37,6 +40,91 @@ static int bytes_eq(const uint8_t *want, size_t n) {   // the first n bytes equa
 }
 
 void guest_clock_freeze_for(int reason, int on) { (void)reason; (void)on; }   // the real implementation is in hle_os.c; the unit test does not care about the clock
+static int enters, changes, cancels, initialized, callback_utf8, invalidate_on_change;
+static char callback_text[2004];
+static int32_t callback_len, callback_cursor, composition_begin, composition_end;
+static void *callback_kb;
+static pthread_t calc_thread;
+static void entered(const void *p) {
+    enters++;
+    CHECK(pthread_equal(pthread_self(), calc_thread), "Callback left the Calc thread");
+    size_t off = callback_utf8 ? 0x7d4 : 0x3ec;
+    memcpy(&callback_len, (const uint8_t *)p + off, 4);
+    if (callback_utf8) snprintf(callback_text, sizeof callback_text, "%s", (const char *)p);
+    else swkbd_u16_to_u8(p, 501, callback_text, sizeof callback_text);
+}
+static void changed(const void *p) {
+    changes++;
+    size_t off = callback_utf8 ? 0x7d4 : 0x3ec;
+    memcpy(&composition_begin, (const uint8_t *)p + off + 4, 4);
+    memcpy(&composition_end, (const uint8_t *)p + off + 8, 4);
+    memcpy(&callback_cursor, (const uint8_t *)p + off + 12, 4);
+    if (invalidate_on_change) h_ikb_Fin(callback_kb);
+}
+static void canceled(void) { cancels++; }
+static void ready(void) { initialized++; }
+static void appear(void *kb, int maxlen, int minlen) {
+    uint8_t a[0x48] = {0};
+    memcpy(a + 0x20, &maxlen, 4);
+    memcpy(a + 0x24, &minlen, 4);
+    h_ikb_Appear(kb, a);
+}
+static void inline_tests(void) {
+    int kb;
+    callback_kb = &kb; calc_thread = pthread_self();
+    h_ikb_Init(&kb, NULL);
+    h_ikb_SetInitialized(&kb, ready);
+    h_ikb_SetEnter(&kb, entered); h_ikb_SetEnter8(&kb, entered);
+    h_ikb_SetChanged(&kb, changed); h_ikb_SetChanged8(&kb, changed);
+    h_ikb_SetCancel(&kb, canceled);
+    h_ikb_Launch(&kb);
+    ikb_calc(&kb, stub); ikb_calc(&kb, stub);
+    CHECK(initialized == 1, "Launch initialization callback count %d", initialized);
+
+    uint16_t initial[501] = {'H', 'e', 'r', 'o'};
+    h_ikb_SetText(&kb, initial);
+    appear(&kb, 10, 1);
+    g_ret = 1; g_reply = "A\xE5\x90\x8D\xF0\x9F\x98\x80";
+    ikb_calc(&kb, stub); ikb_calc(&kb, stub);
+    CHECK(enters == 1 && changes == 1 && cancels == 0, "Inline UTF-16 callback counts");
+    CHECK(!strcmp(g_init, "Hero") && g_max == 10, "Inline initial text / maximum");
+    CHECK(!strcmp(callback_text, g_reply) && callback_len == 4, "Inline UTF-16 payload / length");
+    CHECK(callback_cursor == 4 && composition_begin == -1 && composition_end == -1, "Inline changed cursor / composition");
+
+    appear(&kb, 10, 1); g_ret = 0;
+    ikb_calc(&kb, stub);
+    CHECK(cancels == 1 && enters == 1 && changes == 1, "Cancel must not change text");
+    CHECK(!strcmp(g_init, "A\xE5\x90\x8D\xF0\x9F\x98\x80"), "Cancel / reopen lost the last name");
+
+    h_ikb_SetUtf8(&kb, 1); callback_utf8 = 1;
+    appear(&kb, 2, 0); g_ret = 1;
+    ikb_calc(&kb, stub);
+    CHECK(enters == 2 && callback_len == 2 && !strcmp(callback_text, "A\xE5\x90\x8D"), "Inline UTF-8 truncation / payload");
+    CHECK(callback_cursor == 2, "Inline UTF-8 cursor");
+
+    appear(&kb, 2, 0); h_ikb_Disappear(&kb);
+    int calls = g_called; ikb_calc(&kb, stub);
+    CHECK(g_called == calls && enters == 2 && cancels == 1, "Disappear must retract input without a cancel event");
+
+    setenv("DM_KBD", "Script", 1); appear(&kb, 10, 0); ikb_calc(&kb, stub);
+    CHECK(g_called == calls && enters == 3 && !strcmp(callback_text, "Script"), "Inline scripted input");
+    setenv("DM_KBD", "", 1); appear(&kb, 10, 2); ikb_calc(&kb, stub);
+    CHECK(cancels == 2 && enters == 3, "Scripted input must respect minimum length");
+    unsetenv("DM_KBD");
+
+    appear(&kb, 10, 0); finalize_during_input = &kb;
+    ikb_calc(&kb, stub); finalize_during_input = NULL;
+    CHECK(enters == 3 && cancels == 2, "Finalized keyboard delivered a stale result");
+    ikb_calc(&kb, stub);
+    CHECK(ikb_find(&kb) < 0, "Calc resurrected a finalized keyboard");
+
+    h_ikb_Init(&kb, NULL); h_ikb_SetEnter(&kb, entered); h_ikb_SetChanged(&kb, changed);
+    appear(&kb, 10, 0); invalidate_on_change = 1;
+    ikb_calc(&kb, stub); invalidate_on_change = 0;
+    CHECK(enters == 3, "Changed callback finalized keyboard but enter still fired");
+    h_ikb_Fin(&kb);
+    for (int i = 0; i < 12; i++) { CHECK(h_ikb_Init(&kb, NULL), "Inline lifecycle leaked a slot"); h_ikb_Dtor(&kb); }
+}
 int main(void) {
     unsetenv("DM_KBD");
     static const uint16_t hero[] = {'H', 'e', 'r', 'o'};
@@ -88,6 +176,8 @@ int main(void) {
     CHECK(r == 0 && bytes_eq(w7, sizeof w7) && g_called == 0, "DM_KBD 路径不符（调用输入框 %d 次）", g_called);
     unsetenv("DM_KBD");
 
+    printf("8 Inline keyboard callbacks, text, cancellation and lifecycle\n");
+    inline_tests();
     printf("%s：%d/%d\n", fails ? "红" : "全过", checks - fails, checks);
     return fails != 0;
 }
