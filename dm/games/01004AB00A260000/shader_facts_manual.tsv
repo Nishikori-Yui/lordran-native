@@ -1,0 +1,9 @@
+# Hand-written translation facts, merged over generated shader_facts.tsv by shader_split.py.
+# These five engine vertex shaders use the affected attributes as raw float bit patterns,
+# while their Switch vertex formats are normalized UChar4. Keep the declaration float so
+# Metal preserves the normalized input contract instead of rejecting the render pipeline.
+a1ffdbcbf5ba3b64	{"attr":{"6":"float"}}
+f4a9c8439a169198	{"attr":{"5":"float"}}
+24e2a42e2415d084	{"attr":{"4":"float"}}
+961026a53880e297	{"attr":{"4":"float"}}
+e4238dc954d33110	{"attr":{"6":"float"}}
