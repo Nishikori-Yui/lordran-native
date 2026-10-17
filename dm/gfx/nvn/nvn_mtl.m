@@ -6381,18 +6381,22 @@ static int g_link_owns_layer, g_classic_busy;   // Under g_pq_mu: nextDrawable t
 static int link_on(void) { return g_dm_present_link && g_link != nil; }
 static CAFrameRateRange link_range(int mode) { return mode == 3 ? CAFrameRateRangeMake(30, 30, 30) : mode == 2 ? CAFrameRateRangeMake(60, 120, 120) : CAFrameRateRangeMake(60, 60, 60); }
 static int g_link_mode = 1;   // Current mode of the display link object: 1 / 2 same as g_dm_present_link, 3 = power-saving mode 30 Hz
-static void *link_main(void *arg) {   // Display link thread: started when switching to display-link mode, exits when switching back to 0
-    (void)arg;
-    pthread_setname_np("nvn-present-link");
-    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-    CAMetalLayer *layer = (__bridge CAMetalLayer *)front_metal_layer();
-    pthread_mutex_lock(&g_pq_mu); g_link_owns_layer = 1; while (g_classic_busy) pthread_cond_wait(&g_pq_cv, &g_pq_mu); pthread_mutex_unlock(&g_pq_mu);   // Wait for the present thread to finish handing over the frame it holds
+static CAMetalDisplayLink *link_make(CAMetalLayer *layer) {
     NvMetalDisplayLinkDelegate *delegate = [NvMetalDisplayLinkDelegate new];
     CAMetalDisplayLink *link = [[CAMetalDisplayLink alloc] initWithMetalLayer:layer];
     link.preferredFrameRateRange = link_range(g_link_mode);
     link.preferredFrameLatency = g_present_latency;
     link.delegate = delegate;
     [link addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
+    return link;
+}
+static void *link_main(void *arg) {   // Display link thread: started when switching to display-link mode, exits when switching back to 0
+    (void)arg;
+    pthread_setname_np("nvn-present-link");
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    CAMetalLayer *layer = (__bridge CAMetalLayer *)front_metal_layer();
+    pthread_mutex_lock(&g_pq_mu); g_link_owns_layer = 1; while (g_classic_busy) pthread_cond_wait(&g_pq_cv, &g_pq_mu); pthread_mutex_unlock(&g_pq_mu);   // Wait for the present thread to finish handing over the frame it holds
+    CAMetalDisplayLink *link = link_make(layer);
     g_link_rl = CFRunLoopGetCurrent(); g_link = link;
     CFRunLoopRun();   // When switching back to mode 0 the display link object is invalidated and this thread exits (nextDrawable cannot get a drawable while the layer still has the display link object attached, so pausing alone is not enough)
     g_link_started = 0;
@@ -6531,9 +6535,16 @@ void mtl_link_resume(void) {
     if (layer) layer.displaySyncEnabled = YES;
     if (link && rl) {
         CFRunLoopPerformBlock(rl, kCFRunLoopDefaultMode, ^{
-            if (g_link == link) link.paused = NO;
             CAMetalLayer *l = (__bridge CAMetalLayer *)front_metal_layer();
-            if (l) l.displaySyncEnabled = YES;
+            if (g_link == link && l) {
+                // AppKit can leave an existing CAMetalDisplayLink alive but stop
+                // delivering callbacks after the window regains key status.
+                // Recreating it on its run loop reliably re-arms the callback.
+                [link invalidate];
+                g_link = link_make(l);
+                l.displaySyncEnabled = YES;
+                MLOG("窗口恢复：重新建立显示节拍");
+            }
         });
         CFRunLoopWakeUp(rl);
     }
