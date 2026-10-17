@@ -1,0 +1,42 @@
+# DARK SOULS: REMASTERED. Experimental bring-up; no playable-platform claim.
+# SDK 4.5.0; subsdk0 contains NEX. Values marked provisional need runtime checks.
+title_id	01004AB00A260000
+program_id	01004AB00A260000
+name	DARK SOULS: REMASTERED
+ipa	DarkSoulsRemastered.ipa
+app_category	public.app-category.role-playing-games
+pad_layout	full
+mac_layout	dark_souls_pc
+mac_mouse_sensitivity	2200
+
+build	v0	1.0.0	main=5a797a3a5da6c4f3468cb7c84e4dde63	subsdk0=73f98f5f7a34d4c520bda7c1a19cd9bd	sdk=d95547528dcd684e2813ec83d338a472
+build	v196608	1.0.3	main=df3766a2bb651a3e822828abf10b6f7b	subsdk0=73f98f5f7a34d4c520bda7c1a19cd9bd	sdk=d95547528dcd684e2813ec83d338a472
+package	v196608
+shader_versions	v0 v196608
+modules	main subsdk0 sdk
+romfs_marker	dvdbnd0.bhd5
+zip_store	.bdt:.mp4:.metallib
+
+# 1.0.3 nninitStartup requests a 0xc9400000 heap. Wonder's large alias
+# partition leaves only 0x68000000; use a 3.25 GiB heap region instead.
+mem_reserve	0x100000000
+mem_alias	0x10000000
+mem_stack	0x10000000
+app_pool	0xCD500000
+# Provisional API report; verify the game's version check before rendering.
+device_api	53.313
+shared_font	ttf
+
+# No shaders in the 3,099-key corpus read c2. Textures use bindless handles
+# in guest c13 (uniform buffer 10), handled by tex_ubo/samp_ubo reflection.
+# Keep the unused driver tables compatible with the translator defaults.
+nvn_tex_base	0x20
+nvn_tex_slots	32
+nvn_samp_base	0x568
+nvn_img_base	0x120
+nvn_img_slots	8
+nvn_ssbo_bases	vs=0x110 ps=0x510 cs=0x310
+shader_groups	FRPG_Menu=menu DbgFont=debug FRPG_Filter=filter FRPG_Sfx=effect dvdbnd=engine
+shader_note	Dark Souls Remastered shaders
+shader_main_glslc	on
+shader_separable	on

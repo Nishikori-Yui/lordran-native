@@ -78,6 +78,10 @@ def header(g):
     if sf not in ('bfttf', 'ttf'): sys.exit(f'{g.id}: shared_font 只能是 bfttf / ttf | shared_font must be bfttf or ttf: {sf}')
     pl = g.get('pad_layout', 'simple')   # the virtual gamepad's first layout (DmGamepad.m; afterwards whatever the player switched to in game is kept): simple = 2D, full = 3D (D-pad, right stick, L3 / R3)
     if pl not in ('simple', 'full'): sys.exit(f'{g.id}: pad_layout 只能是 simple / full | pad_layout must be simple or full: {pl}')
+    ml = g.get('mac_layout', 'generic')
+    if ml not in ('generic', 'dark_souls_pc'): sys.exit(f'{g.id}: mac_layout 不认识 | unknown mac_layout: {ml}')
+    ms = g.int('mac_mouse_sensitivity') if g.get('mac_mouse_sensitivity', '') else 2200
+    if ms < 1 or ms > 32767: sys.exit(f'{g.id}: mac_mouse_sensitivity 范围是 1–32767 | mac_mouse_sensitivity must be 1-32767: {ms}')
     fbs = g.words('feedback_snap', '')   # fragment shader key prefixes whose same-pass feedback sampling gets a snapshot first (nvn_mtl.m fb_prepare); none by default
     if any(not re.fullmatch(r'[0-9a-f]{8,16}', k) for k in fbs): sys.exit(f'{g.id}: feedback_snap 要写片元着色器键（8–16 位小写十六进制）| feedback_snap takes fragment shader keys (8-16 lowercase hex digits): {fbs}')
     afr = g.words('alpha_from_red', '')   # fragment shader key prefixes that read single-channel textures mapped (R, 0, 0, 1) with alpha = red (nvn_mtl.m tex_alpha_red); none by default
@@ -107,6 +111,8 @@ def header(g):
          f'#define DM_GAME_CORE_PREEMPT {int(cp == "on")}',
          f'#define DM_GAME_SHARED_FONT_TTF {int(sf == "ttf")}',
          f'#define DM_GAME_PAD_FULL {int(pl == "full")}',
+         f'#define DM_GAME_MAC_LAYOUT {q(ml)}',
+         f'#define DM_GAME_MAC_MOUSE_SENSITIVITY {ms}',
          f'#define DM_GAME_FEEDBACK_SNAP {q(" ".join(fbs))}',
          f'#define DM_GAME_ALPHA_FROM_RED {q(" ".join(afr))}',
          f'#define DM_GAME_NVN_API_MAJOR {api.split(".")[0]}',

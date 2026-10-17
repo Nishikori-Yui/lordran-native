@@ -3,3 +3,6 @@
 .iosdd_mac/
 .iosdd_*/
 .DS_Store
+# Local game dumps, keys, extraction results, and porting artifacts.
+/game/
+__pycache__/

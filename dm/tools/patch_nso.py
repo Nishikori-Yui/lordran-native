@@ -582,13 +582,16 @@ def jump_offsets(insl, j):
     sub w0,w18,#0xd1; cmp w0,#0x31; b.hi; ldrsw x18,[x17,x0,lsl #2], its movie module (subsdk1+0xae9a4) cmp w21,#7; b.hi; ...; mov w18,w21; ldrsw x18,[x4,x18,lsl #2].
     For the table base xB, search back for the nearest writer: it must be add xB,xB,#lo, and the writer before it must be adrp xB. Returns all targets, or None if not recognized"""
     ctx = insl[max(0, j - 16):j]
-    add = next((p for p in reversed(ctx) if p.mnemonic == 'add' and re.fullmatch(r'x18, x18, x\d+', p.op_str)), None)
+    # SDK 4.5 NEX (Dark Souls subsdk0+0x1ae1f0) loads the signed offset into
+    # x13, then adds the table base into x18 before reusing x13.
+    add = next((p for p in reversed(ctx) if p.mnemonic == 'add' and re.fullmatch(r'x18, x\d+, x\d+', p.op_str)), None)
     if not add: return None
-    rb = add.op_str.split(', ')[2]
-    ld = next((p for p in reversed(ctx) if p.mnemonic == 'ldrsw' and re.fullmatch(rf'x18, \[{rb}, x(\d+), lsl #2\]', p.op_str)), None)
+    offset_reg, rb = add.op_str.split(', ')[1:]
+    ld = next((p for p in reversed(ctx[:ctx.index(add)]) if p.mnemonic == 'ldrsw' and re.fullmatch(rf'{offset_reg}, \[{rb}, x(\d+), lsl #2\]', p.op_str)), None)
     if not ld: return None
+    if any(offset_reg in [p.reg_name(r) for r in p.regs_access()[1]] for p in ctx[ctx.index(ld) + 1:ctx.index(add)]): return None
     # GLSLC subsdk0+0x2f403c checks a masked copy instead: and w16,w18,#0x3f; cmp w16,#0xe; b.hi; ...; and x18,x18,#0x3f; ldrsw x18,[x15,x18,lsl #2]
-    idx = {'w' + re.fullmatch(rf'x18, \[{rb}, x(\d+), lsl #2\]', ld.op_str).group(1)}
+    idx = {'w' + re.fullmatch(rf'{offset_reg}, \[{rb}, x(\d+), lsl #2\]', ld.op_str).group(1)}
     masked = None   # (source, mask, position) when the index is "source & mask"
     k0 = ctx.index(ld); cmp = None
     def wname(r): return 'w' + r[1:]

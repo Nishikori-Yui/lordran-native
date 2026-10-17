@@ -105,7 +105,7 @@ def mshd_shaders(d, label):
     if len(out) % 2: red(f'{label} MSHD：{len(out)} 个阶段，不成对')
     return out
 
-def glslc_shaders(d, label):
+def glslc_shaders(d, label, required=True):
     """GLSLC compiler outputs (838 in 13 Sentinels' main read-only segment, one stage each): from the magic 0x19866891, +0x44 = the whole output's length; each output holds exactly one control section with the code area right after it (control +0x20 = control length).
     The magic is only 4 bytes and other games' mains have it too (Fire Emblem Engage has 11), so this runs only when the profile's shader_main_glslc is on, and keeps only outputs that pass the triple check"""
     out = []
@@ -115,11 +115,32 @@ def glslc_shaders(d, label):
         if c < 0 or d.find(CTL_MAGIC, c + 4, h + size) >= 0: continue
         nctl, ncode = struct.unpack_from('<I', d, c + 0x20)[0], struct.unpack_from('<I', d, c + 0x704)[0]
         if nctl < 0x880 or c + nctl + ncode > h + size: continue
-        ctl, code = d[c:c + nctl], d[c + nctl:c + nctl + ncode]
+        code_start = c + nctl
+        # SDK 4.5 GLSLC adds a texture-linkage table after some fragment
+        # controls (DbgFont.fpo: 12 bytes). Its output header records the
+        # code offset relative to the control at +0xc4, and its size at +0xc8.
+        if d[code_start:code_start + 4] not in (GFX_MAGIC, CS_MAGIC) and size >= 0xd0:
+            control_off = struct.unpack_from('<I', d, h + 0x94)[0]
+            code_off, code_size = struct.unpack_from('<II', d, h + 0xc4)
+            if control_off == c - h and code_off >= nctl and code_size == ncode and c + code_off + ncode <= h + size:
+                code_start = c + code_off
+        ctl, code = d[c:c + nctl], d[code_start:code_start + ncode]
         st = 'cs' if code[:4] == CS_MAGIC else SPH_STAGE.get((struct.unpack_from('<I', code, 0x30)[0] >> 10) & 0xf) if code[:4] == GFX_MAGIC else None
         if not st or check(label, st, ctl, code): continue
         out.append((f'{label}#GLSLC@{h:#x}', st, ctl, code))
-    if not out: red(f'{label}：档案开了 shader_main_glslc，却没有一份 GLSLC 输出')
+    if required and not out: red(f'{label}：档案开了 shader_main_glslc，却没有一份 GLSLC 输出')
+    return out
+
+def fromsoftware_shaders(path, label):
+    """Dark Souls stores GLSLC outputs in BND3 binders inside BHD5/BDT archives."""
+    import fromsoftware
+    out = []
+    for name, packed in fromsoftware.bhd5_members(path):
+        data = fromsoftware.dcx(packed)
+        if data[:4] != b'BND3' or b'\x91\x68\x86\x19' not in data: continue
+        for member, blob in fromsoftware.bnd3_members(data):
+            if member.lower().endswith(('.vpo', '.fpo', '.gpo', '.cpo')):
+                out.extend(glslc_shaders(fromsoftware.dcx(blob), f'{label}/{name}/{member}'))
     return out
 
 def yaz0(s):
@@ -227,6 +248,9 @@ def var_pairs(found):
 def scan_file(args):
     """→ (relative path, {key: …}, pairs, extra); extra = this file's Unity type trees, or 'defer' (no type tree, scanned again in the second pass)"""
     path, rel = args
+    if path.endswith('.bdt') and os.path.isfile(os.path.splitext(path)[0] + '.bhd5'):
+        found = fromsoftware_shaders(path, '/' + rel)
+        return rel, {skey(c, k): (w, s, c, k) for w, s, c, k in found}, var_pairs(found), {}
     d = subprocess.run(['zstd', '-d', '-c', '-q', path], capture_output=True, check=True).stdout if path.endswith('.zs') else open(path, 'rb').read()
     if d[:4] == b'Yaz0': d = yaz0(d)
     found = []; trees = {}
