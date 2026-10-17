@@ -53,6 +53,12 @@ The game's work folder is `<NSP folder>/01004AB00A260000-work`.
   built app is unsigned. No provisioning profile or dump keys are bundled.
 - Artifact metadata and SHA-256 are saved in
   `build/ios/pkg/validation.json` under the work folder.
+- The repaired 2026-10-18 artifact is
+  `<NSP folder>/DarkSoulsRemastered-gfx-20261018.ipa` (4,183,998,448 bytes),
+  with shader chain `0eefab8cf997`. ZIP CRCs, all 3,099 packaged reflection
+  versions, the embedded host's chain, and unsigned status were checked.
+  Its validation record is also saved in
+  `analysis/gfx-20261018/ipa-validation.json`.
 
 Rebuild the same IPA from the prepared work folder:
 
@@ -189,6 +195,12 @@ Validation for chain `0eefab8cf997`:
   specializes all 390 vertex-input shaders for normalized attributes and
   all 2,708 fragment shaders for GREATER/0.5, and checks cache reuse.
   Metal API validation reports no failure.
+- All 454 historical pipeline records from `run/pso_user.tsv` link on the
+  new libraries, both with the original ALWAYS behavior and with GREATER/0.5:
+  908 pipeline creations, zero failures and zero skipped records. The test
+  appends default alpha fields to an in-memory copy of each old key; it does
+  not rewrite the player's manifest. This checks recorded layouts and stage
+  interfaces, not their rendered pixels or the runtime texture contents.
 
 Logs and the real-library smoke-test source are under the game's
 `analysis/gfx-20261018/`. The previous live game process was not closed or
@@ -196,3 +208,20 @@ replaced. Its loaded executable and shader functions predate these changes;
 its continuing log cannot validate the new build. Water instability still
 requires scene-level validation and, if it persists, per-draw vertex,
 texture, alpha and synchronization captures on the repaired build.
+
+`run/live-vertex-diagnostic.log` also has a texture-type mismatch: a shader
+expects a cube (Metal type 5) but receives a 2D texture (type 2, texture ID
+363). The log has no shader key or binding next to that warning, so its
+relationship to water or the ground patches is unknown. The texture fitter
+already supports compatible 2D/array views; a single 2D image supplies no
+evidence for six cube faces. Do not manufacture faces or suppress the warning
+without capturing the draw and its bindless handle.
+
+## iOS build compatibility (2026-10-18)
+
+The existing window-focus recovery added two unguarded
+`CAMetalLayer.displaySyncEnabled` assignments to `mtl_link_resume`. Xcode
+rejects both on iOS, where that property is unavailable. Both assignments
+now have the same `TARGET_OS_OSX` guard as the present path. The Mac
+display-link recreation remains intact. The Mac host and unsigned iOS
+Release build both succeed; this does not verify focus recovery on a device.

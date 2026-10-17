@@ -6629,8 +6629,10 @@ void mtl_link_pause(int on) { CAMetalDisplayLink *l = g_link; if (l) l.paused = 
 void mtl_link_resume(void) {
     CAMetalDisplayLink *link = g_link;
     CFRunLoopRef rl = g_link_rl;
+#if TARGET_OS_OSX
     CAMetalLayer *layer = (__bridge CAMetalLayer *)front_metal_layer();
     if (layer) layer.displaySyncEnabled = YES;
+#endif
     if (link && rl) {
         CFRunLoopPerformBlock(rl, kCFRunLoopDefaultMode, ^{
             CAMetalLayer *l = (__bridge CAMetalLayer *)front_metal_layer();
@@ -6640,7 +6642,9 @@ void mtl_link_resume(void) {
                 // Recreating it on its run loop reliably re-arms the callback.
                 [link invalidate];
                 g_link = link_make(l);
+#if TARGET_OS_OSX
                 l.displaySyncEnabled = YES;
+#endif
                 MLOG("窗口恢复：重新建立显示节拍");
             }
         });
