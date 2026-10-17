@@ -232,3 +232,31 @@ rejects both on iOS, where that property is unavailable. Both assignments
 now have the same `TARGET_OS_OSX` guard as the present path. The Mac
 display-link recreation remains intact. The Mac host and unsigned iOS
 Release build both succeed; this does not verify focus recovery on a device.
+
+## Sampler reduction (2026-10-18)
+
+`run/live-vertex-diagnostic.log:4020` records a request for MAX reduction
+being replaced with average sampling. The setter discarded the mode, the
+getter always returned average, and sampler comparison merged states that
+differed only in reduction. The Metal sampler consequently used its default
+weighted-average mode.
+
+The state now retains the reduction byte in previously unused alignment
+space; `samp_par` remains 40 bytes. Pool registration snapshots the mode with
+the other parameters, comparison includes it, and the production Metal
+descriptor selects the matching Metal 26 reduction mode. Original min/mag
+and mip filters remain intact. PASSDUMP sampler records include the mode.
+This changes host state only; the shader chain remains `0eefab8cf997`.
+
+`tests/t_sampler_reduction.m` exercises the actual NVN setters, defaults,
+getter, comparison, pool registration, object reuse, sampler cache and Metal
+sampling path. An independent CPU oracle checks all six minification
+filters, both magnification filters, all three reduction modes, and five
+explicit LODs against known two-level float texture data. All 180 RGBA
+samples and 292 checks pass with Metal API validation on the M5 Max.
+The NVN integration test also passes all 67 checks under validation.
+Logs are in `analysis/gfx-20261018/reduction-*-test.log`.
+
+This establishes an ignored rendering state and its repair. The historical
+log does not identify the draw using MAX reduction, so the connection to
+water, ground patches or any particular material remains unverified.

@@ -45,7 +45,8 @@ FITS(view_t, NVNtextureView);
 _Static_assert(sizeof(view_t) <= 16, "view_t 超出较新 SDK 的 NVNtextureView（16 字节）");
 
 // Sampler parameters (one copy shared by builder and object)
-typedef struct { uint8_t minf, magf, ws, wt, wr, cmp_mode, cmp_func; float lod_min, lod_max, lod_bias, aniso, border[4]; } samp_par;   // Enum values are all < 256
+typedef struct { uint8_t minf, magf, ws, wt, wr, cmp_mode, cmp_func, reduction; float lod_min, lod_max, lod_bias, aniso, border[4]; } samp_par;   // Enum values are all < 256; reduction occupies the former alignment byte.
+_Static_assert(sizeof(samp_par) == 40, "Sampler parameter layout must not grow");
 typedef struct { NVNdevice *dev; samp_par p; } samp_builder_t;                                FITS(samp_builder_t, NVNsamplerBuilder);
 typedef struct { uint32_t magic; samp_par p; } samp_t;                                        FITS(samp_t, NVNsampler);
 

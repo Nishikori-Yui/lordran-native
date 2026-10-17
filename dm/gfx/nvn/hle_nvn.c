@@ -1355,8 +1355,9 @@ NVN(nvnMemoryPoolMapVirtual, NVNboolean, NVNmemoryPool *p, int n, const NVNmappi
     return 1;
 }
 
-// Samplers: reduction (min / max) does not exist on Metal samplers, logged once; the getters read the parameters in the object
-NVN(nvnSamplerBuilderSetReductionFilter, void, NVNsamplerBuilder *b, NVNsamplerReduction r) { (void)b; if (r) ONCE_LOG("SamplerBuilderSetReductionFilter %d：宿主按平均采样（min/max 归约不支持）", (int)r); }
+// Reduction is preserved through sampler objects and descriptor-pool snapshots.
+// Metal 26 provides the matching weighted-average / minimum / maximum modes.
+NVN(nvnSamplerBuilderSetReductionFilter, void, NVNsamplerBuilder *b, NVNsamplerReduction r) { SB(b)->reduction = (uint8_t)r; }
 NVN(nvnSamplerSetDebugLabel, void, NVNsampler *s, const char *l) { (void)s; (void)l; }
 #define SP(s) (&((const samp_t *)(s))->p)
 NVN(nvnSamplerGetMinMagFilter, void, const NVNsampler *s, NVNminFilter *mi, NVNmagFilter *ma) { *mi = (NVNminFilter)SP(s)->minf; *ma = (NVNmagFilter)SP(s)->magf; }
@@ -1366,11 +1367,11 @@ NVN(nvnSamplerGetLodBias, float, const NVNsampler *s) { return SP(s)->lod_bias; 
 NVN(nvnSamplerGetCompare, void, const NVNsampler *s, NVNcompareMode *m, NVNcompareFunc *f) { *m = (NVNcompareMode)SP(s)->cmp_mode; *f = (NVNcompareFunc)SP(s)->cmp_func; }
 NVN(nvnSamplerGetBorderColor, void, const NVNsampler *s, float *c) { memcpy(c, SP(s)->border, 16); }
 NVN(nvnSamplerGetMaxAnisotropy, float, const NVNsampler *s) { return SP(s)->aniso; }
-NVN(nvnSamplerGetReductionFilter, NVNsamplerReduction, const NVNsampler *s) { (void)s; return (NVNsamplerReduction)0; }
+NVN(nvnSamplerGetReductionFilter, NVNsamplerReduction, const NVNsampler *s) { return (NVNsamplerReduction)SP(s)->reduction; }
 // whether two samplers have the same state (games use it to deduplicate sampler pool entries)
 NVN(nvnSamplerCompare, NVNboolean, const NVNsampler *a, const NVNsampler *b) {
     const samp_par *x = SP(a), *y = SP(b);
-    return x->minf == y->minf && x->magf == y->magf && x->ws == y->ws && x->wt == y->wt && x->wr == y->wr && x->cmp_mode == y->cmp_mode && x->cmp_func == y->cmp_func &&
+    return x->minf == y->minf && x->magf == y->magf && x->ws == y->ws && x->wt == y->wt && x->wr == y->wr && x->cmp_mode == y->cmp_mode && x->cmp_func == y->cmp_func && x->reduction == y->reduction &&
            x->lod_min == y->lod_min && x->lod_max == y->lod_max && x->lod_bias == y->lod_bias && x->aniso == y->aniso && !memcmp(x->border, y->border, sizeof x->border);
 }
 
