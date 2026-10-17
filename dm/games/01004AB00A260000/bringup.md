@@ -131,3 +131,15 @@ The NVN integration test passes all 67 checks, including a busy GPU copy,
 waiting before CPU reuse of its source buffer, and replaying the same command
 fence in a later submission. This repairs a missing synchronization mechanism;
 it does not by itself prove the cause of the reported water instability.
+
+## Metal copy barriers (2026-10-18)
+
+Running the integration test with `MTL_DEBUG_LAYER=1` exposed an invalid
+intra-encoder barrier: `MTLStageAll` includes render stages, which a Metal 4
+compute/copy encoder does not support. The validation layer aborts at the first
+overlapping copy/update. The copy barrier now uses `MTLStageBlit` for both
+sides, matching the commands it orders. Queue-wide producer/consumer barriers
+continue to cover all stages; the SDK explicitly permits that combination.
+
+After the fix, all 67 integration checks pass with Metal API validation
+enabled, including uniform updates, copies, command fences and readback.
