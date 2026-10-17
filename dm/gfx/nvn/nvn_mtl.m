@@ -309,9 +309,11 @@ void mtl_init(void) {
     }
     g_ev = [g_dev newSharedEvent];
     g_keep = [NSMutableArray array];
-    g_nvn_deswz_gpu = nvn_deswz_gpu_init(g_dev) == 0;
+    int force_cpu_deswz = getenv("DM_NVN_DESWZ_CPU") != NULL;
+    g_nvn_deswz_gpu = !force_cpu_deswz && nvn_deswz_gpu_init(g_dev) == 0;
     dm_res_report_register(mtl_res_counts);
-    if (!g_nvn_deswz_gpu) MLOG("【红】显卡解排布初始化失败，预排布贴图回退 CPU");
+    if (force_cpu_deswz) MLOG("DM_NVN_DESWZ_CPU=1：预排布贴图强制走 CPU 解排布（诊断）");
+    else if (!g_nvn_deswz_gpu) MLOG("【红】显卡解排布初始化失败，预排布贴图回退 CPU");
     MLOG("Metal 设备 %s", g_dev.name.UTF8String);
     udc_selftest();
 }
