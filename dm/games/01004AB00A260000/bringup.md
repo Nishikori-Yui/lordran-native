@@ -260,3 +260,50 @@ Logs are in `analysis/gfx-20261018/reduction-*-test.log`.
 This establishes an ignored rendering state and its repair. The historical
 log does not identify the draw using MAX reduction, so the connection to
 water, ground patches or any particular material remains unverified.
+
+## Water dependency audit (2026-10-18)
+
+The translated corpus contains 73 shaders whose source names include Water:
+18 vertex and 55 fragment shaders. All have current-chain reflection files.
+The historical `run/pso_user.tsv` references 13 of them, including the
+height-map, mask, wave and reflection passes. This records historical
+pipeline use; it does not identify the draws in the user's capture.
+
+The wave vertex shader (index 306) and height-map vertex shader (313) both
+perform integer reinterpretation followed by a 1/1024 UV scale. They
+therefore depend on the vertex-register preservation repair, in addition
+to the opaque scenery materials identified earlier. The main water vertex
+shader (312) also has a uint input at location 1; all four historically
+referenced water vertex shaders use format-specialized fetch.
+
+The height-map fragment shader (2561) samples a 2D texture through the
+handle at uniform slot 10, byte offset 48. The six historically referenced
+reflection variants (2564-2567, 2572-2573) each use four 2D texture bindings
+through that slot at offsets 48, 88, 40 and 32, plus uniform slot 0 and
+the shader's packaged c1 constants. Their vertex stages use uniform slot 0
+and do not sample a height texture. A height texture assigned to the wrong
+frame, an incorrect handle, or a damaged UV can therefore affect the
+fragment results without requiring a missing vertex texture operation.
+No one of these possibilities is established by the existing log.
+
+None of those 13 recorded shaders declares a cube texture. The complete
+water corpus does contain 24 cube bindings in other variants, so the
+historical cube/2D mismatch cannot be ruled out as water-related solely
+from names. The new contextual texture diagnostic is needed to identify it.
+
+For a focused next run, use `DM_NVN_KEYDUMP=<height-map fragment key>:12:1`
+to capture twelve matching draws across different frames, or use the
+reflection key for the affected material. Resolve the key from
+`shader_map.tsv`; do not infer a handle offset from the source name.
+Compare slot 0 uniforms and slot 10 handles, texture serials, view ranges,
+sampler reduction and alpha state together. The current capture has neither
+these per-draw records nor repaired-build images, so it cannot distinguish
+a time/UV error from a render-target dependency error.
+
+PASSDUMP's texture and sampler binding lines now include the argument ID,
+binding kind, uniform byte offset and raw handle. The previous lines only
+identified the uniform slot, making those four slot-10 bindings ambiguous
+without consulting reflection and relying on line order. This diagnostic
+appends fields to preserve the existing log prefix. The Mac host builds,
+and all five budget-export parser regression checks pass. This does not
+alter the bindings or shader chain.
