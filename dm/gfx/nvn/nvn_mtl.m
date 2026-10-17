@@ -5782,6 +5782,14 @@ void mtl_exec(const uint8_t *p) {
                 mtl_exec((const uint8_t *)t); g_ret_n--; break; }
             case OP_SIGNAL_EVENT: { volatile uint32_t *val; uint32_t m, v; memcpy(&val, a, 8); memcpy(&m, (const uint8_t *)a + 8, 4); memcpy(&v, (const uint8_t *)a + 12, 4);
                 PD("Y signal_event cmd=%p dst=%p mode=%u value=%u", p, val, m, v); mtl_sub_event(val, m, v); break; }
+            case OP_FENCE_SYNC: { const p_fence_sync *f = a;
+                // Conservatively wait for the whole enclosing submission. Earlier
+                // segments share this fence, and only GPU completion signals it.
+                uint64_t fence = g_fence + 1;
+                __atomic_store_n(&f->sync->fence, fence, __ATOMIC_RELEASE);
+                __atomic_store_n(&f->sync->fenced, 1, __ATOMIC_RELEASE);
+                PD("Y fence_sync cmd=%p sync=%p fence=%llu condition=%d flags=%#x", p, f->sync, (unsigned long long)fence, f->condition, f->flags);
+                break; }
             case OP_REPORT_COUNTER: { uint64_t t, ad; memcpy(&t, a, 8); memcpy(&ad, (const uint8_t *)a + 8, 8); g_cnt_report[t & 31]++;
                 PD("Q report type=%llu cmd=%p dst=%#llx", (unsigned long long)t, p, (unsigned long long)ad);
                 if (t == NVN_COUNTER_TYPE_SAMPLES_PASSED) { post((post_op){3, NULL, 0, 0, ad, (uint32_t)t, vis_snapshot()}); g_vis_cur = -1; }

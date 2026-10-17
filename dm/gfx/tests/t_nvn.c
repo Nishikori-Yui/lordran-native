@@ -8,6 +8,7 @@ void *front_metal_layer(void) { return NULL; }   // no window in unit tests: pre
 module_t *module_of(const void *p) { (void)p; return NULL; }   // no guest modules in unit tests
 module_t g_mod[MAX_MOD]; int g_nmod;                            // host symbols that crash.c depends on
 void svc_thread_dump(void) {}
+int dm_guest_as_contains(uintptr_t a) { (void)a; return 0; }   // Unit tests call from a host stack.
 void crash_install(void);
 void nvn_present_config(int hz, int display_mode);
 #include <fcntl.h>
@@ -144,13 +145,15 @@ int main(void) {
         memset(heap, 0, 4 * big); memset(bsrc, 0x5A, big);
         NVNmemoryPoolBuilder hb; NVNmemoryPool hp; P(nvnMemoryPoolBuilderSetDefaults)(&hb); P(nvnMemoryPoolBuilderSetStorage)(&hb, heap, 4 * big);
         P(nvnMemoryPoolInitialize)(&hp, &hb);
+        NVNsync sb; P(nvnSyncInitialize)(&sb, &dev);
         P(nvnCommandBufferBeginRecording)(&cb);
         for (int i = 0; i < 24; i++) P(nvnCommandBufferCopyBufferToBuffer)(&cb, (NVNbufferAddress)busy_a, (NVNbufferAddress)busy_b, big, 0);
         P(nvnCommandBufferCopyBufferToBuffer)(&cb, (NVNbufferAddress)bsrc, (NVNbufferAddress)bdst, big, 0);
+        P(nvnCommandBufferFenceSync)(&cb, &sb, NVN_SYNC_CONDITION_ALL_GPU_COMMANDS_COMPLETE, 0);
         NVNcommandHandle hb2 = P(nvnCommandBufferEndRecording)(&cb);
-        NVNsync sb; P(nvnSyncInitialize)(&sb, &dev);
+        EXPECT("recording a command fence does not signal it", NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED, P(nvnSyncWait)(&sb, 0));
         uint64_t t0 = now_ns();
-        P(nvnQueueSubmitCommands)(&q, 1, &hb2); P(nvnQueueFenceSync)(&q, &sb, NVN_SYNC_CONDITION_ALL_GPU_COMMANDS_COMPLETE, 0);
+        P(nvnQueueSubmitCommands)(&q, 1, &hb2);
         int w0 = P(nvnSyncWait)(&sb, 0);
         int w1 = P(nvnSyncWait)(&sb, 10000000000ull);
         double ms = (now_ns() - t0) / 1e6;
@@ -160,6 +163,14 @@ int main(void) {
         EXPECT("刚提交时零超时等待 = 超时(2)", 2, w0);
         EXPECT("长等待 = 满足(1)", 1, w1);
         EXPECT("dst 全为改写前的值（抽 16384 处）", 0, bad);
+        // The same recorded command must fence a later submission too.
+        memset(bsrc, 0x5A, big);
+        uint64_t first_fence = ((sync_t *)&sb)->fence;
+        P(nvnQueueSubmitCommands)(&q, 1, &hb2);
+        EXPECT("replayed command fence advances", 1, ((sync_t *)&sb)->fence > first_fence);
+        w1 = P(nvnSyncWait)(&sb, 10000000000ull);
+        EXPECT("replayed command fence completes", 1, w1 == NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED || w1 == NVN_SYNC_WAIT_RESULT_CONDITION_SATISFIED);
+        EXPECT("replayed copy completed before CPU reuse", 0, memcmp(bsrc, bdst, big));
         P(nvnMemoryPoolFinalize)(&hp); free(heap);
     }
 

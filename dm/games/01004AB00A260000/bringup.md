@@ -69,8 +69,8 @@ dm/ios/tools/build_ipa.sh "<NSP folder>/DarkSoulsRemastered.ipa"
 
 - AVC/VP8 movie decoding currently produces black frames. The player advances
   through the title movie; this does not verify playback of the story movies.
-- `nvnCommandBufferFenceSync` and `nvnCommandBufferSetAlphaRef` are still
-  unimplemented and logged during menu rendering.
+- `nvnCommandBufferSetAlphaRef` is still unimplemented and logged during
+  menu rendering.
 - Dirty-page tracking reaches its 4,096-range limit at startup. Excess pools
   are untracked, which may cause unnecessary texture uploads.
 - Continue past the initial settings into character creation and gameplay,
@@ -117,3 +117,17 @@ running on its previous build. The latest live log has only 18 draws/frame;
 absence of pipeline failures there is not evidence about the faulty gameplay
 scene. The pass diagnostic log also lacks the per-draw vertex/alpha state
 needed to attribute each visible ground patch or water draw.
+
+## Command fences (2026-10-18)
+
+`nvnCommandBufferFenceSync` previously went through an unimplemented thunk.
+It now records the sync pointer and publishes the enclosing submission's
+completion fence during replay. This is conservative: a fence in the middle
+of a command list waits for the entire submission, including its split
+segments, rather than signaling before later commands finish. Recording does
+not change the sync object, and CPU waits still depend on actual GPU completion.
+
+The NVN integration test passes all 67 checks, including a busy GPU copy,
+waiting before CPU reuse of its source buffer, and replaying the same command
+fence in a later submission. This repairs a missing synchronization mechanism;
+it does not by itself prove the cause of the reported water instability.
