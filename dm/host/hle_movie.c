@@ -368,6 +368,13 @@ HLE_FORCE("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11De
     self[1] = d;
     LOG("[影片] 解码器 %p：类型 %d 输出 %d 模式 %d 优先级 %d", (void *)self, type, fmt, mode, prio);
 }
+// SDK 4.5's overload supplies priority 16 internally. It must construct the
+// same host object as the newer overload before any overridden method runs.
+HLE_FORCE("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11DecoderModeE",
+          "Movie decoder with the SDK's default priority", void, h_movie_DecoderDefault,
+          void **self, int type, int fmt, int mode) {
+    h_movie_Decoder(self, type, fmt, mode, 16);
+}
 static void md_free(void **self) {
     mdec_t *d = md_of(self); if (!d) return;
     md_defer_drop(d);
@@ -529,7 +536,10 @@ HLE_FORCE("_ZN5movie7Decoder19GetOutputBufferSizeEPiS1_", "影片解码器：输
 int nvn_host_write_texture(const void *nvntex, const void *src, int w, int h, size_t row, int *tw, int *th);
 int nvn_host_signal_sync(void *nvnsync);
 static int md_out_tex(mdec_t *d, int i, void *buf) {
-    if (!G.nvn_sync) G.nvn_sync = msym("_ZNK5movie6Buffer10GetNvnSyncEv");
+    // SDK 4.5 has native-texture buffers but predates Buffer::GetNvnSync.
+    // The host writes the texture synchronously, so the optional SDK sync is
+    // only needed by newer movie clients that explicitly provide one.
+    if (!G.nvn_sync) G.nvn_sync = guest_sym("_ZNK5movie6Buffer10GetNvnSyncEv");
     uint8_t *p = G.data(buf); size_t cap = G.cap(buf);
     if (!p || cap < 8) { LOG("【红】影片：原生贴图模式的客户端缓冲 %zu 字节，要 8（贴图对象）", cap); return 0x100b; }
     void *tex = p; int tw = 0, th = 0, f = nvn_host_write_texture(tex, NULL, 0, 0, 0, &tw, &th);
@@ -542,7 +552,8 @@ static int md_out_tex(mdec_t *d, int i, void *buf) {
         for (size_t j = 0; j < n; j++) k[j] = 0xff000000u;
         nvn_host_write_texture(tex, k, tw, th, (size_t)tw * 4, NULL, NULL); free(k);
     }
-    void *sy = G.nvn_sync(buf); if (sy && nvn_host_signal_sync(sy) && !d->red_dec++) LOG("【红】影片：缓冲带的同步对象 %p 不是 NVNsync", sy);
+    void *sy = G.nvn_sync ? G.nvn_sync(buf) : NULL;
+    if (sy && nvn_host_signal_sync(sy) && !d->red_dec++) LOG("【红】影片：缓冲带的同步对象 %p 不是 NVNsync", sy);
     MD_TRACE(d, 12, "GetOutputBuffer 号 %d → 贴图 %p（%d×%d 格式 %#x）%s", i, tex, tw, th, f, d->out[i].pic ? "" : "（黑帧）");
     return 0;
 }

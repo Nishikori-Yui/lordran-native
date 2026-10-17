@@ -53,6 +53,15 @@ static size_t image_bytes(void) { size_t n = 0; for (int i = 0; i < g_nmod; i++)
 // and the heap it opens = pool − 64 MB − 1.75 GB virtual address memory − 1 MB = 0x5be00000, as on hardware); Metroid Dread's main has about 1.8 GB of bss, the engine's static heap, which the Switch counts as used;
 // without it the game asks for pool − 64 MB = 3.15 GB of heap
 static size_t big_bss_bytes(void) { size_t n = 0; for (int i = 0; i < g_nmod; i++) if (g_mod[i].patch_off < 0) n += g_mod[i].size - g_mod[i].file_image_len; return n; }
+static size_t used_image_bytes(void) {
+    // Dark Souls 1.0.0/1.0.3 nninitStartup requests total-used once, with no
+    // smaller-heap retry (1.0.3 main+0x454334). Its images exceed 64 MiB,
+    // so the legacy estimate makes SetHeapSize reject the reported budget.
+    const char *build = dm_main_build();
+    if (!strcmp(build, "5a797a3a5da6c4f3468cb7c84e4dde63") ||
+        !strcmp(build, "df3766a2bb651a3e822828abf10b6f7b")) return image_bytes();
+    return 0x4000000 + big_bss_bytes();
+}
 
 // For memory accounting (memstat.m): the range of the whole guest address space block (base = NULL when not initialized)
 void svc_guest_range(uint8_t **base, size_t *size) { *base = g_as; *size = RESERVE; }
@@ -226,7 +235,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         case I_AslrAddr:  v = (uint64_t)g_as;    break;   case I_AslrSize:  v = RESERVE;     break;
         case I_StackAddr: v = (uint64_t)g_stack; break;   case I_StackSize: v = g_stack_cap; break;
         case I_TotalMem: case I_TotalNonSys: v = APP_POOL; break;
-        case I_UsedMem:  case I_UsedNonSys:  v = g_heap_cur + 0x4000000 + big_bss_bytes(); break;
+        case I_UsedMem:  case I_UsedNonSys:  v = g_heap_cur + used_image_bytes(); break;
         case I_SysResTotal: v = 0x2000000; break; case I_SysResUsed: v = 0x400000; break;
         case I_DebuggerAttached: v = 0; break;
         case I_RandomEntropy: { uint64_t dm_entropy64(void); v = dm_entropy64(); break; }   // a deterministic stream when DM_DETCLOCK is on (hle_os.c)

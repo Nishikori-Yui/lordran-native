@@ -30,6 +30,14 @@ HLE_FORCE("_ZN2nn7account12PopOpenUsersEPiPNS0_10UserHandleEi", "系统代开的
 HLE_FORCE("_ZN2nn7account22TryOpenPreselectedUserEPNS0_10UserHandleE", "启动时预选用户；恒为本地用户（返回 bool）", unsigned, h_acc_TryOpenPre, UserHandle *h) {
     h->v[0] = k_uid.v[0]; h->v[1] = k_uid.v[1]; h->v[2] = HANDLE_MAGIC; return 1;
 }
+// SDK 4.5's Result-returning predecessor (Dark Souls main+0x6672fc).
+// The native implementation needs the acc:u0 state that Initialize replaces.
+HLE_FORCE("_ZN2nn7account19OpenPreselectedUserEPNS0_10UserHandleE", "Open the local preselected user", Result, h_acc_OpenPre, UserHandle *h) {
+    h_acc_TryOpenPre(h); return RES_OK;
+}
+HLE_FORCE("_ZN2nn7account17GetLastOpenedUserEPNS0_3UidE", "Return the local user selected at startup", Result, h_acc_GetLast, Uid *out) {
+    *out = k_uid; return RES_OK;
+}
 HLE_FORCE("_ZN2nn7account8OpenUserEPNS0_10UserHandleERKNS0_3UidE", "打开用户；句柄内直接存 Uid", Result, h_acc_OpenUser, UserHandle *h, const Uid *uid) {
     h->v[0] = uid->v[0]; h->v[1] = uid->v[1]; h->v[2] = HANDLE_MAGIC; return RES_OK;
 }

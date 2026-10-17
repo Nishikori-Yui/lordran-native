@@ -17,6 +17,17 @@ HLE_FORCE("_ZNK2nn7friends12AsyncContext9GetResultEv", "异步结果恒失败（
 HLE_FORCE("_ZN2nn7friends13GetFriendListEPiPNS0_6FriendEiiRKNS0_12FriendFilterE", "好友列表为空（剪）", Result, h_fr_GetFriendList, int *count, void *out, int off, int n, const void *filt) {
     (void)out; (void)off; (void)n; (void)filt; if (count) *count = 0; return RES_FAIL;
 }
+// SDK 4.5 (Dark Souls 1.0.3 main+0x92326c) fetches blocked accounts before
+// opening the title menu. Both overloads connect to friend:a lazily, even
+// when friends::Initialize has already been replaced by the offline hook.
+HLE_FORCE("_ZN2nn7friends18GetBlockedUserListEPiPNS_7account23NetworkServiceAccountIdEii", "屏蔽列表不可用（剪）",
+          Result, h_fr_GetBlockedList, int *count, void *out, int off, int n) {
+    (void)out; (void)off; (void)n; if (count) *count = 0; return RES_FAIL;
+}
+HLE_FORCE("_ZN2nn7friends18GetBlockedUserListEPiPNS_7account23NetworkServiceAccountIdERKNS2_3UidEii", "屏蔽列表不可用（剪）",
+          Result, h_fr_GetBlockedListUid, int *count, void *out, const void *uid, int off, int n) {
+    (void)uid; return h_fr_GetBlockedList(count, out, off, n);
+}
 HLE_FORCE("_ZN2nn7friends14GetProfileListEPNS0_12AsyncContextEPNS0_7ProfileERKNS_7account3UidEPKNS5_23NetworkServiceAccountIdEi", "资料查询失败（剪）",
           Result, h_fr_GetProfileList, void *ctx, void *out, const void *uid, const void *ids, int n) { (void)ctx; (void)out; (void)uid; (void)ids; (void)n; return RES_FAIL; }
 HLE_FORCE("_ZN2nn7friends16UpdateFriendInfoEPNS0_6FriendERKNS_7account3UidEPKNS3_23NetworkServiceAccountIdEi", "好友信息更新失败（剪）",
