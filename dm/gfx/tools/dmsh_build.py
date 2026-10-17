@@ -273,6 +273,9 @@ def job_for(key, name, rec, w):
     cp = os.path.join(w, key + '.bin'); open(cp, 'wb').write(code)
     j = {'key': key, 'stage': stage, 'code': cp, 'tex': {}, 'img': {}, 'attr': {}, 'fout': {}, 'c1': c1.hex(),
          'debug': os.environ.get('XLATE_DEBUG', '1') != '0', 'reduced': os.environ.get('XLATE_REDUCED', '1') == '1'}   # 翻译选项（见 dmsh_xlate/Program.cs）；放宽精度缺省开（GPU 浮点末位误差不进游戏状态，mini 整帧 −26%）   # c1：翻译器读间接跳转表用 | translation options (see dmsh_xlate/Program.cs); relaxed precision is on by default (GPU float last-bit error does not enter game state, whole frame −26% on the second Mac)   # c1: used by the translator to read indirect jump tables
+    # SPH word 18 is OmapTargets; bit 3 says color 0 actually exports alpha.
+    # Padded MSL color outputs alone cannot establish that fact.
+    if stage == 'ps': j['alpha_output'] = bool(struct.unpack_from('<I', code, 18 * 4)[0] & 8)
     if key not in FACTS: j['pc_missing'] = True; return j, c1   # 作答表里没有：查询按缺省（汇总里单列） | not in the answer table: queries use defaults (listed separately in the summary)
     j.update(FACTS[key])
     return j, c1
@@ -508,6 +511,34 @@ def vertex_fetch(src):
     src = src[:pos] + '\n    main0_in in = {};\n' + ''.join(loads) + src[pos:]
     return src, True
 
+def alpha_test(src, output_alpha):
+    """Implement NVN's dynamic alpha comparison after fragment side effects."""
+    entry = re.search(r'\bfragment\s+\w+\s+\w+\(', src)
+    if not entry: raise ValueError('Missing fragment entry for alpha test')
+    member = re.search(r'\b(?:float|half)4\s+(\w+)\s*\[\[color\(0\)\]\]', src)
+    if output_alpha and not member: raise ValueError('SPH exports alpha but MSL has no color 0')
+    decl = ('constant uint dm_alpha_func [[function_constant(160)]];\n'
+            'constant float dm_alpha_ref [[function_constant(161)]];\n'
+            'constant bool dm_alpha_on = is_function_constant_defined(dm_alpha_func) ? dm_alpha_func != 8 : false;\n\n')
+    code = '    if (dm_alpha_on)\n    {\n        bool dm_keep = dm_alpha_func != 1;\n'
+    if output_alpha:
+        code += f'        float dm_alpha = float(out.{member[1]}.w);\n'
+        code += ('        dm_keep = dm_alpha_func == 2 ? dm_alpha < dm_alpha_ref :\n'
+                 '                  dm_alpha_func == 3 ? dm_alpha == dm_alpha_ref :\n'
+                 '                  dm_alpha_func == 4 ? dm_alpha <= dm_alpha_ref :\n'
+                 '                  dm_alpha_func == 5 ? dm_alpha > dm_alpha_ref :\n'
+                 '                  dm_alpha_func == 6 ? dm_alpha != dm_alpha_ref :\n'
+                 '                  dm_alpha_func == 7 ? dm_alpha >= dm_alpha_ref : dm_keep;\n')
+    code += '        if (!dm_keep) discard_fragment();\n    }\n'
+    head, body = src[:entry.start()], src[entry.start():]
+    if 'return out;' in body:
+        body = body.replace('    return out;', code + '    return out;')
+    else:
+        body = re.sub(r'\breturn\s*;', lambda _: code + '    return;', body)
+        pos = body.rfind('}')
+        body = body[:pos] + code + body[pos:]
+    return head + decl + body
+
 def finish(key, w, j, c1):
     name, k = loc[key]
     msl = os.path.join(w, key + '.metal'); air = msl[:-6] + '.air'; lib = os.path.join(out, key + '_b.metallib')
@@ -535,6 +566,9 @@ def finish(key, w, j, c1):
     if j['stage'] == 'vs':
         src, fetch = vertex_fetch(src)
         if fetch: open(msl, 'w').write(src)
+    if j['stage'] == 'ps':
+        src = alpha_test(src, j['alpha_output'])
+        open(msl, 'w').write(src)
     res = json.load(open(os.path.join(w, key + '.res.json')))
     try:
         subprocess.run(['xcrun', '-sdk', 'macosx', 'metal', '-c', msl, '-o', air], check=True)
@@ -556,7 +590,7 @@ def finish(key, w, j, c1):
             'entry': entry.group(2) if entry else 'main0', 'msl_entry_kind': entry.group(1) if entry else None,
             'threadgroup_size': j.get('local'), 'c1': c1.hex(), 'notes': res['notes'] + (['无配对 PC 反射，查询按缺省'] if j.get('pc_missing') else []), 'drv_reads': dr, 'drv_unfillable': unfillable(dr),
             'bindings': reflect(key, j['stage'], src, res),
-            'vertex_inputs': vertex_inputs, 'vertex_fetch': fetch,
+            'vertex_inputs': vertex_inputs, 'vertex_fetch': fetch, 'alpha_test': j['stage'] == 'ps',
             'raster': raster, 'vs_pad': pad}
     write_refl(key, refl)
     fetch_finish(key, src, refl)

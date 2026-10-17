@@ -11,7 +11,7 @@ verified. Do not list this profile as playable.
 - Tested main build: `df3766a2bb651a3e822828abf10b6f7b`.
 - SDK 4.5 build: `d95547528dcd684e2813ec83d338a472`.
 - NEX module: `73f98f5f7a34d4c520bda7c1a19cd9bd`.
-- Shader chain: `353d61b89bf3`; 3,099 libraries built for Mac and iOS.
+- Shader chain: `0eefab8cf997`; 3,099 libraries built for Mac and iOS.
 - Archives use BHD5/BDT, DCX-DFLT and BND3; the reader is
   `dm/gfx/tools/fromsoftware.py`.
 - The measured shader corpus uses bindless handles in guest c13 and no c2
@@ -69,12 +69,12 @@ dm/ios/tools/build_ipa.sh "<NSP folder>/DarkSoulsRemastered.ipa"
 
 - AVC/VP8 movie decoding currently produces black frames. The player advances
   through the title movie; this does not verify playback of the story movies.
-- `nvnCommandBufferSetAlphaRef` is still unimplemented and logged during
-  menu rendering.
 - Dirty-page tracking reaches its 4,096-range limit at startup. Excess pools
   are untracked, which may cause unnecessary texture uploads.
-- Continue past the initial settings into character creation and gameplay,
-  then verify graphics, audio, saves and memory over a longer run.
+- Revisit character creation and asylum gameplay on the repaired build,
+  including the opaque ground patches and unstable water. User captures
+  establish these defects on the preceding build; the GPU tests below do
+  not establish that every visible defect has been repaired.
 - Have the user sideload the unsigned IPA and return `Documents/log.txt`.
   Mac results alone do not establish iPhone compatibility.
 
@@ -143,3 +143,56 @@ continue to cover all stages; the SDK explicitly permits that combination.
 
 After the fix, all 67 integration checks pass with Metal API validation
 enabled, including uniform updates, copies, command fences and readback.
+
+## Alpha testing (2026-10-18)
+
+The historical `run/live-vertex-diagnostic.log` contains 6,911 unimplemented
+`nvnCommandBufferSetAlphaRef` calls and 1,225 unimplemented
+`nvnCommandBufferFenceSync` calls. The alpha gap was larger than the missing
+entry point: color state retained the comparison function, but pipeline
+construction ignored it and the offline translator fixed it to ALWAYS.
+Consequently an alpha-tested surface could write its transparent texels to
+both color and depth. This is a concrete missing rendering operation; the
+old logs do not identify the exact ground-patch draws or prove their alpha
+state.
+
+The compiler now adds all eight NVN comparisons to the fragment epilogue.
+The host records the reference value in command order and specializes the
+compiled function using the comparison and reference bits in the pipeline
+key. Readable-tile variants carry the same constants. Alpha testing also
+disables the full-coverage load-elision proof. SPH `OmapTargets`, rather than
+a padded MSL output, determines whether the original shader exports color
+0 alpha. As in the bundled Ryujinx emitter, missing alpha bypasses comparisons
+except NEVER.
+
+Default vertex and fragment functions are specialized before their argument
+encoders are created. An unspecialized Metal function with function constants
+cannot be used to construct a pipeline.
+
+Validation for chain `0eefab8cf997`:
+
+- All 3,099 Mac and 3,099 iOS libraries compile, including 2,708 fragment
+  shaders with alpha-test support. Of those, 2,703 originally export alpha;
+  five do not. None forces early fragment tests.
+- Bindings, original vertex input types, raster facts and c1 bytes are
+  unchanged from chain `353d61b89bf3` and agree between Mac and iOS.
+  `c1_full.tsv` has been regenerated; the Mac host builds.
+- `tests/test_alpha.py` passes 54 GPU render cases under Metal API validation:
+  every comparison at alpha 0, 0.5 and 1, changing references, cache reuse,
+  and shaders without exported alpha. Each case checks two color targets
+  and depth; discarded fragments must leave all three untouched.
+- The vertex-fetch test passes all 15 cases again; the NVN integration test
+  passes all 67 checks. The serialized pipeline-key round-trip test passes
+  with the new alpha fields.
+- An additional work-folder smoke test loads all 3,099 actual game libraries
+  through production `shader_load`, creates 3,090 argument encoders,
+  specializes all 390 vertex-input shaders for normalized attributes and
+  all 2,708 fragment shaders for GREATER/0.5, and checks cache reuse.
+  Metal API validation reports no failure.
+
+Logs and the real-library smoke-test source are under the game's
+`analysis/gfx-20261018/`. The previous live game process was not closed or
+replaced. Its loaded executable and shader functions predate these changes;
+its continuing log cannot validate the new build. Water instability still
+requires scene-level validation and, if it persists, per-draw vertex,
+texture, alpha and synchronization captures on the repaired build.

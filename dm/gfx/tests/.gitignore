@@ -45,3 +45,5 @@ t_dirty_race
 t_dirty_race.dSYM/
 t_vertex_fetch
 t_vertex_fetch.dSYM/
+t_alpha
+t_alpha.dSYM/
