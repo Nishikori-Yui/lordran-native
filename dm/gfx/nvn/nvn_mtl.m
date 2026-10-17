@@ -6523,6 +6523,26 @@ uint64_t mtl_udc_saved_bytes(void) { return g_udc_saved_bytes; }
 int mtl_has_window(void) { return front_metal_layer() != NULL; }
 int mtl_link_active(void) { return link_on(); }
 void mtl_link_pause(int on) { CAMetalDisplayLink *l = g_link; if (l) l.paused = on != 0; }   // For testing (DM_TEST_BG): imitates the system stopping the display-link callback in the background
+void mtl_link_resume(void) {
+    CAMetalDisplayLink *link = g_link;
+    CFRunLoopRef rl = g_link_rl;
+    CAMetalLayer *layer = (__bridge CAMetalLayer *)front_metal_layer();
+    if (layer) layer.displaySyncEnabled = YES;
+    if (link && rl) {
+        CFRunLoopPerformBlock(rl, kCFRunLoopDefaultMode, ^{
+            if (g_link == link) link.paused = NO;
+            CAMetalLayer *l = (__bridge CAMetalLayer *)front_metal_layer();
+            if (l) l.displaySyncEnabled = YES;
+        });
+        CFRunLoopWakeUp(rl);
+    }
+    pthread_mutex_lock(&g_pq_mu);
+    pthread_cond_broadcast(&g_pq_cv);
+    pthread_mutex_unlock(&g_pq_mu);
+    pthread_mutex_lock(&g_link_mu);
+    pthread_cond_broadcast(&g_link_cv);
+    pthread_mutex_unlock(&g_link_mu);
+}
 int mtl_link_wait_tick(uint64_t timeout_ns) {
     if (!mtl_link_active()) return 0;
     // Wait for the display link only when running faster than the display: if a display-link tick has already passed since the previous frame started work (this frame is already behind), start immediately instead of waiting in vain for the next display-link tick --
