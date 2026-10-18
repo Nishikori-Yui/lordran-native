@@ -6,7 +6,7 @@ The README covers packing and playing. This page is for working on the Dark Soul
 
 | Part | State |
 |---|---|
-| Rewriter (`dm/tools/patch_nso.py`, `DM_RULESET=native`) | Rewrites the Dark Souls modules. Per-build cuts are keyed by the module's build ID |
+| Rewriter (`dm/tools/patch_nso.py`, `DM_RULESET=native`) | Rewrites kernel-dependent instructions in the registered Dark Souls module builds. No game-specific code cuts, observation gates or resolution patches are applied |
 | Host (`dm/host`) | Stands in for the Horizon kernel and the system services the games call: threads and synchronization, memory, file system with transactional saves, HID, audio, movies (VP9 through libvpx, Vorbis sound through stb_vorbis), software keyboard, focus and lifecycle |
 | Graphics (`dm/gfx`) | NVN on Metal. Shaders are extracted by `shader_split.py` from Nintendo's containers and from Unity's `Shader` objects, then translated offline. Dark Souls Remastered shaders are extracted from its BNSH / GLSLC corpus and compiled into the profile cache. |
 | Audio | AudioOut and the SDK audio renderer are hosted in-process. Output goes through Core Audio (default on iOS, `DM_AUDIO=1` on the Mac) |
