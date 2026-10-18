@@ -14,4 +14,3 @@ void dm_uiscreen_set_panel(int on);           // A large panel open in a run (fu
 int dm_uiscreen_panel(void);                 // The state above: a large panel open in a run = 1
 #include <stdint.h>
 uint64_t dm_game_res(int docked);            // The value the game's render resolution parameter slot should give right now (packed {u32 width, u32 height}): the front end's native value, changed to 16:9 of the screen width when true fullscreen is on and not in a run
-void dm_uiscreen_res_reread(void);            // May only be called by hle_oe.c when the game takes the "performance mode changed" notification

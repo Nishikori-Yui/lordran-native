@@ -48,7 +48,6 @@ typedef struct { const char *name; void *fn; const char *why; } hle_force_ent;
 
 // Operation mode (0 handheld / 1 docked): owned by hle_oe.c, and the hid controller style follows it; the front end can switch it at runtime
 int dm_opmode(void);
-void dm_3d_scale_hot(int hot);      // When overheating, lower the 3D render scale to 0.70 (UI untouched); 0 = restore
 ssize_t dm_data_pread(int fd, void *buf, size_t n, off_t off);   // Resource archive reads: zero-stripped archives with a ".holes" extent table are translated through the table (hle_fs.c)
 void dm_data_note_fd(int fd, const char *hostpath);
 int dm_overlay_file(const char *rel, char *out, size_t n);   // File in the overlay: DM_ROMFS_OVERLAY may have several layers (colon-separated, earlier ones take priority); look for <layer>/<rel> layer by layer, and on a hit write it to out and return 1 (hle_fs.c)

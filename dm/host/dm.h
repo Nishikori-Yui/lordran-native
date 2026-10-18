@@ -43,8 +43,7 @@ typedef struct {
 
 extern module_t g_mod[MAX_MOD];
 extern int g_nmod;
-// main's build ID (empty if none). DM_D2R_BUILD = the D2R build that the code inherited from d2r-mobile belongs to: code with fixed D2R addresses or that edits D2R saves runs only on it
-#define DM_D2R_BUILD "db0507f36b84200ac05f75d76ed5026f"
+// Main module build ID (empty if none).
 static inline const char *dm_main_build(void) { for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) return g_mod[i].build_id; return ""; }
 // Four thread-local slots: K18 = the Switch's x18, KTLS = tpidr_el0, KTLR = tpidrro_el0 (ThreadLocalRegion), KGATE = host gate entry; the actual key numbers are written into the key page by the loader
 extern pthread_key_t g_key18, g_keytls, g_keytlr, g_keygate;
@@ -73,9 +72,6 @@ void dm_guest_frame_tick(void);        // Called on every present (hle_nvn.c): w
 int dm_nvn_ruler_truth(void);         // 1 during the ground-truth phase of the visual ruler (the first two screenshots with DM_NVN_RULER=1)
 uint64_t dm_nvn_frame_count(void);
 uint64_t dm_nvn_sub_cpu_ns(void);     // Cumulative CPU nanoseconds of submit (excluding present)
-int dm_ingame_now(void);              // Whether we are in a run (diag.c)
-void dm_3d_scale_feed(double iv_ms);   // The present thread reports the actual present interval every frame (−1 discard / 0 no reading), driving the dynamic 3D scale
-float dm_3d_scale_cur(void);          // The 3D render scale currently in effect (hle_oe.c scale3d_tick)     // current cumulative count of presented frames (for DM_TICKS alignment observation)
 void dm_backtrace(uint64_t fp);
 void crash_watch_progress(uint32_t tick, const char *stage);
 void crash_watch_frame(void);
