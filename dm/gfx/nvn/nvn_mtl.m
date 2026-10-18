@@ -249,7 +249,19 @@ static void udc_selftest(void) {
 void mtl_init(void) {
     if (g_dev) return;
     const char *link = getenv("DM_PRESENT_LINK");
-    g_dm_present_link = link ? atoi(link) : 1; if (g_dm_present_link < 0 || g_dm_present_link > 2) g_dm_present_link = 1;   // Default 1 (real-device same-process alternation: when load exceeds one display-link period, long frames 15% → 0 and frame intervals even out; no difference from 0 at a steady 60); DM_PRESENT_LINK=0 turns it off   // 1 = present on every tick of a 60 Hz display link; 2 = 120 Hz display link, the game presents a frame every other display-link tick (when behind, it can present on the next 8.33 ms display-link tick)
+    // Dark Souls' Mac window hit a foreground display-link stall before the
+    // title screen: audio and guest frames continued, but every queued frame
+    // was dropped because no callback owned the layer. Keep the display-link
+    // path available for explicit diagnostics while making this profile's
+    // ordinary Mac window use the reliable presenter.
+#if TARGET_OS_OSX
+    const int mac_dark_souls = !strcmp(DM_GAME_MAC_LAYOUT, "dark_souls_pc");
+#else
+    const int mac_dark_souls = 0;
+#endif
+    g_dm_present_link = link ? atoi(link) : (mac_dark_souls ? 0 : 1);
+    if (g_dm_present_link < 0 || g_dm_present_link > 2) g_dm_present_link = mac_dark_souls ? 0 : 1;
+    if (mac_dark_souls && !link) MLOG("Dark Souls Mac：默认关闭显示节拍出图（DM_PRESENT_LINK=1/2 可重新启用诊断路径）");
     const char *latency = getenv("DM_PRESENT_LATENCY");
     if (latency && atoi(latency) > 0) g_present_latency = atoi(latency);
     g_res_check_on = getenv("DM_RES_CHECK") != NULL;
