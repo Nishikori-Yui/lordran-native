@@ -15,4 +15,5 @@
 
   The host only loads libraries of its own chain version. The translator is `dm/gfx/tools/dmsh_xlate_bin`, which matches `dmsh_chain.lock`; a fresh `dotnet publish` does not.
 - iOS builds are unsigned IPAs that the user sideloads and tests; diagnostics come back as the app's `Documents/log.txt`. Do not sign or install builds on the user's devices.
-- Commit only when asked, with `git -c user.name=seedds -c user.email=ext6@xcra.ai commit`.
+- Commit only when asked, with `TZ=America/New_York git -c user.name=Nishikori-Yui -c user.email=165007678+Nishikori-Yui@users.noreply.github.com commit`.
+- Delete one-off helper scripts after use; do not commit them.
