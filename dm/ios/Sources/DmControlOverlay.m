@@ -224,7 +224,7 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
     self.showsFPS = toggle.on; [NSUserDefaults.standardUserDefaults setBool:toggle.on forKey:DmAppFPSKey];
     if (self.fpsChanged) self.fpsChanged(toggle.on);
 }
-- (void)exportLog { DmDiagnosticsShare(self.presenter, _ball); }
+- (void)exportLog { DmDiagnosticsShare(self.presenter, _export); }
 - (void)closeMenu {
     _page = PageClosed; [_panel removeFromSuperview]; _panel = nil; [_confirm removeFromSuperview]; _confirm = nil;
     _ball.hidden = NO;

@@ -1110,9 +1110,9 @@ static void slow_emit(uint64_t f) {
         for (int i = 0; i < r->n && o < sizeof b - 64; i++) o += snprintf(b + o, sizeof b - o, "\t%s=%.3f", r->k[i], r->v[i]);
         double m = 0; for (uint64_t p = f >= 3 ? f - 3 : 0; p < f; p++) { double x = srow(p, "@frame_ms", 0); if (x > m) m = x; }
         snprintf(b + o, sizeof b - o, "\t@prev3_max_frame_ms=%.3f", m);
-        fprintf(stderr, "%s\n", b);
+        DM_LOG_DEBUG("nvn", "%s", b);
     }
-    if (f % 300 == 0) fprintf(stderr, "[slowframe]\t#\tthrough_frame=%llu\tjudged=%llu\tslow=%llu\tcriterion=%s\n", f, judged, slow, has ? "presentation interval" : "present-call interval (headless)");
+    if (f % 300 == 0) DM_LOG_DEBUG("nvn", "[slowframe]\t#\tthrough_frame=%llu\tjudged=%llu\tslow=%llu\tcriterion=%s", f, judged, slow, has ? "presentation interval" : "present-call interval (headless)");
 }
 // Declaration for the time-constraint (real-time) thread: period = present period, constraint = period, computation = the CPU time this thread actually needs per frame.
 // The computation used to be hard-coded at 2 ms, while the game main thread (game logic + recording + submit replay) takes about 10 ms per frame when hot - a 5× gap between declared and actual:

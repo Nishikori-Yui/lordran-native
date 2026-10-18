@@ -116,7 +116,9 @@ static void runTests(UIViewController *presenter) {
     UISwitch *fps = [UISwitch new]; fps.on = YES; [overlay fpsToggled:fps];
     assert(showsFPS && overlay.showsFPS && [defaults boolForKey:@"DmShowFPS"]);
     fps.on = NO; [overlay fpsToggled:fps]; assert(!showsFPS && !overlay.showsFPS);
-    [overlay exportLog]; assert(exportAnchor == ball && ball.window);
+    UIButton *exportButton = [overlay valueForKey:@"export"];
+    assert(exportButton && !exportButton.hidden);
+    [overlay exportLog]; assert(exportAnchor == exportButton && exportButton.window);
     snapshot(canvas, @"controls-menu.png"); [overlay closeMenu];
 
     // Opening the editor releases both held buttons and pending camera motion.

@@ -23,7 +23,7 @@ You need your own game NSPs and `prod.keys`. The repository contains no game fil
 ### 1. Install the build tools
 
 ```sh
-git clone https://github.com/Nishikori-Yui/nxnative.git lordran-native
+git clone https://github.com/Nishikori-Yui/lordran-native.git lordran-native
 cd lordran-native
 brew install xcodegen zstd spirv-cross
 brew install --cask dotnet-sdk
