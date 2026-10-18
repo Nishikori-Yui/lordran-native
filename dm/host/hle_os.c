@@ -61,7 +61,7 @@ void dm_guest_frame_tick(void) {
     if (!detclock_cfg()) return;
     if (!atomic_load(&g_gdet_on)) {
         atomic_store(&g_gdet, wall_guest_ns()); atomic_store(&g_gdet_on, 1);
-        LOG("DM_DETCLOCK：首次出图起客体时钟按出图推进，步长 %llu ns；进局时对齐到 2^52 ns", (unsigned long long)g_gdet_step); return;
+        LOG("Deterministic clock: advancing by presented frames, step_ns=%llu; aligned to 2^52 ns on entering gameplay", (unsigned long long)g_gdet_step); return;
     }
     if (!atomic_load(&g_gfz)) { atomic_fetch_add(&g_gdet, g_gdet_step); dm_guest_clock_advanced(); }
 }
@@ -86,7 +86,7 @@ uint64_t dm_entropy64(void) {
     if (!detclock_cfg()) return ((uint64_t)arc4random() << 32) | arc4random();
     uint64_t z = atomic_fetch_add(&g_detrng, 0x9E3779B97F4A7C15ull) + 0x9E3779B97F4A7C15ull;
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull; z = (z ^ (z >> 27)) * 0x94D049BB133111EBull; z ^= z >> 31;
-    uint64_t n = atomic_fetch_add(&g_detrng_n, 1) + 1; if (n == 1 || n % 1000 == 0) LOG("DM_DETCLOCK：确定熵第 %llu 次", (unsigned long long)n);
+    uint64_t n = atomic_fetch_add(&g_detrng_n, 1) + 1; if (n == 1 || n % 1000 == 0) LOG("Deterministic entropy request: count=%llu", (unsigned long long)n);
     return z;
 }
 HLE("getentropy", int, g_getentropy, void *p, size_t n) {

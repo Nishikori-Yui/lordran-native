@@ -28,13 +28,13 @@ static void mq_push(uint32_t m) {
     if (m == MSG_FOCUS || m == MSG_OPMODE || m == MSG_PERFMODE)
         for (int i = 0; i < g_mqn; i++)
             if (g_mq[(g_mqh + i) % MQ] == m) { pthread_mutex_unlock(&g_mq_lock); return; }
-    if (g_mqn == MQ) die("oe 通知队列溢出（游戏没在取？）");
+    if (g_mqn == MQ) die("Operation-mode notification queue overflow; guest may not be consuming events");
     g_mq[(g_mqh + g_mqn++) % MQ] = m;
     pthread_cond_broadcast(&g_mq_cond);
     pthread_mutex_unlock(&g_mq_lock);
 }
 void dm_oe_res_changed(void) { if (getenv("DM_TEST_OE_FOCUS_FIRST")) mq_push(MSG_FOCUS);   /* Test: queue 31 behind a focus notification (the order at iOS app startup) */
-    if (g_ntf_perfmode) mq_push(MSG_PERFMODE); else LOG("【红】分辨率要切，但游戏没打开性能模式变化通知"); }   // notify the game that the render mode changed
+    if (g_ntf_perfmode) mq_push(MSG_PERFMODE); else LOG_ERROR("Resolution change requested while guest performance-mode notifications are disabled"); }   // notify the game that the render mode changed
 // Operation mode reported to GetOperationMode only (used to make the game reload layouts when switching between controller / touch layouts, dm_padmode.c):
 // m ≥ 0 reports m and pushes one operation-mode notification; m < 0 reports the true value again and pushes one more.
 // The controller style (hle_hid.c connected_id) and performance mode keep their true values, so no "Reconnect controller" prompt appears and the render
@@ -46,7 +46,7 @@ void dm_oe_ui_opmode(int m) { g_ui_opmode = m < 0 ? -1 : m; atomic_store(&g_ui_a
 void dm_set_opmode(int m) {   // called by the front end (overheat downgrade etc.): change the state and push 30 / 31 according to the switches the game has turned on
     int old = dm_opmode(); if (old == m) return;
     g_opmode = m;
-    LOG("oe 运行模式 %d → %d", old, m);
+    LOG("Operation mode changed: %d -> %d", old, m);
     if (g_ntf_opmode) mq_push(MSG_OPMODE);
     if (g_ntf_perfmode) mq_push(MSG_PERFMODE);
 }
@@ -55,10 +55,10 @@ static _Atomic int g_focus = 1; static _Atomic uint64_t g_focus_in_ns;   // time
 int dm_focus_now(void) { return atomic_load(&g_focus); }
 uint64_t dm_focus_in_since(void) { return atomic_load(&g_focus_in_ns); }   // graphics layer display link watchdog: stalls are only computed while active, counted from activation (nvn_mtl.m mtl_present_wait)
 void dm_focus_set(int st) {
-    if (st < 1 || st > 3) die("dm_focus_set 非法状态 %d", st);
+    if (st < 1 || st > 3) die("Invalid focus state: %d", st);
     if (st == 1) atomic_store(&g_focus_in_ns, now_ns());
     if (atomic_exchange(&g_focus, st) == st) return;
-    LOG("oe 焦点状态 → %d", st);
+    LOG("Focus state changed: %d", st);
     mq_push(MSG_FOCUS);
 }
 static int opmode(void) { return dm_opmode(); }
@@ -83,7 +83,7 @@ HLE_FORCE("_ZN2nn2oe18GetPerformanceModeEv", "性能模式查询；与运行模�
 HLE_FORCE("_ZN2nn2oe27GetPerformanceConfigurationENS0_15PerformanceModeE", "查 CPU/GPU 频率档（经 apm）；按模式报缺省档", int, h_oe_GetPerfCfg, int mode) { return mode == 1 ? 0x00010001 : 0x00010000; }
 HLE_FORCE("_ZN2nn2oe24SetAlbumImageOrientationENS_5album16ImageOrientationE", "截图方向（经 am）；宿主无系统截图", void, h_oe_AlbumOrient, int o) { (void)o; }
 HLE_FORCE("_ZN2nn2oe27SetPerformanceConfigurationENS0_15PerformanceModeEi", "设 CPU/GPU 频率档；宿主不调频", void, h_oe_SetPerfCfg, int mode, int cfg) {
-    LOG("oe::SetPerformanceConfiguration mode=%d cfg=%#x（忽略）", mode, cfg);
+    LOG("oe::SetPerformanceConfiguration ignored: mode=%d configuration=%#x", mode, cfg);
 }
 
 // Scripted state changes (verify lifecycle / overheat downgrade without a window): DM_OE_SCRIPT="focus=3@10,focus=1@20,opmode=0@30" (second N); bg=1 / bg=0 run the whole background round trip (see script_bg)
@@ -106,20 +106,20 @@ static void *oe_script(void *arg) {
             need++; while (atomic_load(&g_ls_unloads) < need) usleep(20000);
             usleep((useconds_t)(at * 1e6));
         } else {
-            if (sscanf(tok, "%15[a-z]=%d@%lf", key, &v, &at) != 3) die("DM_OE_SCRIPT 项「%s」格式应为 键=值@秒 或 键=值@ingame+秒", tok);
+            if (sscanf(tok, "%15[a-z]=%d@%lf", key, &v, &at) != 3) die("Invalid DM_OE_SCRIPT entry: %s; expected key=value@seconds or key=value@ingame+seconds", tok);
             uint64_t due = t0 + (uint64_t)(at * 1e9), now = now_ns();
             if (due > now) usleep((useconds_t)((due - now) / 1000));
         }
         if (!strcmp(key, "focus")) dm_focus_set(v);
         else if (!strcmp(key, "opmode")) dm_set_opmode(v);
         else if (!strcmp(key, "bg")) script_bg(v);
-        else die("DM_OE_SCRIPT 未知键「%s」（focus / opmode / bg）", key);
+        else die("Unknown DM_OE_SCRIPT key: %s; expected focus, opmode or bg", key);
     }
     return NULL;
 }
 static void oe_script_start(void) {
     const char *e = getenv("DM_OE_SCRIPT"); if (!e) return;
-    pthread_t th; if (pthread_create(&th, NULL, oe_script, strdup(e))) die("DM_OE_SCRIPT 线程");
+    pthread_t th; if (pthread_create(&th, NULL, oe_script, strdup(e))) die("Failed to create operation-mode script thread");
     pthread_detach(th);
 }
 static pthread_once_t g_oe_once = PTHREAD_ONCE_INIT;
@@ -139,7 +139,7 @@ HLE_FORCE("_ZN2nn2oe25TryPopNotificationMessageEPj", "系统通知队列；前�
     // When they are read: each time the handler is entered, once after the first notification is fetched (0xe10d5c / 0xe10d60), and notifications fetched later in the loop still use the values from that read. So every time one is taken, the value due at this moment is written into the current thread's slot --
     // writing only when 31 is taken is not enough: when 31 is queued behind another notification (e.g. focus 15), the parameter bits have already been read after fetching 15 (iOS app: the front end did not switch to 16:9, in the Mac host run 31 happened to be queued first).
     if (ok) for (int i = 0; i < 2; i++) if (g_keyres[i]) pthread_setspecific(g_keyres[i], (void *)front_game_res(i));
-    if (ok) LOG("oe 通知被游戏取走：%u", *msg);   // state changes are rare, printing each one does not flood the log
+    if (ok) LOG("Operation-mode notification consumed by guest: %u", *msg);   // state changes are rare, printing each one does not flood the log
     return ok;
 }
 // The blocking form (Link's Awakening pops on a thread of its own, main+0xfa1ff8): the SDK's version waits on the system event oe::Initialize would have created,

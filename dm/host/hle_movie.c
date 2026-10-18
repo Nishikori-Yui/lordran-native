@@ -21,7 +21,7 @@
 
 #if 0
 HLE_FORCE("_ZN5movie9Extractor13SetDataSourceEPKc", "影片拆封装：宿主还不放影片，开片失败（0x1000）", int, h_movie_SetSource, void *self, const char *path) {
-    (void)self; static int red; if (!red++) LOG("【红】影片：宿主不拆封装，开片报失败（首个 %s）", path ? path : "(null)");
+    (void)self; static int red; if (!red++) LOG_ERROR("Movie container demux is unavailable; refusing stream open: first_path=%s", path ? path : "(null)");
     return 0x1000;
 }
 #endif
@@ -85,7 +85,7 @@ static struct {
     void *(*nvn_sync)(const void *buf);   // used only by the native texture mode; Engage's subsdk0 has it too, but it is not required
 } G;
 
-static void *msym(const char *n) { void *p = guest_sym(n); if (!p) die("影片：缺 SDK 符号 %s", n); return p; }
+static void *msym(const char *n) { void *p = guest_sym(n); if (!p) die("Movie SDK symbol not found: %s", n); return p; }
 static void md_syms(void) {
     if (G.signal) return;
     G.set_data = msym("_ZN5movie6Buffer18SetDataAndCapacityEPvm");
@@ -113,7 +113,7 @@ static void md_defer(void *d, int ev) {
     pthread_mutex_lock(&g_dfmu);
     if (!g_dfthr) { g_dfthr = 1; dm_guest_thread_spawn(md_defer_body, NULL, 16, 64 << 10); }
     if (g_ndfq < 64) g_dfq[g_ndfq++] = (__typeof__(g_dfq[0])){d, ev, now_ns() + 2000000};
-    else LOG("【红】影片：延后事件队列满，丢一个");
+    else LOG_ERROR("Deferred movie event queue is full; dropping an event");
     pthread_cond_signal(&g_dfcv); pthread_mutex_unlock(&g_dfmu);
 }
 static void md_defer_drop(void *d) {
@@ -139,7 +139,7 @@ static void md_defer_body(void *arg) {
     }
 }
 // log the first 12 calls one by one, then every 2^k-th
-#define MD_TRACE(d, slot, ...) do { unsigned long n_ = ++(d)->ncall[slot]; if (n_ <= 12 || !(n_ & (n_ - 1))) LOG("[影片] " __VA_ARGS__); } while (0)
+#define MD_TRACE(d, slot, ...) do { unsigned long n_ = ++(d)->ncall[slot]; if (n_ <= 12 || !(n_ & (n_ - 1))) LOG("[movie] " __VA_ARGS__); } while (0)
 
 // VP9 key frame uncompressed header → width and height (VP9 spec 6.2: frame_marker, profile, show_existing_frame, frame_type, show_frame, error_resilient_mode, sync code, color config, frame_size)
 static int vp9_size(const uint8_t *p, int n, int *w, int *h) {
@@ -206,20 +206,20 @@ static int md_vp9(mdec_t *d, const uint8_t *p, int n, int slot) {
     if (!d->vpx_on) {
         vpx_codec_dec_cfg_t cfg = { .threads = (unsigned)md_threads(), .w = (unsigned)d->w, .h = (unsigned)d->h };
         vpx_codec_err_t e = vpx_codec_dec_init(&d->vpx, vpx_codec_vp9_dx(), &cfg, 0);
-        if (e) { LOG("【红】影片：libvpx 建 VP9 解码器失败：%s", vpx_codec_err_to_string(e)); return 0; }
+        if (e) { LOG_ERROR("Failed to create libvpx VP9 decoder: %s", vpx_codec_err_to_string(e)); return 0; }
         vpx_codec_control(&d->vpx, VP9D_SET_ROW_MT, 1);
         d->vpx_on = 1;
-        LOG("[影片] libvpx %s：VP9 解码器 %d 线程", vpx_codec_version_str(), cfg.threads);
+        LOG("[movie] libvpx=%s VP9_decoder_threads=%d", vpx_codec_version_str(), cfg.threads);
     }
     if (vpx_codec_decode(&d->vpx, p, (unsigned)n, NULL, 0)) {
-        if (!d->red_dec++) LOG("【红】影片：VP9 解码出错（首例，%d 字节）：%s %s", n, vpx_codec_error(&d->vpx), vpx_codec_error_detail(&d->vpx) ? vpx_codec_error_detail(&d->vpx) : "");
+        if (!d->red_dec++) LOG_ERROR("VP9 decode failed (first occurrence): bytes=%d error=%s detail=%s", n, vpx_codec_error(&d->vpx), vpx_codec_error_detail(&d->vpx) ? vpx_codec_error_detail(&d->vpx) : "");
         return 0;
     }
     vpx_codec_iter_t it = NULL; vpx_image_t *im, *last = NULL;
     while ((im = vpx_codec_get_frame(&d->vpx, &it))) last = im;
     if (!last) return 0;
-    if (last->fmt != VPX_IMG_FMT_I420) { if (!d->red_img++) LOG("【红】影片：VP9 画面格式 %#x 不是 I420（4:2:0 8 位），出黑帧", last->fmt); return 0; }
-    if ((int)last->d_w != d->w || (int)last->d_h != d->h) { if (!d->red_img++) LOG("【红】影片：VP9 画面 %u×%u 与输出 %d×%d 不符（首例），裁剪 / 补黑", last->d_w, last->d_h, d->w, d->h); }
+    if (last->fmt != VPX_IMG_FMT_I420) { if (!d->red_img++) LOG_ERROR("Unsupported VP9 image format: %#x; expected 8-bit I420; emitting black frame", last->fmt); return 0; }
+    if ((int)last->d_w != d->w || (int)last->d_h != d->h) { if (!d->red_img++) LOG_ERROR("VP9 dimensions mismatch (first occurrence): source=%ux%u output=%dx%d; cropping or padding with black", last->d_w, last->d_h, d->w, d->h); }
     int rgba = d->fmt == MD_FMT_ABGR;
     size_t need = (size_t)d->w * d->h * (rgba ? 4 : 3) / (rgba ? 1 : 2);
     if (d->out[slot].cap < need) { free(d->out[slot].frm); d->out[slot].frm = malloc(need); d->out[slot].cap = need; }   // a Configure after Reset may change the size
@@ -246,21 +246,21 @@ static size_t ogg_page(mdec_t *d, uint8_t *out, const uint8_t *pkt, int n, int b
     return len;
 }
 static int md_vorbis_open(mdec_t *d) {
-    if (!d->vhdr[0] || !d->vhdr[1]) { if (!d->red_vb++) LOG("【红】影片：Vorbis 解码器没拿到头（csd-0 / csd-1），出静音"); return 0; }
+    if (!d->vhdr[0] || !d->vhdr[1]) { if (!d->red_vb++) LOG_ERROR("Vorbis codec headers missing (csd-0/csd-1); emitting silence"); return 0; }
     static const uint8_t comment[] = {3, 'v', 'o', 'r', 'b', 'i', 's', 0, 0, 0, 0, 0, 0, 0, 0, 1};
     size_t cap = (size_t)d->vhdr_n[0] + d->vhdr_n[1] + sizeof comment + 3 * (27 + 255); uint8_t *buf = malloc(cap); if (!buf) return 0;
     d->ogg_seq = 0; d->ogg_gran = 0;
     size_t n = ogg_page(d, buf, d->vhdr[0], d->vhdr_n[0], 1); n += ogg_page(d, buf + n, comment, sizeof comment, 0); n += ogg_page(d, buf + n, d->vhdr[1], d->vhdr_n[1], 0);
     int used = 0, err = 0; d->vb = stb_vorbis_open_pushdata(buf, (int)n, &used, &err, NULL); free(buf);
-    if (!d->vb) { if (!d->red_vb++) LOG("【红】影片：Vorbis 头解不开（stb_vorbis 错误 %d），出静音", err); return 0; }
+    if (!d->vb) { if (!d->red_vb++) LOG_ERROR("Failed to decode Vorbis headers: stb_vorbis_error=%d; emitting silence", err); return 0; }
     stb_vorbis_info in = stb_vorbis_get_info(d->vb); d->ch = in.channels; d->rate = (int)in.sample_rate;
-    LOG("[影片] Vorbis：%d 声道 %d Hz", d->ch, d->rate);
+    LOG("[movie] Vorbis: channels=%d rate=%d Hz", d->ch, d->rate);
     return 1;
 }
 // one packet → PCM16 interleaved in the slot; returns 1 when there are samples (the first packet of a stream only primes the overlap and gives none)
 static int md_vorbis(mdec_t *d, const uint8_t *p, int n, int slot) {
     if (!d->vb && !md_vorbis_open(d)) return 0;
-    if (n >= 65025) { if (!d->red_vb++) LOG("【红】影片：Vorbis 包 %d 字节，超过一页", n); return 0; }
+    if (n >= 65025) { if (!d->red_vb++) LOG_ERROR("Vorbis packet exceeds one page: bytes=%d", n); return 0; }
     uint8_t *page = malloc((size_t)n + 27 + 255); if (!page) return 0;
     size_t len = ogg_page(d, page, p, n, 0);
     int ch = 0, ns = 0; float **pcm = NULL;
@@ -277,7 +277,7 @@ static int md_vorbis(mdec_t *d, const uint8_t *p, int n, int slot) {
 static void md_close(mdec_t *d) { if (d->vpx_on) { vpx_codec_destroy(&d->vpx); d->vpx_on = 0; } if (d->vb) { stb_vorbis_close(d->vb); d->vb = NULL; } }
 static void *md_worker(void *arg) {
     mdec_t *d = arg;
-    pthread_setname_np("dm 影片解码 | movie decoder");
+    pthread_setname_np("dm movie decoder");
     pthread_mutex_lock(&d->wmu);
     for (;;) {
         while (d->job == MDJ_NONE) pthread_cond_wait(&d->wcv, &d->wmu);
@@ -332,25 +332,25 @@ static void md_pump(mdec_t *d) {
 
 HLE_FORCE("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11DecoderModeEi", "影片解码器：宿主实现（不建 NVIDIA 硬件解码器，VP9 用 libvpx）",
           void, h_movie_Decoder, void **self, int type, int fmt, int mode, int prio) {
-    static void *vt; if (!vt) { uint8_t *t = guest_sym("_ZTVN5movie7DecoderE"); if (!t) die("影片：缺 movie::Decoder 的虚表"); vt = t + 0x10; }
+    static void *vt; if (!vt) { uint8_t *t = guest_sym("_ZTVN5movie7DecoderE"); if (!t) die("movie::Decoder vtable not found"); vt = t + 0x10; }
     md_syms();
     self[0] = vt; self[1] = NULL;
     // Only video (AVC / VP8 / VP9 = 1..3): NV12 output (Engage's Unity, CPU buffers), or RGBA output into the client's NVN texture (mode 2, Metroid Dread);
     // anything else (audio) keeps a null impl and every method returns the SDK's failure code. Only VP9 is really decoded; AVC / VP8 give black frames
     // Audio: Vorbis to PCM16 (Link's Awakening's movies carry a Vorbis track; without a decoder the SDK's player plays them silent)
     int audio = type == MD_TYPE_VORBIS && fmt == MD_FMT_PCM16;
-    if (!audio && (type < 1 || type > 3 || (fmt != MD_FMT_NV12 && !(fmt == MD_FMT_ABGR && mode == MD_MODE_TEX)))) { LOG("【红】影片：解码器类型 %d 输出 %d 模式 %d 宿主不支持，各方法回失败", type, fmt, mode); return; }
-    if (!audio && type != MD_TYPE_VP9) LOG("【红】影片：解码器类型 %d（AVC / VP8）宿主不解码，出黑帧", type);
+    if (!audio && (type < 1 || type > 3 || (fmt != MD_FMT_NV12 && !(fmt == MD_FMT_ABGR && mode == MD_MODE_TEX)))) { LOG_ERROR("Unsupported movie decoder configuration: type=%d output=%d mode=%d; decoder methods will fail", type, fmt, mode); return; }
+    if (!audio && type != MD_TYPE_VP9) LOG_ERROR("Unsupported movie decoder type=%d (AVC/VP8); emitting black frames", type);
     mdec_t *d = calloc(1, sizeof *d);
     pthread_mutex_init(&d->mu, NULL); pthread_mutex_init(&d->dmu, NULL); pthread_mutex_init(&d->wmu, NULL); pthread_cond_init(&d->wcv, NULL);
     d->type = type; d->fmt = fmt; d->mode = mode;
     for (int i = 0; i < MD_NIN; i++) { d->in[i] = malloc(MD_INCAP); d->infree[i] = i; }
     d->ninfree = MD_NIN;
     pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a, 1 << 20);
-    if (pthread_create(&d->wk, &a, md_worker, d)) die("影片：建解码线程失败");
+    if (pthread_create(&d->wk, &a, md_worker, d)) die("Failed to create movie decode thread");
     pthread_attr_destroy(&a);
     self[1] = d;
-    LOG("[影片] 解码器 %p：类型 %d 输出 %d 模式 %d 优先级 %d", (void *)self, type, fmt, mode, prio);
+    LOG("[movie] Decoder created: object=%p type=%d output=%d mode=%d priority=%d", (void *)self, type, fmt, mode, prio);
 }
 // SDK 4.5's overload supplies priority 16 internally. It must construct the
 // same host object as the newer overload before any overridden method runs.
@@ -363,7 +363,7 @@ static void md_free(void **self) {
     mdec_t *d = md_of(self); if (!d) return;
     md_defer_drop(d);
     self[1] = NULL;
-    LOG("[影片] 解码器 %p 析构：送入 %lu 包，取出 %lu 帧；VP9 解 %llu 包，每包均 %.2f ms、最长 %.2f ms", (void *)self, d->ncall[7], d->ncall[8],
+    LOG("[movie] Decoder destroyed: object=%p input_packets=%lu output_frames=%lu VP9_packets=%llu packet_avg_ms=%.2f packet_max_ms=%.2f", (void *)self, d->ncall[7], d->ncall[8],
         (unsigned long long)d->dec_n, d->dec_n ? d->dec_ns / 1e6 / d->dec_n : 0.0, d->dec_max / 1e6);
     pthread_mutex_lock(&d->dmu); md_job(d, MDJ_QUIT); pthread_mutex_unlock(&d->dmu);
     pthread_join(d->wk, NULL);
@@ -376,7 +376,7 @@ HLE_FORCE("_ZN5movie7DecoderD2Ev", "影片解码器析构：释放宿主对象",
 // complete-object destructor (D1): Metroid Dread calls it directly (main+0x225a08); without the take-over the SDK destroys the host object as a DecoderImpl and crashes
 HLE_FORCE("_ZN5movie7DecoderD1Ev", "影片解码器析构（完整对象）：释放宿主对象", void, h_movie_DecD1, void **self) { md_free(self); }
 // deleting destructor: Unity allocates the object with its own allocator, calls D2 and frees it itself; the object itself is not freed here
-HLE_FORCE("_ZN5movie7DecoderD0Ev", "影片解码器删除式析构：释放宿主对象", void, h_movie_DecD0, void **self) { LOG("【红】影片：删除式析构（对象本身未释放）"); md_free(self); }
+HLE_FORCE("_ZN5movie7DecoderD0Ev", "影片解码器删除式析构：释放宿主对象", void, h_movie_DecD0, void **self) { LOG_ERROR("Movie deleting destructor invoked; decoder object retained"); md_free(self); }
 
 HLE_FORCE("_ZN5movie7Decoder9ConfigureEPNS_9MediaDataE", "影片解码器配置", int, h_movie_Configure, void **self, void *md) {
     mdec_t *d = md_of(self); if (!d) return 0x1000;
@@ -385,12 +385,12 @@ HLE_FORCE("_ZN5movie7Decoder9ConfigureEPNS_9MediaDataE", "影片解码器配置"
             if (G.find_buf(md, key, &b) && b && G.data(b) && G.size(b)) { size_t n = G.size(b); free(d->vhdr[k]); d->vhdr[k] = malloc(n); memcpy(d->vhdr[k], G.data(b), n); d->vhdr_n[k] = (int)n; } }
         int ch = 0, rate = 0; if (md) { G.find_i32(md, "channel-count", &ch); G.find_i32(md, "sample-rate", &rate); }
         if (ch > 0) d->ch = ch; if (rate > 0) d->rate = rate;
-        MD_TRACE(d, 0, "Configure（Vorbis）：%d 声道 %d Hz，头 %d + %d 字节", ch, rate, d->vhdr_n[0], d->vhdr_n[1]);
+        MD_TRACE(d, 0, "Configure (Vorbis): channels=%d rate_hz=%d headers=%d+%d bytes", ch, rate, d->vhdr_n[0], d->vhdr_n[1]);
         return 0;
     }
     int w = 0, h = 0; if (md) { G.find_i32(md, "width", &w); G.find_i32(md, "height", &h); }
     pthread_mutex_lock(&d->mu); if (w > 0 && h > 0 && !d->fmt_sent) { d->w = w; d->h = h; } pthread_mutex_unlock(&d->mu);
-    MD_TRACE(d, 0, "Configure：MediaData 宽 %d 高 %d", w, h);
+    MD_TRACE(d, 0, "Configure: MediaData width=%d height=%d", w, h);
     return 0;
 }
 HLE_FORCE("_ZN5movie7Decoder20RegisterClientEventsEPNS_13DecoderEventsE", "影片解码器：登记客户端事件", int, h_movie_RegEv, void **self, void **ev) {
@@ -445,7 +445,7 @@ HLE_FORCE("_ZN5movie7Decoder23AcquireInputBufferIndexEPiS1_", "影片解码器�
     int r = MD_NO_INPUT; *idx = -1; *left = 0;
     if (d->ninfree && d->started) { *idx = d->infree[0]; memmove(d->infree, d->infree + 1, --d->ninfree * sizeof *d->infree); *left = d->ninfree; r = 0; }
     pthread_mutex_unlock(&d->mu);
-    MD_TRACE(d, 6, "AcquireInputBufferIndex → %#x 号 %d 余 %d", r, *idx, *left);
+    MD_TRACE(d, 6, "AcquireInputBufferIndex: result=%#x index=%d remaining=%d", r, *idx, *left);
     return r;
 }
 HLE_FORCE("_ZN5movie7Decoder14GetInputBufferEiPNS_6BufferE", "影片解码器：交出输入缓冲", int, h_movie_GetIn, void **self, int i, void *buf) {
@@ -460,12 +460,12 @@ HLE_FORCE("_ZN5movie7Decoder24SendInputBufferForDecodeEiiilj", "影片解码器�
     if (i < 0 || i >= MD_NIN || off < 0 || size < 0 || (uint32_t)off + (uint32_t)size > MD_INCAP) return 0x100b;
     pthread_mutex_lock(&d->mu);
     int fmt_now = 0;
-    if (d->type == MD_TYPE_VP9 && !d->w && size > 0 && vp9_size(d->in[i] + off, size, &d->w, &d->h)) LOG("[影片] VP9 关键帧：%d×%d", d->w, d->h);
+    if (d->type == MD_TYPE_VP9 && !d->w && size > 0 && vp9_size(d->in[i] + off, size, &d->w, &d->h)) LOG("[movie] VP9 keyframe: %dx%d", d->w, d->h);
     if (!d->fmt_sent) { d->fmt_sent = 1; fmt_now = 1; if (!d->w && d->type != MD_TYPE_VORBIS) { d->w = 1920; d->h = 1080; } }   // the size is fixed from here on (slots are allocated by it)
     d->pend[d->npend].in = i; d->pend[d->npend].off = off; d->pend[d->npend].size = size; d->pend[d->npend].pts = pts; d->pend[d->npend].flags = flags; d->npend++;
     int queued = d->npend;
     pthread_mutex_unlock(&d->mu);
-    MD_TRACE(d, 7, "SendInputBufferForDecode 号 %d 偏移 %d 长 %d 时间 %lld µs 标志 %#x（队里 %d 包）", i, off, size, (long long)pts, flags, queued);
+    MD_TRACE(d, 7, "SendInputBufferForDecode: index=%d offset=%d bytes=%d timestamp_us=%lld flags=%#x queued_packets=%d", i, off, size, (long long)pts, flags, queued);
     if (fmt_now) md_event(d, 2);
     md_pump(d);
     return 0;
@@ -482,7 +482,7 @@ HLE_FORCE("_ZN5movie7Decoder24AcquireOutputBufferIndexEPiPlPjS1_", "影片解码
         *idx = s; *pts = d->out[s].pts; *flags = d->out[s].flags; *left = d->noutq; r = 0;
     }
     pthread_mutex_unlock(&d->mu);
-    if (!r) MD_TRACE(d, 8, "AcquireOutputBufferIndex → 号 %d 时间 %lld 标志 %#x 余 %d", *idx, (long long)*pts, *flags, *left);
+    if (!r) MD_TRACE(d, 8, "AcquireOutputBufferIndex: index=%d timestamp=%lld flags=%#x remaining=%d", *idx, (long long)*pts, *flags, *left);
     return r;
 }
 static void md_format(mdec_t *d, void *md) {
@@ -502,7 +502,7 @@ HLE_FORCE("_ZN5movie7Decoder15GetOutputFormatEPNS_9MediaDataE", "影片解码器
 HLE_FORCE("_ZN5movie7Decoder21GetOutputBufferFormatEiPNS_9MediaDataE", "影片解码器：输出帧格式（NV12）", int, h_movie_BufFmt, void **self, int i, void *md) {
     mdec_t *d = md_of(self); if (!d) return 0x1000;
     if (!md) return 0x100b;
-    md_format(d, md); MD_TRACE(d, 10, "GetOutputBufferFormat 号 %d", i);
+    md_format(d, md); MD_TRACE(d, 10, "GetOutputBufferFormat: index=%d", i);
     return 0;
 }
 HLE_FORCE("_ZN5movie7Decoder19GetOutputBufferSizeEPiS1_", "影片解码器：输出缓冲大小（NV12 一帧）", int, h_movie_OutSize, void **self, int *size, int *mode) {
@@ -525,20 +525,20 @@ static int md_out_tex(mdec_t *d, int i, void *buf) {
     // only needed by newer movie clients that explicitly provide one.
     if (!G.nvn_sync) G.nvn_sync = guest_sym("_ZNK5movie6Buffer10GetNvnSyncEv");
     uint8_t *p = G.data(buf); size_t cap = G.cap(buf);
-    if (!p || cap < 8) { LOG("【红】影片：原生贴图模式的客户端缓冲 %zu 字节，要 8（贴图对象）", cap); return 0x100b; }
+    if (!p || cap < 8) { LOG_ERROR("Native texture client buffer has %zu bytes; expected 8-byte texture object", cap); return 0x100b; }
     void *tex = p; int tw = 0, th = 0, f = nvn_host_write_texture(tex, NULL, 0, 0, 0, &tw, &th);
-    if (f < 0) { LOG("【红】影片：原生贴图模式的缓冲数据 %p 不是贴图对象", tex); return 0x100b; }
-    if (f != 0x25 && f != 0x38 && f != 0x6d && f != 0x37 && !d->red_img++) LOG("【红】影片：客户端贴图格式 %#x 不是 RGBA8 / RGBX8（含 sRGB），按 RGBA 字节序写", f);   // Metroid Dread: RGBX8_SRGB
+    if (f < 0) { LOG_ERROR("Native texture client buffer does not contain a texture object: %p", tex); return 0x100b; }
+    if (f != 0x25 && f != 0x38 && f != 0x6d && f != 0x37 && !d->red_img++) LOG_ERROR("Unsupported client texture format=%#x; expected RGBA8/RGBX8 (including sRGB); writing RGBA bytes", f);   // Metroid Dread: RGBX8_SRGB
     int w = d->w < tw ? d->w : tw, h = d->h < th ? d->h : th;
     if (d->out[i].pic && d->out[i].frm) nvn_host_write_texture(tex, d->out[i].frm, w, h, (size_t)d->w * 4, NULL, NULL);
     else {   // no picture: a black frame
-        size_t n = (size_t)tw * th; uint32_t *k = malloc(n * 4); if (!k) die("影片：黑帧分配失败");
+        size_t n = (size_t)tw * th; uint32_t *k = malloc(n * 4); if (!k) die("Failed to allocate movie black-frame buffer");
         for (size_t j = 0; j < n; j++) k[j] = 0xff000000u;
         nvn_host_write_texture(tex, k, tw, th, (size_t)tw * 4, NULL, NULL); free(k);
     }
     void *sy = G.nvn_sync ? G.nvn_sync(buf) : NULL;
-    if (sy && nvn_host_signal_sync(sy) && !d->red_dec++) LOG("【红】影片：缓冲带的同步对象 %p 不是 NVNsync", sy);
-    MD_TRACE(d, 12, "GetOutputBuffer 号 %d → 贴图 %p（%d×%d 格式 %#x）%s", i, tex, tw, th, f, d->out[i].pic ? "" : "（黑帧）");
+    if (sy && nvn_host_signal_sync(sy) && !d->red_dec++) LOG_ERROR("Movie buffer sync object is not NVNsync: %p", sy);
+    MD_TRACE(d, 12, "GetOutputBuffer: index=%d texture=%p dimensions=%dx%d format=%#x%s", i, tex, tw, th, f, d->out[i].pic ? "" : " (black frame)");
     return 0;
 }
 HLE_FORCE("_ZN5movie7Decoder15GetOutputBufferEiPNS_6BufferE", "影片解码器：取一帧", int, h_movie_GetOut, void **self, int i, void *buf) {
@@ -547,20 +547,20 @@ HLE_FORCE("_ZN5movie7Decoder15GetOutputBufferEiPNS_6BufferE", "影片解码器�
     if (d->mode == MD_MODE_TEX) return md_out_tex(d, i, buf);
     if (d->type == MD_TYPE_VORBIS) {   // PCM16 interleaved; an output without samples (end of stream) is empty
         size_t n = d->out[i].pic ? d->out[i].bytes : 0, cap = G.cap(buf); uint8_t *p = G.data(buf);
-        if (!p || cap < n) { LOG("【红】影片：客户端音频输出缓冲 %zu 字节，这包要 %zu", cap, n); G.set_range(buf, 0, 0); return 0x100b; }
+        if (!p || cap < n) { LOG_ERROR("Client audio buffer is too small: capacity=%zu required=%zu", cap, n); G.set_range(buf, 0, 0); return 0x100b; }
         if (n) memcpy(p, d->out[i].frm, n);
         G.set_range(buf, 0, (int)n);
-        MD_TRACE(d, 12, "GetOutputBuffer 号 %d → PCM %zu 字节", i, n);
+        MD_TRACE(d, 12, "GetOutputBuffer: index=%d PCM_bytes=%zu", i, n);
         return 0;
     }
     int w, h, stride, slice; md_dims(d, &w, &h, &stride, &slice);
     size_t need = (size_t)stride * slice * 3 / 2, cap = G.cap(buf);
     uint8_t *p = G.data(buf);
-    if (!p || cap < need) { LOG("【红】影片：客户端输出缓冲 %zu 字节，一帧要 %zu", cap, need); G.set_range(buf, 0, 0); return 0x100b; }
+    if (!p || cap < need) { LOG_ERROR("Client video buffer is too small: capacity=%zu required=%zu", cap, need); G.set_range(buf, 0, 0); return 0x100b; }
     if (d->out[i].pic && d->out[i].frm) memcpy(p, d->out[i].frm, need);
     else { memset(p, 16, (size_t)stride * slice); memset(p + (size_t)stride * slice, 128, need - (size_t)stride * slice); }
     G.set_range(buf, 0, (int)need);
-    MD_TRACE(d, 12, "GetOutputBuffer 号 %d → %zu 字节%s", i, need, d->out[i].pic ? "" : "（黑帧）");
+    MD_TRACE(d, 12, "GetOutputBuffer: index=%d bytes=%zu%s", i, need, d->out[i].pic ? "" : " (black frame)");
     return 0;
 }
 HLE_FORCE("_ZN5movie7Decoder15GetOutputBufferEiPNS_6BufferEPNS_9MediaDataE", "影片解码器：取一帧连格式", int, h_movie_GetOutFmt, void **self, int i, void *buf, void *md) {
@@ -575,7 +575,7 @@ HLE_FORCE("_ZN5movie7Decoder24ReleaseOutputBufferIndexEi", "影片解码器：�
     d->out[i].used = 0; d->out[i].pic = 0;
     int queued = d->npend;
     pthread_mutex_unlock(&d->mu);
-    MD_TRACE(d, 13, "ReleaseOutputBufferIndex 号 %d（队里 %d 包）", i, queued);
+    MD_TRACE(d, 13, "ReleaseOutputBufferIndex: index=%d queued_packets=%d", i, queued);
     if (queued) md_pump(d);
     return 0;
 }

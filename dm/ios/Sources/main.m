@@ -2,11 +2,14 @@
 // The game files (RomFS) ship inside the App at <App>/romfs; Documents/romfs placed through the Files app is also accepted (lets you swap them without reinstalling).
 #import <UIKit/UIKit.h>
 #import "DmDiagnosticReport.h"
+#import "DmAppSettings.h"
 #include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <unistd.h>
 #include "game_profile.h"   // game profile constants (the RomFS marker path)
+#include "dm_log_timestamp.h"
+#include "dm_log.h"
 
 int dm_main(int argc, char **argv);   // dm/host/main.c compiled in with -Dmain=dm_main
 void dm_host_preload_start(int argc, char **argv);
@@ -24,7 +27,7 @@ int front_ios_recovery_needed(void) { return g_recovery; }
 static void start_preload(void) {
     NSError *error = nil;
     if (!DmDiagnosticsBeginRun(documentsURL(), &error))
-        fprintf(stderr, "boot: diagnostic session: %s\n", error.localizedDescription.UTF8String);
+        DM_LOG_ERROR("boot", "Failed to start diagnostic session: %s", error.localizedDescription.UTF8String);
     g_loading = YES;
     dm_host_preload_start(g_argc, g_argv);
 }
@@ -54,7 +57,13 @@ static int boot_env(void) {
     NSString *log = [doc stringByAppendingPathComponent:@"log.txt"], *prev = [doc stringByAppendingPathComponent:@"log.prev.txt"];
     [fm removeItemAtPath:prev error:nil]; [fm moveItemAtPath:log toPath:prev error:nil];
     if (freopen(log.fileSystemRepresentation, "w", stderr)) setvbuf(stderr, NULL, _IOLBF, 0);
-    if (diagnosticError) fprintf(stderr, "boot: diagnostic recovery: %s\n", diagnosticError.localizedDescription.UTF8String);
+    dm_log_timestamp_stderr();
+    NSString *version = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+    NSString *build = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"];
+    DM_LOG_INFO("boot", "Session started: log_schema=%d app_version=%s build=%s os=%s recovery=%s",
+        DM_LOG_SCHEMA_VERSION, version.UTF8String ?: "unknown", build.UTF8String ?: "unknown",
+        NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String, g_recovery ? "yes" : "no");
+    if (diagnosticError) DM_LOG_ERROR("boot", "Failed to prepare diagnostic recovery: %s", diagnosticError.localizedDescription.UTF8String);
     // Environment switch files (for on-device diagnostics: a sideloaded app cannot be given environment variables from outside): one KEY=VALUE per line, # starts a comment; Documents/env.txt takes precedence over dm/env.txt in the bundle (put there by build_ipa.sh's DM_ENV_FILE)
     for (NSString *ef in @[[doc stringByAppendingPathComponent:@"env.txt"], [[res stringByAppendingPathComponent:@"dm"] stringByAppendingPathComponent:@"env.txt"]]) {
         NSString *txt = [NSString stringWithContentsOfFile:ef encoding:NSUTF8StringEncoding error:nil];
@@ -62,12 +71,14 @@ static int boot_env(void) {
             NSString *ln = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]; NSRange eq = [ln rangeOfString:@"="];
             if (!ln.length || [ln hasPrefix:@"#"] || eq.location == NSNotFound || !eq.location) continue;
             NSString *k = [ln substringToIndex:eq.location], *v = [ln substringFromIndex:eq.location + 1];
-            if (!getenv(k.UTF8String)) { setenv(k.UTF8String, v.UTF8String, 0); fprintf(stderr, "boot: 环境 %s=%s（%s）\n", k.UTF8String, v.UTF8String, ef.lastPathComponent.UTF8String); }
+            if ([k isEqualToString:@"DM_LANG"] || [k isEqualToString:@"DM_OPMODE"] || [k isEqualToString:@"DM_HUD"]) continue;
+            if (!getenv(k.UTF8String)) { setenv(k.UTF8String, v.UTF8String, 0); DM_LOG_DEBUG("boot", "Environment override applied: name=%s source=%s", k.UTF8String, ef.lastPathComponent.UTF8String); }
         }
     }
+    DmAppApplyStartupSettings();
     NSString *romfs = romfs_locate();
-    if (!romfs) { fprintf(stderr, "boot: 没找到游戏文件（<App>/romfs 或 Documents/romfs）\n"); return 0; }
-    fprintf(stderr, "boot: 游戏文件 %s\n", romfs.fileSystemRepresentation);
+    if (!romfs) { DM_LOG_ERROR("boot", "Game files not found in app bundle or Documents/romfs"); return 0; }
+    DM_LOG_INFO("boot", "Game files: %s", romfs.fileSystemRepresentation);
     setenv("DM_ROMFS", romfs.fileSystemRepresentation, 0);
     setenv("DM_SAVE", [doc stringByAppendingPathComponent:@"save"].fileSystemRepresentation, 0);
     setenv("DM_TEMP", [doc stringByAppendingPathComponent:@"temp"].fileSystemRepresentation, 0);
@@ -86,7 +97,7 @@ static void *boot_thread(void *p) {
     (void)p;
     static char alt[65536]; stack_t ss = {.ss_sp = alt, .ss_size = sizeof alt}; sigaltstack(&ss, 0);   // crash printing must work on the host thread too
     int rc = dm_main(g_argc, g_argv);
-    fprintf(stderr, "boot: dm_main 返回 %d\n", rc);
+    DM_LOG_INFO("boot", "dm_main returned: code=%d", rc);
     return NULL;
 }
 void front_ios_boot(void) {   // Called by front_ios.m once the window and Metal view exist

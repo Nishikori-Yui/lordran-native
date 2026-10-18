@@ -16,7 +16,7 @@ extern uint64_t unimpl_stubs[MAX_STUB];   // 8 bytes per stub
 
 uint64_t unimpl_c(unsigned idx, uint64_t *regs) {
     if (!g_stub_seen[idx]++)
-        LOG("UNIMPL %s (x0=%#llx x1=%#llx x2=%#llx)", g_stub_name[idx], regs[0], regs[1], regs[2]);
+        LOG_WARN("Unimplemented import: symbol=%s x0=%#llx x1=%#llx x2=%#llx", g_stub_name[idx], regs[0], regs[1], regs[2]);
     return 0;
 }
 
@@ -56,10 +56,10 @@ static inline unsigned gate_h(uint64_t a) { return (unsigned)(((a >> 2) * 0x9E37
 
 void gate_register(uint64_t ret_abs, const char *kind, int arg, uint64_t orig) {
     int k = !strcmp(kind, "svc") ? G_SVC : !strcmp(kind, "cntpct") ? G_CNTPCT : !strcmp(kind, "cntvct") ? G_CNTVCT : -1;
-    if (k < 0) die("未知门类 %s", kind);
+    if (k < 0) die("Unknown gate type: %s", kind);
     if (++g_ngate > (1 << GATE_BITS) / 4) die("gate overflow");
     unsigned i = gate_h(ret_abs);
-    while (g_gate[i].ret) { if (g_gate[i].ret == ret_abs) die("门重复登记 %#llx", ret_abs); i = (i + 1) & ((1u << GATE_BITS) - 1); }
+    while (g_gate[i].ret) { if (g_gate[i].ret == ret_abs) die("Duplicate gate registration: address=%#llx", ret_abs); i = (i + 1) & ((1u << GATE_BITS) - 1); }
     g_gate[i] = (gate_t){ret_abs, k, arg, orig};
 }
 

@@ -6,7 +6,7 @@
 #define NV_ERR 3   // NvError: non-zero means failure (3 = not initialized)
 
 HLE_FORCE("NvOsDrvOpen", "nvdrv 开设备：宿主没有 nvdrv，回 −1", int, h_nvos_Open, const char *path) {
-    static int red; if (!red++) LOG("【红】nvdrv：%s 开不了（宿主没有 nvdrv；只有影片硬件解码用它）", path ? path : "(null)");
+    static int red; if (!red++) LOG_ERROR("nvdrv open failed: %s; host has no nvdrv service (used by hardware movie decoding)", path ? path : "(null)");
     return -1;
 }
 HLE_FORCE("NvOsDrvClose", "nvdrv 关设备；无事可做", void, h_nvos_Close, int fd) { (void)fd; }

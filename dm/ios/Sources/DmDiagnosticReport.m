@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "../../host/dm_log.h"
 
 static NSURL *diagnosticFile(NSURL *documents, NSString *name) {
     return [[documents URLByAppendingPathComponent:@"diagnostics" isDirectory:YES] URLByAppendingPathComponent:name];
@@ -68,11 +69,27 @@ static BOOL appendLog(FILE *output, NSURL *url, NSString *label) {
 }
 
 NSURL *DmDiagnosticReportCreate(NSURL *documents, NSDictionary *metadata, NSError **error) {
-    NSData *json = [NSJSONSerialization dataWithJSONObject:metadata options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys error:error];
+    NSDate *exported = NSDate.date;
+    NSISO8601DateFormatter *iso = NSISO8601DateFormatter.new;
+    iso.formatOptions = NSISO8601DateFormatWithInternetDateTime | NSISO8601DateFormatWithFractionalSeconds;
+    NSMutableDictionary *reportMetadata = metadata.mutableCopy;
+    reportMetadata[@"exported_at"] = [iso stringFromDate:exported];
+    reportMetadata[@"log_timestamps"] = @"UTC ISO 8601 milliseconds; retained logs from older builds may lack timestamps.";
+    reportMetadata[@"log_schema_version"] = @(DM_LOG_SCHEMA_VERSION);
+    reportMetadata[@"log_format"] = @"[UTC timestamp] [LEVEL] [component] [thread=id] English message";
+    reportMetadata[@"log_levels"] = @[@"DEBUG", @"INFO", @"WARN", @"ERROR", @"FATAL"];
+    reportMetadata[@"log_compatibility"] = @"Historical logs are retained verbatim. Signal-context dumps may use continuation records; emergency records use Unix seconds when the stream is locked.";
+    NSData *json = [NSJSONSerialization dataWithJSONObject:reportMetadata options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys error:error];
     if (!json) return nil;
     NSURL *directory = [documents URLByAppendingPathComponent:@"diagnostics" isDirectory:YES];
     if (![NSFileManager.defaultManager createDirectoryAtURL:directory withIntermediateDirectories:YES attributes:nil error:error]) return nil;
-    NSURL *destination = [directory URLByAppendingPathComponent:@"DarkSouls-diagnostics.txt"];
+    NSDateFormatter *filenameDate = NSDateFormatter.new;
+    filenameDate.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+    filenameDate.timeZone = [NSTimeZone timeZoneForSecondsFromGMT:0];
+    filenameDate.dateFormat = @"yyyyMMdd'T'HHmmss.SSS'Z'";
+    NSString *filename = [NSString stringWithFormat:@"DarkSouls-diagnostics-%@-%@.txt",
+        [filenameDate stringFromDate:exported], [NSUUID.UUID.UUIDString substringToIndex:8]];
+    NSURL *destination = [directory URLByAppendingPathComponent:filename];
     NSURL *temporary = [directory URLByAppendingPathComponent:[NSUUID.UUID.UUIDString stringByAppendingString:@".tmp"]];
     FILE *output = fopen(temporary.fileSystemRepresentation, "wx");
     if (!output) {

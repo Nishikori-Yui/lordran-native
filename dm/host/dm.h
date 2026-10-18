@@ -5,11 +5,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "dm_log.h"
 #include "game_profile.h"   // constants of the current game profile (generated from dm/games/<id>/game.tsv, chosen by the Makefile's GAME)
 
 #define MAX_MOD 8
-#define LOG(...) do { fprintf(stderr, "[dm] " __VA_ARGS__); fputc('\n', stderr); } while (0)
-#define die(...) do { LOG("FATAL " __VA_ARGS__); abort(); } while (0)
+#define LOG(...) DM_LOG_INFO(__FILE__, __VA_ARGS__)
+#define LOG_WARN(...) DM_LOG_WARN(__FILE__, __VA_ARGS__)
+#define LOG_ERROR(...) DM_LOG_ERROR(__FILE__, __VA_ARGS__)
+#define LOG_DEBUG(...) DM_LOG_DEBUG(__FILE__, __VA_ARGS__)
+#define die(...) do { DM_LOG_FATAL(__FILE__, __VA_ARGS__); abort(); } while (0)
 
 typedef struct { uint32_t st_name; uint8_t st_info, st_other; uint16_t st_shndx; uint64_t st_value, st_size; } Elf64_Sym;
 typedef struct { int64_t d_tag; union { uint64_t d_val, d_ptr; } d_un; } Elf64_Dyn;

@@ -44,7 +44,7 @@ for l in open(log, errors='replace'):
         att_desc[p].append(r)
         tgt.setdefault(p, max(int(w) >> lv, 1) * max(int(h) >> lv, 1))
     elif k == 'B':
-        b = re.match(r'st\d+ (?:tex|tbuf) reg\d+ tid=(\d+) 实 ser=(\d+) fmt=(\d+) (\d+)x(\d+)x(\d+)', r)
+        b = re.match(r'st\d+ (?:tex|tbuf) reg\d+ tid=(\d+) (?:real|实) ser=(\d+) fmt=(\d+) (\d+)x(\d+)x(\d+)', r)
         if b:
             tid, ser, fmt, w, h, dd = map(int, b.groups())
             texinfo[p].setdefault(ser, set()).add((tid, fmt, w, h, dd))
@@ -54,7 +54,7 @@ for l in open(log, errors='replace'):
     elif k == 'Z':
         z = re.match(r'(c|d|s) ser=(\d+) lv(\d+) sl(\d+) (dontcare|store)', r)
         if z and z.group(5) == 'dontcare': dead.add((p, z.group(1), int(z.group(2)), int(z.group(3)), int(z.group(4))))
-    elif k == 'F' and '合并下一个通道' in r: fused.add(p)
+    elif k == 'F' and ('merging next pass' in r or '合并下一个通道' in r): fused.add(p)
     elif k == 'K' and ' st1 ' in f' {r} ':
         key = r.split('key=')[1].split()[0].replace('_b', ''); shader[p][nm.get(key, key[:8])] += 1; fskeys[p].add(key)
     elif k in ('D', 'd'):   # d rows (PASSDUMP_ALL) are one per draw, so draws can be counted; D rows only have the first of each pass

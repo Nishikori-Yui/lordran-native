@@ -17,7 +17,7 @@ HLE_FORCE("_ZN2nn2vi15GetNativeWindowEPPvPNS0_5LayerE", "原生窗口句柄，�
 }
 // Link's Awakening also crops its layer and tears the display down on exit; the SDK's versions dereference the vi service objects the host never made (SetLayerCrop: SIGSEGV at +0x64)
 HLE_FORCE("_ZN2nn2vi12SetLayerCropEPNS0_5LayerEiiii", "图层裁切；宿主出图不裁", Result, h_vi_SetCrop, void *layer, int x, int y, int w, int h) {
-    (void)layer; LOG("vi::SetLayerCrop %d,%d %dx%d（忽略）", x, y, w, h); return RES_OK;
+    (void)layer; LOG("vi::SetLayerCrop ignored: x=%d y=%d width=%d height=%d", x, y, w, h); return RES_OK;
 }
 // SDK 4.5 calls into vi IPC here; the host scales the presented image itself.
 HLE_FORCE("_ZN2nn2vi19SetLayerScalingModeEPNS0_5LayerENS0_11ScalingModeE", "Scaling is handled by the host presentation layer", Result, h_vi_SetScaling, void *layer, int mode) {

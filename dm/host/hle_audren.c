@@ -24,7 +24,7 @@ void *dm_pcmout_released(void *k);
 // P_SIZE: bytes of the game's AudioRendererParameter copied before the two fields are changed. SDK 16's struct is 0x38 bytes; SDK 8's (Link's Awakening) has one more word,
 // its revision at +0x38: copying only 0x38 left the revision uninitialized and the SDK rejected it (CheckValidRevision, Result 0x499). The SDK reads only its own size of the copy
 enum { P_DEVICE = 0x2c, P_MODE = 0x30, P_SIZE = 0x40, FRAME_MAX = 1024, NBUF = 4 };
-static void *gsym(const char *n) { void *p = guest_sym(n); if (!p) die("audren：缺 SDK 符号 %s", n); return p; }
+static void *gsym(const char *n) { void *p = guest_sym(n); if (!p) die("Audio renderer SDK symbol not found: %s", n); return p; }
 static void cpu_manual(uint8_t *dst, const uint8_t *src) { memcpy(dst, src, P_SIZE); *(int32_t *)(dst + P_DEVICE) = 1; *(int32_t *)(dst + P_MODE) = 1; }
 
 HLE_FORCE("_ZN2nn5audio30GetAudioRendererWorkBufferSizeERKNS0_22AudioRendererParameterE", "渲染器工作区大小：按 CPU 渲染 + 手动执行的参数算",
@@ -54,7 +54,7 @@ static void render_main(void *arg) {
     static int16_t data[NBUF][FRAME_MAX * 2]; static gbuf bufs[NBUF]; gbuf *free_list[NBUF]; int nfree = NBUF;
     for (int i = 0; i < NBUF; i++) { bufs[i] = (gbuf){data[i], sizeof data[i], 0}; free_list[i] = &bufs[i]; }
     dm_pcmout_start(out);
-    LOG("audren：渲染线程开跑（%d 块缓冲在途，节奏跟输出端）", NBUF);
+    LOG("Audio render thread started: in_flight_buffers=%d; paced by output", NBUF);
     while (atomic_load(&g_open)) {
         while (!nfree) {   // wait for the output to hand a block back (silent sink / sound card, one every 5 ms)
             gbuf *b = dm_pcmout_released(out);
@@ -79,12 +79,12 @@ HLE_FORCE("_ZN2nn5audio17OpenAudioRendererEPNS0_19AudioRendererHandleEPNS_2os11S
     static Result (*orig)(void **, void *, const uint8_t *, void *, size_t);
     if (!orig) orig = gsym("_ZN2nn5audio17OpenAudioRendererEPNS0_19AudioRendererHandleEPNS_2os11SystemEventERKNS0_22AudioRendererParameterEPvm");
     uint8_t p[P_SIZE]; cpu_manual(p, param);
-    LOG("audren：OpenAudioRenderer 采样率 %d 每帧 %d 混音缓冲 %d 子混音 %d 声部 %d 输出 %d 效果 %d 分路 %d（原设备 %d 模式 %d → CPU / 手动）",
+    LOG("OpenAudioRenderer: rate=%d samples_per_frame=%d mix_buffers=%d submixes=%d voices=%d sinks=%d effects=%d splitters=%d; guest_device=%d guest_mode=%d; using CPU/manual rendering",
         *(int32_t *)param, *(int32_t *)(param + 4), *(int32_t *)(param + 8), *(int32_t *)(param + 0xc), *(int32_t *)(param + 0x10), *(int32_t *)(param + 0x14),
         *(int32_t *)(param + 0x18), *(int32_t *)(param + 0x24), *(int32_t *)(param + P_DEVICE), *(int32_t *)(param + P_MODE));
     Result r = orig(handle, ev, p, work, sz);
-    if (r) { LOG("【红】audren：SDK OpenAudioRenderer 失败 %#x", r); return r; }
-    if (atomic_load(&g_open)) { LOG("【红】audren：第二个渲染器（宿主只驱动一个）"); return r; }
+    if (r) { LOG_ERROR("SDK OpenAudioRenderer failed: result=%#x", r); return r; }
+    if (atomic_load(&g_open)) { LOG_ERROR("A second audio renderer was requested; the host supports one active renderer"); return r; }
     g_handle[0] = handle[0]; g_handle[1] = handle[1]; atomic_store(&g_open, 1);
     dm_guest_thread_spawn(render_main, NULL, 9, 0x10000);
     return r;
@@ -113,18 +113,18 @@ static int capture(const uint8_t *cl, int16_t *dst) {
             q += sz;
         }
         for (int k = 0; k < 64; k++) if (hist[k]) o += snprintf(line + o, sizeof line - o, " %d×%d", k, hist[k]);
-        LOG("audren：首帧命令 %u 条，按命令号：%s", ncmd, line);
-        if (!hist[g_sink_id & 63] && ncand == 1) { LOG("audren：命令表里没有 %#x 号命令；唯一的 0x148 字节命令是 %#x 号，按它当 DeviceSink", g_sink_id, cand); g_sink_id = cand; }
-        else if (!hist[g_sink_id & 63]) LOG("【红】audren：命令表里没有 DeviceSink（%#x 号），0x148 字节的命令有 %d 个：游戏声音出不来", g_sink_id, ncand);
+        LOG("First audio frame: commands=%u command_ids=%s", ncmd, line);
+        if (!hist[g_sink_id & 63] && ncand == 1) { LOG("DeviceSink command %#x missing; using the sole 0x148-byte command %#x", g_sink_id, cand); g_sink_id = cand; }
+        else if (!hist[g_sink_id & 63]) LOG_ERROR("DeviceSink command %#x missing: matching_0x148_commands=%d; game audio unavailable", g_sink_id, ncand);
     }
     const uint8_t *c = cl + 0x20;
     for (uint32_t i = 0; i < ncmd; i++) {
         uint32_t magic = *(const uint32_t *)c; int16_t size = *(const int16_t *)(c + 6);
-        if (magic != 0xcafebabeu || size <= 0) { if (!logged++) LOG("【红】audren：命令表第 %u 条格式不对（魔数 %#x 大小 %d）", i, magic, size); return 0; }
+        if (magic != 0xcafebabeu || size <= 0) { if (!logged++) LOG_ERROR("Invalid audio command: index=%u magic=%#x size=%d", i, magic, size); return 0; }
         if (c[5] == g_sink_id && c[4]) {
             uint32_t nin = *(const uint32_t *)(c + 0x130); const int16_t *in = (const int16_t *)(c + 0x134);
             const int32_t *up = *(const int32_t *const *)(c + 0x128);
-            if (!logged++) LOG("audren：DeviceSink 输入 %u 个（%d %d …）采样率 %u 每帧 %u 混音缓冲 %p 上采样缓冲 %p", nin, nin ? in[0] : -1, nin > 1 ? in[1] : -1, rate, samples, (void *)mix, (void *)up);
+            if (!logged++) LOG("DeviceSink: inputs=%u (%d %d ...) rate=%u samples=%u mix_buffer=%p upsample_buffer=%p", nin, nin ? in[0] : -1, nin > 1 ? in[1] : -1, rate, samples, (void *)mix, (void *)up);
             if (!nin || samples > FRAME_MAX) return 0;
             // Input buffers: at 48 kHz the mix buffers; with 32 kHz rendering DeviceSink reads the upsampled buffer (inputs laid out in order)
             const int32_t *ch[6]; uint32_t k = nin > 6 ? 6 : nin;
@@ -141,7 +141,7 @@ static int capture(const uint8_t *cl, int16_t *dst) {
                 dst[2 * s] = (int16_t)l; dst[2 * s + 1] = (int16_t)r; loud |= (uint64_t)(l | r);
             }
             atomic_fetch_add(&g_frames, 1); if (loud) atomic_fetch_add(&g_nonsilent, 1);
-            uint64_t f = atomic_load(&g_frames); if (f == 200 || f % 12000 == 0) LOG("audren：已渲 %llu 帧，其中有声 %llu 帧", (unsigned long long)f, (unsigned long long)atomic_load(&g_nonsilent));
+            uint64_t f = atomic_load(&g_frames); if (f == 200 || f % 12000 == 0) LOG("Audio renderer progress: rendered_frames=%llu audible_frames=%llu", (unsigned long long)f, (unsigned long long)atomic_load(&g_nonsilent));
             return (int)samples;
         }
         c += size;
@@ -168,7 +168,7 @@ static Result render_once(uint8_t *sys, int16_t *dst, int *nout) {
             gen = gsym("_ZN2nn5audio6server17AudioRenderSystem15GenerateCommandEPvm");
         }
         mu_off = gen20 ? 0x2d0 : 0x1f0; g_sink_id = gen20 ? 0x14 : 0x13;
-        LOG("audren：AudioRenderSystem 按 SDK %s 布局（更新锁 +%#zx）", gen20 ? "20" : "16", mu_off);
+        LOG("AudioRenderSystem SDK layout=%s update_lock_offset=%#zx", gen20 ? "20" : "16", mu_off);
         tmax = gsym("_ZN2nn5audio3dsp20CommandListProcessor17SetProcessTimeMaxEj"); setup = gsym("_ZN2nn5audio3dsp20CommandListProcessor5SetupEPKvm");
         process = gsym("_ZN2nn5audio3dsp20CommandListProcessor7ProcessEv");
     }
@@ -188,7 +188,7 @@ static Result render_once(uint8_t *sys, int16_t *dst, int *nout) {
     if (dst) *nout = capture(cl, dst);
     // render time per frame (budget: 5 ms per frame): mean / max every 2000 frames
     static uint64_t sum, mx, cnt; uint64_t d = now_ns() - t0; sum += d; if (d > mx) mx = d;
-    if (++cnt == 2000) { LOG("audren：渲染耗时 均 %.2f ms / 最大 %.2f ms（每帧 5 ms 预算，最近 2000 帧）；追帧累计 %llu 次", sum / 2000 / 1e6, mx / 1e6, (unsigned long long)atomic_load(&g_catchups)); sum = mx = cnt = 0; }
+    if (++cnt == 2000) { LOG("Audio rendering: avg_ms=%.2f max_ms=%.2f budget_ms=5 window_frames=2000 catch_up_total=%llu", sum / 2000 / 1e6, mx / 1e6, (unsigned long long)atomic_load(&g_catchups)); sum = mx = cnt = 0; }
     pthread_mutex_unlock(&g_render_mu);
     return RES_OK;
 }
@@ -211,13 +211,13 @@ HLE_FORCE("_ZN2nn5audio6server17AudioRenderSystem6UpdateEPvmS3_mPKvm", "渲染�
     uint64_t u = atomic_fetch_add(&g_updates, 1) + 1, r = atomic_load(&g_renders);
     if (last_r != ~0ull && r == last_r) {
         uint64_t c = atomic_fetch_add(&g_catchups, 1) + 1;
-        if (c <= 3) LOG("audren：第 %llu 次更新前没渲过帧，先追渲一帧（累计 %llu 次）", (unsigned long long)u, (unsigned long long)c);
+        if (c <= 3) LOG("Audio update #%llu preceded rendering; rendered one catch-up frame (total=%llu)", (unsigned long long)u, (unsigned long long)c);
         uint32_t t = atomic_load(&g_cq_tail);
         if (t - atomic_load(&g_cq_head) < CQ) { render_once(sys, g_cq[t % CQ], &g_cq_n[t % CQ]); atomic_store(&g_cq_tail, t + 1); }
         else render_once(sys, NULL, NULL);   // queue full (should not happen): render anyway, output discarded
     }
     static int tr = -1; if (tr < 0) tr = getenv("DM_AUDREN_TRACE") != NULL;
-    if (tr && u < 200) LOG("audren 更新 #%llu t=%.3f ms 距上次更新渲了 %llu 帧", (unsigned long long)u, now_ns() / 1e6, (unsigned long long)(atomic_load(&g_renders) - (last_r == ~0ull ? 0 : last_r)));
+    if (tr && u < 200) LOG("Audio update #%llu: time_ms=%.3f frames_since_update=%llu", (unsigned long long)u, now_ns() / 1e6, (unsigned long long)(atomic_load(&g_renders) - (last_r == ~0ull ? 0 : last_r)));
     Result res = orig(sys, o, on, p, pn, in, inn);
     last_r = atomic_load(&g_renders);
     return res;

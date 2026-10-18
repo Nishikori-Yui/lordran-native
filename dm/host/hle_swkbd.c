@@ -74,10 +74,10 @@ Result swkbd_show(void *out, const void *arg_, swkbd_input_fn input) {
     int r = script ? (snprintf(text, sizeof text, "%s", script), 1) : input(title, sub, guide, init, maxlen > 0 ? maxlen : 0, text, sizeof text);
     if (!script) guest_clock_freeze_for(2, 0);
     g_swkbd_numeric_max = -1;   // the numeric box mark applies to this one time only (set by dm_textinput.c before bringing up the keyboard)
-    LOG("swkbd：标题「%s」初始「%s」上限 %d → %s%s%s", title, init, maxlen,
-        r > 0 ? "确定「" : r == 0 ? "取消" : "无窗口按取消", r > 0 ? text : "", r > 0 ? "」" : "");
+    LOG("Software keyboard: title=%s initial=%s max_length=%d result=%s text=%s", title, init, maxlen,
+        r > 0 ? "accepted" : r == 0 ? "cancelled" : "cancelled (no window)", r > 0 ? text : "");
     if (r <= 0) return SWKBD_RESULT_CANCELED;
-    if (g_swkbd_name_panel && g_swkbd_unfilter && g_swkbd_unfilter()) LOG("swkbd：起名面板——已关掉游戏对返回串的 ASCII 键入过滤（中文名放行，见 hle_charname.c）");
+    if (g_swkbd_name_panel && g_swkbd_unfilter && g_swkbd_unfilter()) LOG("Software keyboard naming panel: guest ASCII input restriction disabled; Unicode names accepted");
 
     uint8_t *buf; uint64_t cap; memcpy(&buf, (uint8_t *)out, 8); memcpy(&cap, (uint8_t *)out + 8, 8);
     if (!buf || !cap) return RES_OK;                         // same as the SDK: if String has no buffer, the text is not read
@@ -139,7 +139,7 @@ HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard10InitializeEPv", "内嵌键盘：登记�
     int i = ikb_slot(kb);
     if (i >= 0) { g_ikb[i].epoch = ++g_ikb_epoch; g_ikb[i].pending = g_ikb[i].init_pending = 0; }
     pthread_mutex_unlock(&g_ikb_mu);
-    LOG("swkbd：内嵌键盘 Initialize %p%s", kb, i < 0 ? "【红】登记表满" : "");
+    LOG("Inline keyboard initialized: object=%p%s", kb, i < 0 ? "ERROR Registration table is full" : "");
     return i >= 0;
 }
 HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard6LaunchEv", "内嵌键盘：下一次 Calc 通知初始化完成", void, h_ikb_Launch, void *kb) {
@@ -154,7 +154,7 @@ HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard8FinalizeEv", "内嵌键盘：清理原�
 }
 HLE_FORCE("_ZN2nn5swkbd14InlineKeyboardD1Ev", "内嵌键盘析构：清理输入状态", void, h_ikb_Dtor, void *kb) { h_ikb_Fin(kb); }
 #define IKB_CB(mangled, cname, type, member) \
-    HLE_FORCE(mangled, "内嵌键盘：登记游戏回调", void, cname, void *kb, type fn) { \
+    HLE_FORCE(mangled, "Inline keyboard: registered guest callback", void, cname, void *kb, type fn) { \
         pthread_mutex_lock(&g_ikb_mu); int i = ikb_slot(kb); \
         if (i >= 0) g_ikb[i].member = fn; pthread_mutex_unlock(&g_ikb_mu); \
     }
@@ -186,7 +186,7 @@ HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard6AppearERKNS0_9AppearArgE", "内嵌键盘
         g_ikb[i].epoch = ++g_ikb_epoch;
     }
     pthread_mutex_unlock(&g_ikb_mu);
-    LOG("swkbd：内嵌键盘 Appear %p → 原生输入框，上限 %d 下限 %d", kb, maxlen, minlen);
+    LOG("Inline keyboard requested native text input: object=%p max_length=%d min_length=%d", kb, maxlen, minlen);
 }
 HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard9DisappearEv", "内嵌键盘：撤销待处理输入", void, h_ikb_Disappear, void *kb) {
     pthread_mutex_lock(&g_ikb_mu);
@@ -242,7 +242,7 @@ static void ikb_calc(void *kb, swkbd_input_fn input) {
     } while (ikb_current(s));
     if (!script) guest_clock_freeze_for(2, 0);
     if (!ikb_current(s)) { free(job); return; }
-    LOG("swkbd：内嵌键盘 %p → %s，长度 %zu", kb, r > 0 ? "确定" : "取消", r > 0 ? units : 0);
+    LOG("Inline keyboard completed: object=%p result=%s length=%zu", kb, r > 0 ? "accepted" : "cancelled", r > 0 ? units : 0);
     if (r <= 0) {
         if (s->cancel) s->cancel();
         free(job); return;

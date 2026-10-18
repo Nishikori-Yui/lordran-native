@@ -64,10 +64,10 @@ static font_t font_map(const char *p) {
     if (fd < 0 || fstat(fd, &st)) { if (fd >= 0) close(fd); return f; }
     size_t n = (size_t)st.st_size;
     uint8_t *m = mmap(NULL, n + 8, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (m == MAP_FAILED) { LOG("【红】共享字体内存分配失败（%zu 字节）", n + 8); close(fd); return f; }
+    if (m == MAP_FAILED) { LOG_ERROR("Failed to allocate shared font memory: bytes=%zu", n + 8); close(fd); return f; }
     size_t got = 0; while (got < n) { ssize_t r = pread(fd, m + 8 + got, n - got, (off_t)got); if (r <= 0) break; got += (size_t)r; }
     close(fd);
-    if (got != n) { LOG("【红】共享字体读不全：%s（%zu / %zu 字节）", p, got, n); munmap(m, n + 8); return f; }
+    if (got != n) { LOG_ERROR("Short shared font read: path=%s bytes=%zu expected=%zu", p, got, n); munmap(m, n + 8); return f; }
     uint32_t done = 0x18029a7fu, len = __builtin_bswap32((uint32_t)n ^ 0x49621806u);
     memcpy(m, &done, 4); memcpy(m + 4, &len, 4);
     f.p = m; f.n = n + 8; return f;
@@ -77,7 +77,7 @@ static font_t font_first(const char *env, const char *file, const char *fallback
     if (dir && *dir) { snprintf(buf, sizeof buf, "%s/%s", dir, file); c[1] = buf; }
     for (int i = 0; i < 3; i++) {
         if (!c[i] || !*c[i]) continue;
-        font_t f = font_map(c[i]); if (f.p) { LOG("共享字体（%s）：%s（%zu 字节，BFTTF「已解」头 + 原样 TTF）", file, c[i], f.n - 8); return f; }
+        font_t f = font_map(c[i]); if (f.p) { LOG("Shared font loaded: type=%s path=%s bytes=%zu; decoded BFTTF header and unmodified TTF", file, c[i], f.n - 8); return f; }
     }
     return (font_t){0};
 }
@@ -85,9 +85,9 @@ static font_t font_get(int type) {
     static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER; static font_t std_f, ext_f; static int std_done, ext_done;
     pthread_mutex_lock(&mu);
     if (!std_done) { std_done = 1; std_f = font_first("DM_SHARED_FONT", "standard.ttf", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf");
-                     if (!std_f.p) LOG("【红】标准共享字体打不开（DM_SHARED_FONT 或 DM_FONT_DIR/standard.ttf 指一个 TTF）"); }
+                     if (!std_f.p) LOG_ERROR("Cannot open standard shared font; set DM_SHARED_FONT or DM_FONT_DIR/standard.ttf to a TTF file"); }
     if (type == 5 && !ext_done) { ext_done = 1; ext_f = font_first("DM_SHARED_FONT_EXT", "nintendo_ext.ttf", NULL);
-                                  if (!ext_f.p) LOG("【黄】任天堂扩展共享字体缺（dm/tools/make_ext_font.py 生成 nintendo_ext.ttf）：按键图标会画成「?」"); }
+                                  if (!ext_f.p) LOG_WARN("Nintendo extension font missing; generate nintendo_ext.ttf with dm/tools/make_ext_font.py; button icons may display as '?'"); }
     font_t f = type == 5 && ext_f.p ? ext_f : std_f;
     pthread_mutex_unlock(&mu);
     return f;
@@ -103,13 +103,13 @@ HLE_FORCE("_ZN2nn2pl16IsRunningOnOunceEv", "是否 Switch 2：否", unsigned, h_
 // The Legend of Zelda: Breath of the Wild (SDK 20): asks for the shared fonts to be loaded before querying their state; the host's stand-in fonts are there on demand. VR mode (the Labo VR goggles): the host never enters VR; the query is always false, entering / leaving is a no-op
 HLE_FORCE("_ZN2nn2pl21RequestSharedFontLoadENS0_14SharedFontTypeE", "请求装载共享字体；替身字体随取随有，空操作", void, h_pl_ReqLoad, int type) { (void)type; }
 HLE_FORCE("_ZN2nn2pl8IsVrModeEv", "VR 模式：否", unsigned, h_pl_IsVr, void) { return 0; }
-HLE_FORCE("_ZN2nn2pl11BeginVrModeEv", "进 VR 模式（经 am）；宿主不进", void, h_pl_BeginVr, void) { LOG("pl::BeginVrMode（宿主不进 VR）"); }
+HLE_FORCE("_ZN2nn2pl11BeginVrModeEv", "进 VR 模式（经 am）；宿主不进", void, h_pl_BeginVr, void) { LOG("pl::BeginVrMode ignored; VR is unavailable on the host"); }
 HLE_FORCE("_ZN2nn2pl9EndVrModeEv", "出 VR 模式（经 am）", void, h_pl_EndVr, void) {}
 
 // ---------- ec: shop applet (the upgrade-to-Switch-2-Edition page) ----------
 // The shop is out of scope: no-op. The game does not look at the return value (both overloads are handled as returning nothing)
-HLE_FORCE("_ZN2nn2ec40ShowShopApplicationInformationForUpgradeENS0_14UpgradeEditionE", "商店升级页，排除范围；空操作", void, h_ec_ShowUpg, int ed) { LOG("ec::ShowShopApplicationInformationForUpgrade(%d)（剪）", ed); }
-HLE_FORCE("_ZN2nn2ec40ShowShopApplicationInformationForUpgradeENS0_14UpgradeEditionERKNS_7account10UserHandleE", "商店升级页（指定用户），排除范围；空操作", void, h_ec_ShowUpgU, int ed, const void *user) { (void)user; LOG("ec::ShowShopApplicationInformationForUpgrade(%d, 用户)（剪）", ed); }
+HLE_FORCE("_ZN2nn2ec40ShowShopApplicationInformationForUpgradeENS0_14UpgradeEditionE", "商店升级页，排除范围；空操作", void, h_ec_ShowUpg, int ed) { LOG("ec::ShowShopApplicationInformationForUpgrade(%d) unavailable", ed); }
+HLE_FORCE("_ZN2nn2ec40ShowShopApplicationInformationForUpgradeENS0_14UpgradeEditionERKNS_7account10UserHandleE", "商店升级页（指定用户），排除范围；空操作", void, h_ec_ShowUpgU, int ed, const void *user) { (void)user; LOG("ec::ShowShopApplicationInformationForUpgrade(%d, user) unavailable", ed); }
 
 // ---------- nfp: amiibo ----------
 // From Mario 1.2.1 the game initializes nfp at boot (v0 did not use it). The real SDK would connect to the sm: service, which the host lacks → abort, so the whole family is taken over.
@@ -123,10 +123,10 @@ typedef struct { uint32_t id; uint8_t reserved[4]; } NfpDeviceHandle;
 static _Atomic int g_nfp_state;
 uint32_t hle_hid_connected_npad(void);
 static Result nfp_no_tag(const char *what) {
-    static _Atomic int logged; if (!atomic_exchange(&logged, 1)) LOG("nfp：%s 等要 amiibo 标签的操作 → 没找到标签（宿主无 NFC）", what);
+    static _Atomic int logged; if (!atomic_exchange(&logged, 1)) LOG("NFC operation=%s returned no amiibo tag; host has no NFC reader", what);
     return NFP_RES_TAG_NOT_FOUND;
 }
-HLE_FORCE("_ZN2nn3nfp10InitializeEv", "amiibo 库初始化；宿主一台 NFC 设备、永远找不到标签", void, h_nfp_Init, void) { LOG("nfp::Initialize：宿主一台 NFC 设备，找不到 amiibo 标签"); }
+HLE_FORCE("_ZN2nn3nfp10InitializeEv", "amiibo 库初始化；宿主一台 NFC 设备、永远找不到标签", void, h_nfp_Init, void) { LOG("nfp::Initialize: one virtual NFC device; no amiibo tag present"); }
 HLE_FORCE("_ZN2nn3nfp29AttachAvailabilityChangeEventEPNS_2os15SystemEventTypeE", "NFC 可用性变化事件；绑内核事件、恒不触发", void, h_nfp_AttachAvail, void *ev) { hle_bind_system_event(ev, 0); }
 HLE_FORCE("_ZN2nn3nfp11ListDevicesEPNS0_12DeviceHandleEPii", "NFC 设备列表：一台", Result, h_nfp_List, NfpDeviceHandle *out, int *n, int max) {
     *n = 0; if (max >= 1) { memset(&out[0], 0, sizeof out[0]); out[0].id = NFP_DEVICE_ID; *n = 1; }
@@ -177,8 +177,8 @@ HLE_FORCE("_ZN2nn2vi33GetIndirectImageMemoryRequirementEPmS1_ii", "间接图层�
 }
 HLE_FORCE("_ZN2nn2vi20GetDisplayVsyncEventEPNS_2os15SystemEventTypeEPNS0_7DisplayE", "垂直同步事件：宿主线程按 60 Hz 触发", Result, h_vi_VsyncEvent, void *ev, void *disp) {
     (void)disp; hle_bind_system_event(ev, 1);
-    pthread_t th; if (pthread_create(&th, NULL, vsync_thread, ev)) die("垂直同步线程起不来"); pthread_detach(th);
-    LOG("vi::GetDisplayVsyncEvent：%p 由宿主 60 Hz 触发", ev); return RES_OK;
+    pthread_t th; if (pthread_create(&th, NULL, vsync_thread, ev)) die("Failed to create display-vsync thread"); pthread_detach(th);
+    LOG("vi::GetDisplayVsyncEvent: event=%p; signaled by host at 60 Hz", ev); return RES_OK;
 }
 
 // ---------- diag ----------
@@ -189,9 +189,9 @@ HLE_FORCE("_ZN2nn4diag6detail7PutImplERKNS0_11LogMetaDataEPKcm", "游戏日志 �
 // Abort: report the call site (module + offset) and the guest backtrace, then exit
 static void diag_abort(uint32_t res, void *lr) {
     module_t *m = module_of(lr);
-    LOG("游戏调用 nn::diag 中止：Result %#x，调用点 %s+%#llx", res, m ? m->name : "?", m ? (unsigned long long)((uint8_t *)lr - m->base) : (unsigned long long)(uintptr_t)lr);
+    LOG("Guest nn::diag abort requested: result=%#x caller=%s+%#llx", res, m ? m->name : "?", m ? (unsigned long long)((uint8_t *)lr - m->base) : (unsigned long long)(uintptr_t)lr);
     dm_backtrace((uint64_t)__builtin_frame_address(1));
-    die("游戏中止");
+    die("Guest requested abort");
 }
 HLE_FORCE("_ZN2nn4diag6detail9AbortImplEv", "游戏中止", void, h_diag_Abort0, void) { diag_abort(0, __builtin_return_address(0)); }
 HLE_FORCE("_ZN2nn4diag6detail9AbortImplEPKNS_6ResultE", "游戏中止（带 Result）", void, h_diag_AbortR, const uint32_t *r) { diag_abort(r ? *r : 0, __builtin_return_address(0)); }

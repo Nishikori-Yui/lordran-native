@@ -2,7 +2,7 @@
 // Kinds added by B: SBUFP = storage buffer device pointer (NVN storage buffer slot); SUPPORT = Ryujinx auxiliary constants; C1 = the shader's own constant segment (c[1]);
 //            DRV0 / DRV2 = NVN driver constant segments c[0] (storage buffer address table) / c[2] (texture and sampler handle table)
 // PC shader reflection json → fixed-length C arrays (converted once when the shader is fetched; each draw only walks the arrays and does not touch NSDictionary / NSString).
-// Unit test tests/t_refl.m computes the expectations by hand from real reflection.
+// Unit test tests/t_refl.m verifies the ABI with self-contained fixtures.
 #pragma once
 #include <stdint.h>
 

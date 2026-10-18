@@ -7,8 +7,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <libkern/OSCacheControl.h>
+#include "../../host/dm_log.h"
 
-#define LOG(...) do { fprintf(stderr, "[dm] " __VA_ARGS__); fputc('\n', stderr); } while (0)
+#define LOG(...) DM_LOG_INFO("vm.remap", __VA_ARGS__)
+#define LOG_ERROR(...) DM_LOG_ERROR("vm.remap", __VA_ARGS__)
 
 static int mapped_protection(vm_address_t start, vm_size_t length, vm_prot_t need,
                              int exact, int trace, const char *label) {
@@ -24,7 +26,7 @@ static int mapped_protection(vm_address_t start, vm_size_t length, vm_prot_t nee
             VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &count, &object);
         if (object != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), object);
         if (kr != KERN_SUCCESS || a > p || !region_size || p - a >= region_size) {
-            LOG("【红】VM map %s: query %#lx failed (%d)", label, (unsigned long)p, kr);
+            LOG_ERROR("VM map query failed: region=%s address=%#lx result=%d", label, (unsigned long)p, kr);
             return 0;
         }
         if (trace || (info.protection & need) != need || (exact && info.protection != need))
@@ -73,13 +75,13 @@ int dm_vphone_remap_compatible(const char *name, vm_address_t to,
     kern_return_t kr = vm_allocate(mach_task_self(), &a, size,
                                    VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE);
     if (kr != KERN_SUCCESS || a != to) {
-        LOG("【红】VM vphone code allocation %s failed (%d)", name, kr);
+        LOG_ERROR("VM vphone code allocation failed: region=%s result=%d", name, kr);
         if (kr == KERN_SUCCESS) vm_deallocate(mach_task_self(), a, size);
         return 0;
     }
     kr = vm_inherit(mach_task_self(), to, size, VM_INHERIT_NONE);
     if (kr != KERN_SUCCESS) {
-        LOG("【红】VM vphone code inheritance %s failed (%d)", name, kr);
+        LOG_ERROR("VM vphone code inheritance failed: region=%s result=%d", name, kr);
         vm_deallocate(mach_task_self(), to, size);
         return 0;
     }
@@ -87,7 +89,7 @@ int dm_vphone_remap_compatible(const char *name, vm_address_t to,
     sys_icache_invalidate((void *)to, size);
     kr = vm_protect(mach_task_self(), to, size, FALSE, need);
     if (kr != KERN_SUCCESS || !mapped_protection(to, size, need, 1, 1, target)) {
-        LOG("【红】VM vphone code sealing %s failed (%d)", name, kr);
+        LOG_ERROR("VM vphone code sealing failed: region=%s result=%d", name, kr);
         vm_deallocate(mach_task_self(), to, size);
         return 0;
     }

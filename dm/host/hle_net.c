@@ -19,7 +19,7 @@ HLE_FORCE("nnsslFinalize", "与 nnsslInitialize 配对（剪）", Result, h_ssl_
 #define SK_ENETDOWN 50                  // Horizon sockets use FreeBSD error codes
 static __thread int t_skerr = SK_ENETDOWN;
 static int sk_fail(void) { t_skerr = SK_ENETDOWN; return -1; }
-#define SKF(m, cname, ...) HLE_FORCE(m, "bsd 套接字服务（剪）：回 -1/ENETDOWN", int, cname, __VA_ARGS__)
+#define SKF(m, cname, ...) HLE_FORCE(m, "BSD socket service disabled: returns -1/ENETDOWN", int, cname, __VA_ARGS__)
 SKF("_ZN2nn6socket6SocketENS0_6FamilyENS0_4TypeENS0_8ProtocolE", h_sk_Socket, int a, int b, int c) { (void)a; (void)b; (void)c; return sk_fail(); }
 SKF("_ZN2nn6socket4BindEiPKNS0_8SockAddrEj", h_sk_Bind, int s, const void *a, unsigned n) { (void)s; (void)a; (void)n; return sk_fail(); }
 SKF("_ZN2nn6socket7ConnectEiPKNS0_8SockAddrEj", h_sk_Connect, int s, const void *a, unsigned n) { (void)s; (void)a; (void)n; return sk_fail(); }
@@ -68,7 +68,7 @@ HLE_FORCE("nnsocketSetLastErrno", "套接字错误码由宿主记录", void, h_n
 
 // ---------- ssl: offline, Initialize succeeds (the network library's global initialization depends on it), everything else that contacts the service fails ----------
 // Not cut: Context / Connection construction and destruction, Context::GetContextId (only read and write game objects).
-#define SSF(m, cname, ...) HLE_FORCE(m, "ssl 服务（剪）：失败", Result, cname, __VA_ARGS__)
+#define SSF(m, cname, ...) HLE_FORCE(m, "SSL service disabled: returns failure", Result, cname, __VA_ARGS__)
 HLE_FORCE("_ZN2nn3ssl10InitializeEv", "与 nnsslInitialize 一致：成功、不建会话（剪）", Result, h_ssl_InitCpp, void) { return RES_OK; }
 HLE_FORCE("_ZN2nn3ssl8FinalizeEv", "与 Initialize 配对（剪）", Result, h_ssl_FinCpp, void) { return RES_OK; }
 SSF("_ZN2nn3ssl7Context6CreateENS1_10SslVersionE", h_ssl_CtxCreate, void *self, int v) { (void)self; (void)v; return RES_FAIL; }
@@ -91,7 +91,7 @@ SSF("_ZN2nn3ssl10Connection4PollEPNS1_9PollEventES3_j", h_ssl_CnPoll, void *self
 HLE_FORCE("_ZN2nn3ssl10Connection4ReadEPcj", "ssl 服务（剪）：读到 -1", int, h_ssl_CnRead, void *self, char *b, unsigned n) { (void)self; (void)b; (void)n; return -1; }
 HLE_FORCE("_ZN2nn3ssl10Connection5WriteEPKcj", "ssl 服务（剪）：写出 -1", int, h_ssl_CnWrite, void *self, const char *b, unsigned n) { (void)self; (void)b; (void)n; return -1; }
 // C interface: all return nnResult
-#define SSC(m, cname) HLE_FORCE(m, "ssl 服务（剪）：失败", Result, cname, void) { return RES_FAIL; }
+#define SSC(m, cname) HLE_FORCE(m, "SSL service disabled: returns failure", Result, cname, void) { return RES_FAIL; }
 SSC("nnsslConnectionCreate", h_nssl_Create) SSC("nnsslConnectionDestroy", h_nssl_Destroy)
 SSC("nnsslConnectionDoHandshakeWithCertBuffer", h_nssl_Handshake) SSC("nnsslConnectionGetConnectionId", h_nssl_GetId)
 SSC("nnsslConnectionGetNextAlpnProto", h_nssl_GetAlpn) SSC("nnsslConnectionGetVerifyCertError", h_nssl_VerifyErr)

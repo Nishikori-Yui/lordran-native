@@ -27,7 +27,7 @@ enum { ENT_DIR = 0, ENT_FILE = 1 };
 enum { DIRMODE_DIR = 1, DIRMODE_FILE = 2 };
 
 typedef struct { char name[0x301]; uint8_t pad0[3]; int8_t type; uint8_t pad1[3]; int64_t size; } DirectoryEntry;
-_Static_assert(sizeof(DirectoryEntry) == 0x310, "DirectoryEntry 布局");
+_Static_assert(sizeof(DirectoryEntry) == 0x310, "DirectoryEntry layout");
 
 #define MAX_MOUNT 16
 // Save transactions (HLE audit items 1–3): on the real device a save can be rolled back as a whole before commit, and after a crash / kill a remount sees only the version from the last Commit.
@@ -52,10 +52,10 @@ static _Atomic uint64_t g_txn_first_ns;     // time of this transaction's first 
 static _Atomic int g_save_poison;
 static void save_poison(int e) { int z = 0; atomic_compare_exchange_strong(&g_save_poison, &z, e ? e : EIO); }
 // The default weak implementation only logs (Mac); the iOS front end provides a strong implementation of the same name that shows a native alert. Called on the game thread, the front end switches to the main thread itself
-__attribute__((weak)) void front_save_failed(int err) { LOG("front_save_failed(errno=%d)：前端未接（缺省弱实现）", err); }
+__attribute__((weak)) void front_save_failed(int err) { LOG("Save failure notification unavailable: errno=%d; front end has no handler", err); }
 // DM_FSLOG=<file>: each ReadFile logs one TSV line "seconds since boot\tguest path\toffset\tlength\tguest buffer address" (which bytes boot read, for offline reverse lookup against the manifest)
 static FILE *g_fslog; static char *g_fdpath[4096]; static pthread_mutex_t g_fslog_lock = PTHREAD_MUTEX_INITIALIZER;
-static void fslog_init(void) { static int done; if (done) return; done = 1; const char *e = getenv("DM_FSLOG"); if (e && !(g_fslog = fopen(e, "w"))) die("DM_FSLOG 打不开 %s", e); }
+static void fslog_init(void) { static int done; if (done) return; done = 1; const char *e = getenv("DM_FSLOG"); if (e && !(g_fslog = fopen(e, "w"))) die("Cannot open file-system trace: path=%s", e); }
 
 static const char *envdir(const char *var, const char *rel, char *buf, size_t n) {
     const char *v = getenv(var);
@@ -71,7 +71,7 @@ static int dm_fs_test_fail(const char *pt) {
     if (strcmp(spec, e)) { strlcpy(spec, e, sizeof spec); memset(cnt, 0, sizeof cnt); }   // a new set of injections starts counting from zero
     size_t L = strlen(pt); int k = 0;
     for (const char *q = spec; *q && k < 8; k++) { const char *end = strchr(q, ','); size_t n = end ? (size_t)(end - q) : strlen(q);
-        if (n >= L && !strncmp(q, pt, L) && (n == L || q[L] == ':')) { int lim = n > L ? atoi(q + L + 1) : 1; if (cnt[k] < lim) { cnt[k]++; errno = ENOSPC; LOG("DM_TEST_FS_FAILAT：%s 第 %d 次按 ENOSPC 失败", pt, cnt[k]); return 1; } return 0; }
+        if (n >= L && !strncmp(q, pt, L) && (n == L || q[L] == ':')) { int lim = n > L ? atoi(q + L + 1) : 1; if (cnt[k] < lim) { cnt[k]++; errno = ENOSPC; LOG("Injected ENOSPC failure: operation=%s occurrence=%d", pt, cnt[k]); return 1; } return 0; }
         q = end ? end + 1 : q + n; }
     return 0;
 }
@@ -81,7 +81,7 @@ static Result mount_ex(const char *name, const char *dir, int ro, int txn) {
     PATH_LOCK(); pthread_mutex_lock(&g_lock);
     for (int i = 0; i < g_nmnt; i++)
         if (!strcmp(g_mnt[i].name, name)) { pthread_mutex_unlock(&g_lock); return RES_OK; }
-    if (g_nmnt >= MAX_MOUNT) die("挂载表满");
+    if (g_nmnt >= MAX_MOUNT) die("Mount table is full");
     strlcpy(g_mnt[g_nmnt].name, name, sizeof g_mnt[0].name);
     g_mnt[g_nmnt].ro = ro; g_mnt[g_nmnt].overlay[0] = 0; g_mnt[g_nmnt].commit[0] = 0;
     if (!strcmp(name, "rom") && getenv("DM_ROMFS_OVERLAY"))
@@ -93,11 +93,11 @@ static Result mount_ex(const char *name, const char *dir, int ro, int txn) {
         char work[1100], neu[1100]; snprintf(work, sizeof work, "%s.work", dir); snprintf(neu, sizeof neu, "%s.new", dir);
         mkdir(dir, 0755);
         const char *why = NULL;
-        if (!access(work, F_OK) && rm_tree(work)) why = "清不掉上次残留的工作目录";
-        else if (!access(neu, F_OK) && rm_tree(neu)) why = "清不掉上次残留的 .new";
-        else if (dm_fs_test_fail("mountclone") || clonefile(dir, work, 0)) why = "克隆工作目录失败";
+        if (!access(work, F_OK) && rm_tree(work)) why = "Failed to remove the previous working directory";
+        else if (!access(neu, F_OK) && rm_tree(neu)) why = "Failed to remove the previous .new directory";
+        else if (dm_fs_test_fail("mountclone") || clonefile(dir, work, 0)) why = "Failed to clone the working directory";
         if (why) { txn_err = errno ? errno : EIO; g_mnt[g_nmnt].ro = 1; strlcpy(g_mnt[g_nmnt].dir, dir, sizeof g_mnt[0].dir);
-            LOG("【红】存档事务：%s（%s，errno=%d）——改为只读挂载已提交目录 %s：本局存档写不进去，已提交版本不变", why, work, txn_err, dir); }
+            LOG_ERROR("Save transaction failed: operation=%s path=%s errno=%d; mounting committed directory read-only: %s; committed save preserved", why, work, txn_err, dir); }
         else {
             strlcpy(g_mnt[g_nmnt].commit, dir, sizeof g_mnt[0].commit);
             atomic_store(&g_save_poison, 0);                                // the working directory was just cloned from the committed version, intact
@@ -107,7 +107,7 @@ static Result mount_ex(const char *name, const char *dir, int ro, int txn) {
     pthread_mutex_unlock(&g_lock);
     if (txn_err) front_save_failed(txn_err);
     if (!ro && !txn) mkdir(dir, 0755);
-    LOG("fs 挂载 %s: → %s%s%s", name, txn ? g_mnt[g_nmnt - 1].dir : dir, ro || txn_err ? "（只读）" : txn ? "（事务式存档：工作目录，Commit 原子换入）" : "", g_mnt[g_nmnt - 1].overlay[0] ? "（overlay 优先）" : "");
+    LOG("File system mount: name=%s path=%s%s%s", name, txn ? g_mnt[g_nmnt - 1].dir : dir, ro || txn_err ? " (read-only)" : txn ? " (transactional save; atomic commit from working directory)" : "", g_mnt[g_nmnt - 1].overlay[0] ? " (overlay takes priority)" : "");
     return RES_OK;
 }
 static Result mount(const char *name, const char *dir, int ro) { return mount_ex(name, dir, ro, 0); }
@@ -143,21 +143,21 @@ static const dir_index *dir_index_get(const char *dir) {
     DIR *d = opendir(dir); if (!d) return NULL;
     // First gather the names into one pool (a physical name is stored separately only when it differs from the guest name), with offsets in off[]; they become pointers once the pool stops growing
     size_t n = 0, cap = 64, plen = 0, pcap = 4096; size_t (*off)[2] = malloc(cap * sizeof *off); char *pool = malloc(pcap);
-    if (!off || !pool) die("目录索引分配失败");
+    if (!off || !pool) die("Failed to allocate directory index");
     struct dirent *e; char guest[0x301]; int ok = 1;
     while ((e = readdir(d))) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
         if (!guest_name(dir, e->d_name, guest, sizeof guest)) { ok = 0; break; }
         size_t gl = strlen(guest) + 1, same = !strcmp(guest, e->d_name), pl = same ? 0 : strlen(e->d_name) + 1;
-        if (n == cap && !(off = realloc(off, (cap *= 2) * sizeof *off))) die("目录索引分配失败");
-        while (plen + gl + pl > pcap) if (!(pool = realloc(pool, pcap *= 2))) die("目录索引分配失败");
+        if (n == cap && !(off = realloc(off, (cap *= 2) * sizeof *off))) die("Failed to allocate directory index");
+        while (plen + gl + pl > pcap) if (!(pool = realloc(pool, pcap *= 2))) die("Failed to allocate directory index");
         off[n][0] = plen; memcpy(pool + plen, guest, gl); plen += gl;
         off[n][1] = same ? off[n][0] : plen; if (!same) { memcpy(pool + plen, e->d_name, pl); plen += pl; }
         n++;
     }
     closedir(d);
     if (!ok) { free(off); free(pool); return NULL; }
-    dir_index *x = calloc(1, sizeof *x); if (!x || !(x->path = strdup(dir)) || !(x->e = malloc((n ? n : 1) * sizeof *x->e))) die("目录索引分配失败");
+    dir_index *x = calloc(1, sizeof *x); if (!x || !(x->path = strdup(dir)) || !(x->e = malloc((n ? n : 1) * sizeof *x->e))) die("Failed to allocate directory index");
     for (size_t i = 0; i < n; i++) { x->e[i].guest = pool + off[i][0]; x->e[i].phys = pool + off[i][1]; }
     free(off); qsort(x->e, n, sizeof *x->e, name_ent_cmp);
     x->hash = h; x->n = n; x->pool = pool; x->next = *slot; *slot = x;
@@ -229,7 +229,7 @@ int dm_overlay_file(const char *rel, char *out, size_t n) {
 }
 static int rom_overlay_path(const mount_t *m, const char *rest, char *out, size_t n) {
     char *roots = strdup(m->overlay);
-    if (!roots) die("rom overlay 路径分配失败");
+    if (!roots) die("Failed to allocate RomFS overlay path");
     char *save = NULL;
     for (char *root = strtok_r(roots, ":", &save); root; root = strtok_r(NULL, ":", &save)) {
         char candidate[1024];
@@ -305,16 +305,16 @@ static int set_guest_name(const char *hp, const char *path) {
     return -1;
 }
 static Result err_res(const char *op, const char *path) {
-    if (errno == ENOENT || errno == ENOTDIR) { if (g_flag.fs) LOG("fs %s 不存在：%s", op, path); return RES_PATH_NOT_FOUND; }   // Logged under DM_FS=1 (the game often probes with "not found", not logged by default)
+    if (errno == ENOENT || errno == ENOTDIR) { if (g_flag.fs) LOG("File system %s not found: %s", op, path); return RES_PATH_NOT_FOUND; }   // Logged under DM_FS=1 (the game often probes with "not found", not logged by default)
     if (errno == EEXIST) return RES_PATH_EXISTS;
-    LOG("fs %s %s 失败 errno=%d", op, path, errno); return RES_FAIL;
+    LOG("File system %s failed: path=%s errno=%d", op, path, errno); return RES_FAIL;
 }
 // Name resolution shares one lock with create/rename/enumerate, aliases and xattr are published to the guest together.
 #define HP_EX(path, create) PATH_LOCK(); char hp[1024]; int ro = 0; if (!host_path_ex(path, hp, sizeof hp, &ro, create)) return err_res("path", path)
 #define HP(path) HP_EX(path, 0)
-#define RW() if (ro) { LOG("fs 写只读挂载：%s", hp); return RES_FAIL; }
+#define RW() if (ro) { LOG("Write attempted on read-only mount: %s", hp); return RES_FAIL; }
 // Create directory / create file: if the target exists, answer "already exists" as a writable mount would -- that is the only failure the game understands (the original save storage never fails to write); with a generic failure it carries on with a null handle
-#define RW_CREATE() if (ro) { if (!access(hp, F_OK)) return RES_PATH_EXISTS; LOG("fs 写只读挂载：%s", hp); return RES_FAIL; }
+#define RW_CREATE() if (ro) { if (!access(hp, F_OK)) return RES_PATH_EXISTS; LOG("Write attempted on read-only mount: %s", hp); return RES_FAIL; }
 
 // ---------- Mount ----------
 HLE_FORCE("_ZN2nn2fs22QueryMountRomCacheSizeEPm", "fsp-srv；rom 直读宿主目录，缓存只给最小值", Result, h_fs_QueryRomCache, size_t *out) { *out = 0x1000; return RES_OK; }
@@ -343,7 +343,7 @@ HLE_FORCE("_ZN2nn2fs13MountSaveDataEPKcRKNS_7account3UidE", "fsp-srv；存档 �
     (void)uid;
     // No default directory: silently landing on a directory with no characters distorts the "character select" measurement (this once caused a misjudgment). Runs always use a fresh copy of save_ref
     const char *d = getenv("DM_SAVE");
-    if (!d) die("未设 DM_SAVE：请指向一份存档目录的可写副本");
+    if (!d) die("DM_SAVE is unset; provide a writable copy of the save directory");
     char dd[1024]; strlcpy(dd, d, sizeof dd); size_t L = strlen(dd); while (L > 1 && dd[L - 1] == '/') dd[--L] = 0;   // strip trailing slashes (.work / .new are appended at the same level)
     return mount_ex(name, dd, 0, 1);
 }
@@ -374,21 +374,21 @@ HLE_FORCE("_ZN2nn2fs6CommitEPKc", "fsp-srv；事务式存档：工作目录整�
         else if (dm_fs_test_fail("reclone") || clonefile(g_mnt[i].commit, re, 0)) { rerr = errno ? errno : EIO; rm_tree(re); }
         else if (renamex_np(re, g_mnt[i].dir, RENAME_SWAP)) { rerr = errno ? errno : EIO; rm_tree(re); }
         else rm_tree(re);                                               // the swapped-out tainted work directory
-        if (rerr) { save_poison(perr); LOG("【红】存档事务：重新克隆工作目录失败 errno=%d——工作目录不动、保持已污染（下次提交照样拒绝并重试），已提交版本不变", rerr); }
+        if (rerr) { save_poison(perr); LOG_ERROR("Failed to reclone save working directory: errno=%d; keeping dirty working state and refusing commits until retry succeeds; committed save preserved", rerr); }
         pthread_mutex_unlock(&g_lock);
-        LOG("【红】存档提交拒绝：本事务有存档写失败 errno=%d（工作目录里 0 字节文件：%s）；已提交版本不变，工作目录%s%s", perr, tl ? torn + 1 : "无", rerr ? "没能重新克隆（见上一行）" : "已从已提交版重新克隆", nopen ? "；【红】仍有存档文件开着" : "");
+        LOG_ERROR("Save commit refused: transaction_write_errno=%d zero_byte_files=%s; committed save preserved; working_directory=%s%s", perr, tl ? torn + 1 : "none", rerr ? "reclone failed (see previous record)" : "recloned from committed save", nopen ? "; save files are still open" : "");
         front_save_failed(perr);
         return RES_FAIL;
     }
     char neu[1100]; snprintf(neu, sizeof neu, "%s.new", g_mnt[i].commit);
     Result r = RES_OK;
     if (!access(neu, F_OK)) rm_tree(neu);
-    if (clonefile(g_mnt[i].dir, neu, 0)) { LOG("【红】存档提交：clonefile %s 失败 errno=%d（已提交版本不变）", neu, errno); r = RES_FAIL; }
-    else if (renamex_np(neu, g_mnt[i].commit, RENAME_SWAP)) { LOG("【红】存档提交：原子互换失败 errno=%d（已提交版本不变）", errno); rm_tree(neu); r = RES_FAIL; }
+    if (clonefile(g_mnt[i].dir, neu, 0)) { LOG_ERROR("Save commit clonefile failed: path=%s errno=%d; committed save preserved", neu, errno); r = RES_FAIL; }
+    else if (renamex_np(neu, g_mnt[i].commit, RENAME_SWAP)) { LOG_ERROR("Atomic save directory exchange failed: errno=%d; committed save preserved", errno); rm_tree(neu); r = RES_FAIL; }
     else rm_tree(neu);                                                  // the old version that was swapped out
     // Keep the legacy hook timing field at zero so existing log readers keep working.
     static int n; if (r == RES_OK) { uint64_t tc2 = clock_gettime_nsec_np(CLOCK_MONOTONIC);
-        LOG("存档提交 #%d：%s 原子换入 %s（此前存档写 %d 次）（钩子 %llu 微秒、克隆换入 %llu 微秒、自本事务首次写起 %llu 微秒）", ++n, g_mnt[i].dir, g_mnt[i].commit, atomic_load(&g_save_writes),
+        LOG("Save commit #%d: source=%s destination=%s prior_writes=%d hook_us=%llu clone_exchange_us=%llu since_first_write_us=%llu", ++n, g_mnt[i].dir, g_mnt[i].commit, atomic_load(&g_save_writes),
             0ull, (unsigned long long)((tc2 - tc0) / 1000), (unsigned long long)(tw0 ? (tc2 - tw0) / 1000 : 0)); atomic_fetch_add(&g_save_commits, 1);
     }
     pthread_mutex_unlock(&g_lock);
@@ -409,11 +409,11 @@ static holemap *g_hm[4096];
 static holemap *hm_load(const char *hostpath) {
     char hp2[1100]; if (snprintf(hp2, sizeof hp2, "%s.holes", hostpath) >= (int)sizeof hp2) return NULL;
     FILE *f = fopen(hp2, "r"); if (!f) return NULL;
-    long long size = -1, o, l; if (fscanf(f, "size %lld", &size) != 1 || size < 0) die("区段表格式不对：%s", hp2);
+    long long size = -1, o, l; if (fscanf(f, "size %lld", &size) != 1 || size < 0) die("Invalid extent table: %s", hp2);
     holemap *m = calloc(1, sizeof *m); int cap = 64; m->size = size; m->log = malloc(cap * sizeof *m->log); m->len = malloc(cap * sizeof *m->len); m->phys = malloc(cap * sizeof *m->phys);
     int64_t pos = 0, phys = 0;
     while (fscanf(f, "%lld %lld", &o, &l) == 2) {
-        if (o < pos || l <= 0 || o + l > size) die("区段表零段越界或乱序：%s（%lld %lld）", hp2, o, l);
+        if (o < pos || l <= 0 || o + l > size) die("Extent table has an out-of-bounds or unordered zero region: %s (%lld %lld)", hp2, o, l);
         if (o > pos) { if (m->n == cap) { cap *= 2; m->log = realloc(m->log, cap * sizeof *m->log); m->len = realloc(m->len, cap * sizeof *m->len); m->phys = realloc(m->phys, cap * sizeof *m->phys); }
             m->log[m->n] = pos; m->len[m->n] = o - pos; m->phys[m->n++] = phys; phys += o - pos; }
         pos = o + l;
@@ -421,10 +421,10 @@ static holemap *hm_load(const char *hostpath) {
     fclose(f);
     if (pos < size) { if (m->n == cap) { cap++; m->log = realloc(m->log, cap * sizeof *m->log); m->len = realloc(m->len, cap * sizeof *m->len); m->phys = realloc(m->phys, cap * sizeof *m->phys); }
         m->log[m->n] = pos; m->len[m->n] = size - pos; m->phys[m->n++] = phys; phys += size - pos; }
-    struct stat st; if (stat(hostpath, &st) || st.st_size != phys) die("剔零档案长度与区段表不符：%s 实际 %lld，按表应为 %lld", hostpath, (long long)st.st_size, (long long)phys);
+    struct stat st; if (stat(hostpath, &st) || st.st_size != phys) die("Sparse file size does not match extent table: path=%s actual=%lld expected=%lld", hostpath, (long long)st.st_size, (long long)phys);
     const char *bn = strrchr(hostpath, '/'); strlcpy(m->name, bn ? bn + 1 : hostpath, sizeof m->name);
     { static _Atomic int said[64]; unsigned h = 0; for (const char *c = m->name; *c; c++) h = h * 31 + (unsigned char)*c;   // Print a line for each archive only on first registration
-      if (!atomic_exchange(&said[h % 64], 1)) LOG("剔零档案 %s：原始 %lld 字节，实存 %lld 字节，保留段 %d 个", m->name, (long long)size, (long long)phys, m->n); }
+      if (!atomic_exchange(&said[h % 64], 1)) LOG("Sparse file: path=%s original_bytes=%lld stored_bytes=%lld retained_extents=%d", m->name, (long long)size, (long long)phys, m->n); }
     return m;
 }
 void dm_data_note_fd(int fd, const char *hostpath) {   // Called after opening a resource archive: register it if there is an extent table
@@ -462,8 +462,8 @@ ssize_t dm_data_pread(int fd, void *buf, size_t n, off_t off) {   // Same semant
             // The game reads whole blocks aligned to 256 KB: when what it wants is a kept file next to a zero-filled range, the whole block incidentally overlaps the edge of the zero-filled range (harmless, the kept file's bytes are returned as usual).
             // Only a read that lies entirely inside a zero-filled range is really reading stripped content → report a failure (the first 20 one by one, then one line per 1000); boundary-crossing reads are only noted the first 3 times
             if (z == n) { uint64_t hr = atomic_fetch_add(&g_hole_reads, 1);
-                if (hr < 20 || hr % 1000 == 0) LOG("【红】读到剔零区段 %s 偏移 %lld 长 %zu（第 %llu 次；整块都在被砍掉的过场视频 / 旧版音乐里，说明砍错了或有新的读者）", m->name, (long long)off, n, (unsigned long long)hr + 1);
-            } else { static _Atomic uint64_t edge; if (atomic_fetch_add(&edge, 1) < 3) LOG("整块读压到剔零区段边缘（无害）：%s 读 %lld 长 %zu，其中 %zu 字节在零段", m->name, (long long)off, n, z); }
+                if (hr < 20 || hr % 1000 == 0) LOG_ERROR("Read from stripped extent: path=%s offset=%lld length=%zu occurrence=%llu; requested data lies entirely in removed media", m->name, (long long)off, n, (unsigned long long)hr + 1);
+            } else { static _Atomic uint64_t edge; if (atomic_fetch_add(&edge, 1) < 3) LOG("Read overlaps stripped extent boundary: path=%s offset=%lld length=%zu zero_bytes=%zu; no action required", m->name, (long long)off, n, z); }
         }
     }
     return (ssize_t)done;
@@ -475,14 +475,14 @@ HLE_FORCE("_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci", "fsp-srv → open(2)", Re
     if (fd < 0) return err_res("open", hp);
     struct stat st; fstat(fd, &st);
     if (S_ISDIR(st.st_mode)) { close(fd); return RES_PATH_NOT_FOUND; }
-    if (fd >= (int)sizeof g_fmode) die("fd 超出表");
+    if (fd >= (int)sizeof g_fmode) die("File descriptor exceeds table capacity");
     g_fmode[fd] = (uint8_t)mode; *out = (uint64_t)fd;
     g_hm[fd] = NULL; if (!(mode & (MODE_WRITE | MODE_APPEND))) dm_data_note_fd(fd, hp);
     { const char *c = strchr(path, ':'); size_t ln = c ? (size_t)(c - path) : 0; g_fsave[fd] = 0;
       for (int i = 0; c && i < g_nmnt; i++) if (strlen(g_mnt[i].name) == ln && !strncmp(g_mnt[i].name, path, ln)) g_fsave[fd] = g_mnt[i].commit[0] != 0; }
     fslog_init();
     if (g_fslog && fd < 4096) { pthread_mutex_lock(&g_fslog_lock); free(g_fdpath[fd]); g_fdpath[fd] = strdup(path); pthread_mutex_unlock(&g_fslog_lock); }
-    if (g_flag.fs) LOG("fs open [%.2fs] %s mode=%d → fd %d", (now_ns() - g_t0_ns) / 1e9, path, mode, fd);
+    if (g_flag.fs) LOG("File opened: elapsed_s=%.2f path=%s mode=%d fd=%d", (now_ns() - g_t0_ns) / 1e9, path, mode, fd);
     return RES_OK;
 }
 HLE_FORCE("_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvm", "fsp-srv → pread(2)", Result, h_fs_ReadFile, size_t *out, uint64_t h, int64_t off, void *buf, size_t sz) {
@@ -505,7 +505,7 @@ HLE_FORCE("_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvm", "fsp-srv → pread(2)", 
     if (g_flag.fs) {   // Read metering: print a line every 64 MiB accumulated or every 1000 reads
         static uint64_t n, bytes, next_b = 64 << 20; static pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
         pthread_mutex_lock(&m); n++; bytes += got;
-        if (bytes >= next_b || n % 1000 == 0) { LOG("fs 读 累计 %llu 次 %.1f MiB（本次 fd %d 偏移 %#llx 长 %#zx）", n, bytes / 1048576.0, (int)h, off, got); if (bytes >= next_b) next_b += 64 << 20; }
+        if (bytes >= next_b || n % 1000 == 0) { LOG("File reads: total=%llu total_mib=%.1f current_fd=%d offset=%#llx length=%#zx", n, bytes / 1048576.0, (int)h, off, got); if (bytes >= next_b) next_b += 64 << 20; }
         pthread_mutex_unlock(&m);
     }
     return RES_OK;
@@ -521,13 +521,13 @@ HLE_FORCE("_ZN2nn2fs9WriteFileENS0_10FileHandleElPKvmRKNS0_11WriteOptionE", "fsp
             cfg = 1; }
         int n = atomic_fetch_add(&g_save_writes, 1) + 1;
         { uint64_t z = 0; atomic_compare_exchange_strong(&g_txn_first_ns, &z, clock_gettime_nsec_np(CLOCK_MONOTONIC)); }
-        if (kill_n && n == kill_n) { LOG("DM_TEST_KILL_AT：存档第 %d 次写，直接 _exit（模拟写到一半被杀）", n); _exit(9); }
-        if (fail_n && n == fail_n) { LOG("DM_TEST_FS_FAIL：存档第 %d 次写返回失败 errno=%d", n, fail_e); errno = fail_e; save_poison(fail_e); return err_res("pwrite（注入）", "fd"); }
+        if (kill_n && n == kill_n) { LOG("Injected process termination on save write #%d; simulating interruption during a write", n); _exit(9); }
+        if (fail_n && n == fail_n) { LOG("Injected save write failure: write=%d errno=%d", n, fail_e); errno = fail_e; save_poison(fail_e); return err_res("pwrite (injected)", "fd"); }
     }
     while (put < sz) {
         ssize_t r = pwrite((int)h, (const uint8_t *)buf + put, sz - put, off + put);
         if (r < 0) { if (errno == EINTR) continue; if (g_fsave[(int)h & 0xffff]) save_poison(errno); return err_res("pwrite", "fd"); }
-        if (r == 0) { errno = ENOSPC; if (g_fsave[(int)h & 0xffff]) save_poison(ENOSPC); return err_res("pwrite（写入 0 字节）", "fd"); }   // This used to loop forever here
+        if (r == 0) { errno = ENOSPC; if (g_fsave[(int)h & 0xffff]) save_poison(ENOSPC); return err_res("pwrite (zero bytes written)", "fd"); }   // This used to loop forever here
         put += r;
     }
     return RES_OK;
@@ -606,7 +606,7 @@ HLE_FORCE("_ZN2nn2fs10RenameFileEPKcS2_", "fsp-srv → rename(2)", Result, h_fs_
     if (rename(hp, hp2)) return err_res("rename", hp);
     if (dm_fs_test_fail("guestname") || set_guest_name(hp2, to)) { int e = errno ? errno : EIO;
         if (dm_fs_test_fail("renameback") || rename(hp2, hp)) {   // the rollback fails too: the file stays at the new path with wrong guest-name metadata; do not exit -- inside a transactional save, this transaction's commit is refused (committed version unchanged; recloning restores it)
-            LOG("【红】fs 改名元数据失败且回退失败 errno=%d：%s 留在新路径%s", errno, hp2, in_txn_dir(hp2) ? "，本事务存档提交将被拒" : ""); if (in_txn_dir(hp2)) save_poison(e); }
+            LOG_ERROR("File rename metadata update and rollback both failed: errno=%d path=%s; file remains at new path%s", errno, hp2, in_txn_dir(hp2) ? "; this save transaction will be refused" : ""); if (in_txn_dir(hp2)) save_poison(e); }
         errno = e; return err_res("rename name", hp2); }
     return RES_OK;
 }
@@ -623,7 +623,7 @@ static void dir_snapshot(dirh_t *h, const mount_t *m, const char *rest) {
     char (*names)[0x301] = calloc(2048, sizeof *names);
     const char **all = calloc(65, sizeof *all);
     char *parent = malloc(1024), *guest = malloc(0x301), *rel = malloc(2048), *resolved = malloc(1024);
-    if (!roots || !names || !all || !parent || !guest || !rel || !resolved) die("rom overlay 目录快照分配失败");
+    if (!roots || !names || !all || !parent || !guest || !rel || !resolved) die("Failed to allocate RomFS overlay directory snapshot");
     int nn = 0, nr = 0;
     all[nr++] = m->dir;
     char *save = NULL;
@@ -642,7 +642,7 @@ static void dir_snapshot(dirh_t *h, const mount_t *m, const char *rest) {
         closedir(x);
     }
     h->snap = calloc(nn, sizeof *h->snap); h->nsnap = nn;
-    if (nn && !h->snap) die("rom overlay 目录快照分配失败");
+    if (nn && !h->snap) die("Failed to allocate RomFS overlay directory snapshot");
     for (int j = 0; j < nn; j++) {
         strlcpy(h->snap[j].name, names[j], sizeof h->snap[j].name);
         snprintf(rel, 2048, "%s/%s", rest, names[j]);
@@ -692,7 +692,7 @@ HLE_FORCE("_ZN2nn2fs8MountRomEPKc", "fsp-srv；rom → 宿主 RomFS 目录（无
 HLE_FORCE("_ZN2nn2fs8ReadFileENS0_10FileHandleElPvm", "fsp-srv → pread(2)，须读满", Result, h_fs_ReadFileExact, uint64_t h, int64_t off, void *buf, size_t sz) {
     size_t got = 0; Result r = h_fs_ReadFile(&got, h, off, buf, sz);
     if (r != RES_OK) return r;
-    if (got != sz) { LOG("fs ReadFile 读不满：fd %d 偏移 %lld 要 %zu 得 %zu", (int)h, (long long)off, sz, got); return RES_FAIL; }
+    if (got != sz) { LOG("Short ReadFile result: fd=%d offset=%lld requested=%zu received=%zu", (int)h, (long long)off, sz, got); return RES_FAIL; }
     return RES_OK;
 }
 HLE_FORCE("_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvmRKNS0_10ReadOptionE", "fsp-srv → pread(2)（带读选项的重载，选项宿主不用）", Result, h_fs_ReadFileOpt,

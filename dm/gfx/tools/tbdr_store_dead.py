@@ -2,7 +2,7 @@
 # (sample R, load as an attachment, present X). Attachments are distinguished by (texture, level, layer): clearing another level / layer does not count as clearing it;
 # sample R only records the whole texture and is counted as a read (conservative). Copies / texture clears are not in the dump and cannot be seen here, so the result is an upper bound; the Z rows of runtime DM_NVN_STORESCAN are authoritative. Lookahead runs to the end of frame B; cross-frame history reads count as "needed". Loads are not judged (that requires proving full coverage).
 import re, sys, collections
-L=[l.split(None,2)[2].strip() if False else l.strip() for l in open(sys.argv[1])]
+L=[(l[l.index('[pass] '):] if '[pass] ' in l else l).strip() for l in open(sys.argv[1])]
 BPP={70:4,71:4,80:4,81:4,90:4,92:4,93:4,115:8,125:16,55:4,25:2,65:4,105:4,103:4,252:4,250:2,260:5,255:4,10:1,20:2,30:2,60:4}
 ev=[]   # (frame, kind, pass, ser, load|clear, bytes, fmt, w, h, slot, (lv, sl))
 for l in L:

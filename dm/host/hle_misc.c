@@ -3,11 +3,11 @@
 #include "hle.h"
 
 // Return from the unavailable shop applet as though the player closed it.
-HLE_FORCE("_ZN2nn2ec30ShowShopApplicationInformationENS_13ApplicationIdE", "商店小程序，排除范围；剪口：空操作", void, h_ec_AppInfo1, void) { LOG("ec::ShowShopApplicationInformation（剪）：宿主没有商店"); }
+HLE_FORCE("_ZN2nn2ec30ShowShopApplicationInformationENS_13ApplicationIdE", "商店小程序，排除范围；剪口：空操作", void, h_ec_AppInfo1, void) { LOG("ec::ShowShopApplicationInformation unavailable; host has no shop service"); }
 
 // ---------- err error applet: printed by the host ----------
 HLE_FORCE("_ZN2nn3err9ShowErrorENS_6ResultE", "错误显示小程序；宿主打印模块 / 描述号", void, h_err_ShowError, Result r) {
-    LOG("err::ShowError Result=%#x（模块 %u，描述 %u）", r, r & 0x1ff, (r >> 9) & 0x1fff);
+    LOG("Guest error display requested: result=%#x module=%u description=%u", r, r & 0x1ff, (r >> 9) & 0x1fff);
 }
 
 // ---------- ngc profanity filter: the word list is in a system data save (mounted via IPC); single-player has no text visible to others, always judged as no profanity ----------

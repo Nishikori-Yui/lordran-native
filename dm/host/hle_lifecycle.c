@@ -9,13 +9,13 @@
 void hlecount_flush(void);
 void dm_host_shutdown(const char *why) {
     static _Atomic int once; if (atomic_exchange(&once, 1)) return;
-    uint64_t t0 = now_ns(); LOG("收到 %s：优雅退出", why);
+    uint64_t t0 = now_ns(); LOG("Received %s; shutting down gracefully", why);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1500 * NSEC_PER_MSEC), dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
-        LOG("【红】优雅退出 1.5 秒未完成，直接退出"); _exit(0); });
+        LOG_ERROR("Graceful shutdown exceeded 1.5 s; forcing process exit"); _exit(0); });
     hlecount_flush();                               // DM_HLECOUNT: _exit does not run atexit, write a copy here
     dm_audio_suspend(1);
     dm_gfx_suspend(1);
-    LOG("优雅退出完成（%.3f 秒）", (now_ns() - t0) / 1e9);
+    LOG("Graceful shutdown completed: elapsed_s=%.3f", (now_ns() - t0) / 1e9);
     _exit(0);
 }
 void dm_term_install(void) {
