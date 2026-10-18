@@ -50,7 +50,7 @@ static int busy_wait(range_t *r, uintptr_t p) {
         if (n & 0x3ff) continue;
         uint64_t now = mach_absolute_time(); if (!t0) t0 = now;
         if ((now - t0) * g_tb.numer / g_tb.denom > (uint64_t)BUSY_WAIT_MS * 1000000ull) {
-            if (!atomic_exchange(&g_busy_red, 1)) LOG("【红】脏页跟踪：页 %p 停在「忙」超过 %d 毫秒（改保护的线程没走完），不再等", (void *)(r->base + (p << g_shift)), BUSY_WAIT_MS);
+            if (!atomic_exchange(&g_busy_red, 1)) LOG_ERROR("Dirty-page tracker timed out on busy page=%p after %d ms; protection update did not complete", (void *)(r->base + (p << g_shift)), BUSY_WAIT_MS);
             return 0; }
         sched_yield();
     }
@@ -108,7 +108,7 @@ void nvn_dirty_add_range(const void *mem, size_t size) {
     if (slot < 0) {
         if (n >= MAX_RANGE) {
             int expected = 0;
-            if (atomic_compare_exchange_strong(&g_overflow_logged, &expected, 1)) LOG("【红】脏页跟踪区间已满（%d），池 %p 不跟踪", MAX_RANGE, mem);
+            if (atomic_compare_exchange_strong(&g_overflow_logged, &expected, 1)) LOG_ERROR("Dirty-page tracking ranges exhausted: capacity=%d untracked_pool=%p", MAX_RANGE, mem);
             pthread_mutex_unlock(&g_slot_mu); return;
         }
         slot = n;
@@ -121,7 +121,7 @@ void nvn_dirty_add_range(const void *mem, size_t size) {
     _Atomic uint64_t *gen = r->gen;
     if (r->cap < np) {
         state = calloc(np, 1); gen = calloc(np, sizeof *gen);
-        if (!state || !gen) die("脏页表分配失败（%zu 页）", np);
+        if (!state || !gen) die("Failed to allocate dirty-page table: pages=%zu", np);
         // The old array is not freed: the signal handler may still have a very brief stale reader; leak = 9 bytes per page.
         r->cap = np;
     } else {

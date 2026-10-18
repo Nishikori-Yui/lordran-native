@@ -38,5 +38,4 @@ nvn_img_slots	8
 nvn_ssbo_bases	vs=0x110 ps=0x510 cs=0x310
 shader_groups	FRPG_Menu=menu DbgFont=debug FRPG_Filter=filter FRPG_Sfx=effect dvdbnd=engine
 shader_note	Dark Souls Remastered shaders
-shader_main_glslc	on
 shader_separable	on

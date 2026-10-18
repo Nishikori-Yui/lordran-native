@@ -5,7 +5,6 @@
 #include "../hle_swkbd.c"
 
 Result swkbd_show(void *out, const void *arg, int (*input)(const char *, const char *, const char *, const char *, int, char *, int));
-void dm_ui_text_entered(const char *text) { (void)text; }   // the real implementation is in dm_cursor.c (the naming page auto-accepts once input is finished)
 int front_text_input(const char *t, const char *s, const char *g, const char *i, int m, char *o, int c) { (void)t; (void)s; (void)g; (void)i; (void)m; (void)o; (void)c; return -1; }
 
 static int fails, checks;

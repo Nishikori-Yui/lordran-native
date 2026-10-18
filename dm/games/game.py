@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
-# Game profiles: dm/games/<base game title ID>/game.tsv (key <TAB> values..., lines starting with # are comments) + the shader tables and dmsh_chain.h in the same folder. The shader tools, the host build, iOS packaging and the NSP script take each game's constants from here.
-# Usage: game.py list (list all profiles); game.py <id> <key> (print that key's value, for shell); game.py header <id> <out.h> (generate the host's game_profile.h)
-#   From Python: import game; g = game.load() (takes DM_GAME; there is no default game: unset is an error that lists the profiles); game.by_title(title ID); g.get / g.words / g.int / g.builds() / g.table(file name)
+# Dark Souls Remastered profile: dm/games/01004AB00A260000/game.tsv plus
+# the shader tables and dmsh_chain.h in the same folder. The tools keep this
+# small profile API because the build pipeline uses it for generated headers
+# and shader metadata, but this repository intentionally has one supported game.
+# Usage: game.py list; game.py <id> <key>; game.py header <id> <out.h>.
+# From Python: import game; g = game.load(); g.get / g.words / g.int /
+# g.builds() / g.table(file name).
 import os, re, sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 STAGES = {'vs': 0, 'ps': 1, 'gs': 2, 'hs': 3, 'ds': 4, 'cs': 5}   # NVN shader stage numbers
+DARK_SOULS_ID = '01004AB00A260000'
 
 
 class Game:
@@ -44,23 +49,22 @@ class Game:
 
 
 def load(name=None):
-    name = name or os.environ.get('DM_GAME')
-    if not name:   # there is no default game
-        have = ', '.join(f'{g.id} ({g.get("name", "")})' for g in all_games())
-        raise SystemExit(f'【红】没设 DM_GAME：用基础版标题号选游戏档案：{have} | DM_GAME is not set: pick a game profile by base game title ID: {have}')
+    name = name or os.environ.get('DM_GAME') or DARK_SOULS_ID
     d = Path(name) if os.sep in str(name) else HERE / name
-    if not (d / 'game.tsv').exists():   # profile folders are named after the base game's title ID (the old names smbw / fe_engage are gone)
-        have = ', '.join(f'{g.id} ({g.get("name", "")})' for g in all_games())
-        raise SystemExit(f'【红】没有游戏档案 {d / "game.tsv"}（DM_GAME / GAME 用基础版标题号：{have}）| no game profile {d / "game.tsv"} (DM_GAME / GAME take the base game title ID: {have})')
+    if d.name != DARK_SOULS_ID or not (d / 'game.tsv').exists():
+        raise SystemExit(f'【红】本仓库只支持黑暗之魂：重制版档案 {HERE / DARK_SOULS_ID} | this repository only supports the Dark Souls Remastered profile: {HERE / DARK_SOULS_ID}')
     return Game(d)
 
 
 def all_games():
-    return [Game(d) for d in sorted(HERE.iterdir()) if (d / 'game.tsv').exists()]
+    # Keep the small enumeration API used by diagnostics, but make the
+    # repository's single supported profile explicit rather than discovering
+    # unrelated folders.
+    return [load()]
 
 
 def by_title(tid):
-    return next((g for g in all_games() if g.title_id == tid), None)
+    return load() if tid == int(DARK_SOULS_ID, 16) else None
 
 
 def header(g):

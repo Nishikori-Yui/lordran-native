@@ -1,0 +1,327 @@
+[
+  {
+    "file": "dm/host/dm_log.h",
+    "source": "if (!strncmp(format, \"【红】\", strlen(\"【红】\"))) { prefix_level = \"ERROR\"; format += strlen(\"【红】\"); }",
+    "purpose": "Legacy input marker is consumed, never emitted"
+  },
+  {
+    "file": "dm/host/front_mac.m",
+    "source": "a.messageText = title && *title ? @(title) : @\"输入\";",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/host/front_mac.m",
+    "source": "[a addButtonWithTitle:@\"确定\"]; [a addButtonWithTitle:@\"取消\"];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "_ball.accessibilityLabel = T(@\"Controls menu\", @\"控制菜单\");",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "NSString *headingText = page == PageMenu ? T(@\"Controls\", @\"控制菜单\") : page == PageInput ? T(@\"Input\", @\"输入设置\") : T(@\"Button appearance\", @\"按键外观\");",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "_ball.accessibilityHint = T(@\"Tap to open. Drag to dock at an edge.\", @\"点按展开，拖动后吸附屏幕边缘。\");",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "_ball.accessibilityValue = T(@\"Editing\", @\"编辑中\");",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addButton:T(@\"Button appearance\", @\"按键外观\") symbol:@\"paintbrush\" action:@selector(buttonAppearance)].enabled = _gamepad != nil;",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "_ball.accessibilityValue = T(@\"Open\", @\"已展开\");",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addButton:T(@\"Edit controls\", @\"调整按键\") symbol:@\"hand.draw\" action:@selector(editControls)].enabled = _gamepad != nil;",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addSwitch:T(@\"Show FPS\", @\"显示帧率\") on:self.showsFPS action:@selector(fpsToggled:)];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "_export = [self addButton:T(@\"Export log\", @\"导出日志\") symbol:@\"square.and.arrow.up\" action:@selector(exportLog)];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "NSArray *languages = DmAppUsesChinese() ? @[@\"英语\", @\"简体中文\"] : @[@\"English\", @\"Simplified Chinese\"];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "NSString *name = index == 1 ? T(@\"Simplified Chinese\", @\"简体中文\") : T(@\"English\", @\"英语\");",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addChoice:T(@\"Language\", @\"语言\") choices:languages selected:DmAppUsesChinese() ? 1 : 0 change:^(NSInteger index) {",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "NSArray *modes = DmAppUsesChinese() ? @[@\"主机模式\", @\"掌机模式\"] : @[@\"Console mode\", @\"Handheld mode\"];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "NSString *name = mode == 0 ? T(@\"Handheld mode\", @\"掌机模式\") : T(@\"Console mode\", @\"主机模式\");",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addChoice:T(@\"Operation mode\", @\"运行模式\") choices:modes selected:DmAppOperationMode() == 0 ? 1 : 0 change:^(NSInteger index) {",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addButton:T(@\"Input & controller\", @\"触控与手柄\") symbol:@\"gamecontroller\" action:@selector(inputSettings)].enabled = _gamepad != nil;",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addButton:T(@\"Close\", @\"关闭\") symbol:nil action:@selector(closeMenu)];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[_gamepad setInputSuspended:NO]; _ball.accessibilityValue = T(@\"Closed\", @\"已收起\");",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "done.title = T(@\"Done\", @\"确定\"); done.image = [UIImage systemImageNamed:@\"checkmark\"];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "_confirm.accessibilityLabel = T(@\"Done editing controls\", @\"确定按键调整\");",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[alert addAction:[UIAlertAction actionWithTitle:T(@\"Cancel\", @\"取消\") style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[alert addAction:[UIAlertAction actionWithTitle:T(@\"Restart now\", @\"立即重启\") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self requestRestart:T(@\"Restart required\", @\"需要重启\")",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "message:[NSString stringWithFormat:T(@\"Switch to %@ and restart the game?\", @\"切换到 %@ 并重启游戏？\"), name]",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "_selection = [self addChoice:T(@\"Control\", @\"按键\") choices:names selected:_gamepad.selectedControl change:^(NSInteger c) {",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "UIButtonConfiguration *config = _selection.configuration; config.title = [NSString stringWithFormat:@\"%@: %@\", T(@\"Control\", @\"按键\"), DmControlName(c)]; _selection.configuration = config;",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addSlider:SliderAngle title:T(@\"Rotation\", @\"旋转\") min:-180 max:180 value:0];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addSlider:SliderOpacity title:T(@\"Opacity\", @\"透明度\") min:0.1 max:1 value:1];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "NSArray *shapes = DmAppUsesChinese() ? @[@\"默认\", @\"圆形\", @\"方形\", @\"水滴\", @\"圆角\"] : @[@\"Default\", @\"Circle\", @\"Square\", @\"Drop\", @\"Rounded\"];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "NSArray *names = DmAppUsesChinese() ? @[@\"默认\", @\"圆形\", @\"方形\", @\"水滴\", @\"圆角\"] : @[@\"Default\", @\"Circle\", @\"Square\", @\"Drop\", @\"Rounded\"];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "UIButton *shapeButton = [self addChoice:T(@\"Shape\", @\"形状\") choices:shapes selected:[_gamepad.profile styleForControl:_gamepad.selectedControl].shape change:^(NSInteger shape) {",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "config = shape.configuration; config.title = [NSString stringWithFormat:@\"%@: %@\", T(@\"Shape\", @\"形状\"), names[s.shape]]; shape.configuration = config;",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addButton:T(@\"Reset this control\", @\"重置此按键\") symbol:@\"arrow.counterclockwise\" action:@selector(resetSelected)];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addText:T(@\"Position and size are adjusted directly in Edit controls.\", @\"位置和大小请在调整按键中直接拖动。\") small:YES];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "_sliders[SliderAngle].value = s.angle; _values[SliderAngle].text = [NSString stringWithFormat:T(@\"Rotation: %.0f°\", @\"旋转：%.0f°\"), s.angle];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "_sliders[SliderOpacity].value = s.opacity; _values[SliderOpacity].text = [NSString stringWithFormat:T(@\"Opacity: %.0f%%\", @\"透明度：%.0f%%\"), s.opacity * 100];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "_values[SliderDeadzone].text = [NSString stringWithFormat:T(@\"Stick deadzone: %.0f%%\", @\"摇杆死区：%.0f%%\"), slider.value * 100];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "_values[SliderDeadzone].text = [NSString stringWithFormat:T(@\"Stick deadzone: %.0f%%\", @\"摇杆死区：%.0f%%\"), _gamepad.profile.deadzone * 100];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addButton:T(@\"Back\", @\"返回\") symbol:@\"chevron.left\" action:@selector(back)];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "NSArray *modes = DmAppUsesChinese() ? @[@\"摇杆\", @\"滑屏\"] : @[@\"Joystick\", @\"Swipe\"];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addChoice:T(@\"Left\", @\"左侧\") choices:modes selected:_gamepad.profile.leftMode change:^(NSInteger mode) {",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addChoice:T(@\"Right\", @\"右侧\") choices:modes selected:_gamepad.profile.rightMode change:^(NSInteger mode) {",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addText:T(@\"Swipe empty space to move or look. If both sides use swipe, each uses its own half.\", @\"在空白处滑动以移动或转动视角；两侧都选滑屏时，分别使用左右半屏。\") small:YES];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addSwitch:T(@\"D-pad & L3/R3\", @\"十字键与按压键\") on:_gamepad.profile.fullLayout action:@selector(layoutToggled:)];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "if (controllers.count > 1) [self addChoice:T(@\"Controller\", @\"当前手柄\") choices:controllers selected:_gamepad.activeControllerIndex change:^(NSInteger index) { [weakSelf.gamepad selectController:index]; }];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "NSArray *mapping = DmAppUsesChinese() ? @[@\"按位置\", @\"自动识别\", @\"Xbox 字母\"] : @[@\"Position\", @\"Auto\", @\"Xbox letters\"];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addChoice:T(@\"Face buttons\", @\"ABXY 映射\") choices:mapping selected:_gamepad.profile.faceMapping change:^(NSInteger mode) {",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addText:T(@\"Position: east A, south B. Auto: Nintendo letters on Switch; Xbox letters on Xbox and PlayStation.\", @\"按位置：右 A、下 B。自动：Switch 按任天堂字母，Xbox 与 PlayStation 按 Xbox 布局。\") small:YES];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addSlider:SliderDeadzone title:T(@\"Stick deadzone\", @\"摇杆死区\") min:0.05 max:0.35 value:_gamepad.profile.deadzone];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addSwitch:T(@\"Hide touch controls with controller\", @\"连手柄时隐藏触控\") on:_gamepad.profile.hideWithController action:@selector(hideToggled:)];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addText:T(@\"Pair a controller in iOS Bluetooth settings. Shoulders, triggers, stick clicks, menu and options are supported when present.\", @\"在 iOS 蓝牙设置中配对手柄；支持手柄提供的肩键、扳机、摇杆按压、菜单与选项键。\") small:YES];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlProfile.m",
+    "source": "@\"+\", @\"−\", @\"D-pad / 十字键\", @\"Left stick / 左摇杆\", @\"Right stick / 右摇杆\"];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmDiagnostics.m",
+    "source": "UIAlertController *alert = [UIAlertController alertControllerWithTitle:@\"Export failed / 导出失败\"",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmGamepad.m",
+    "source": "for (GCController *c in _controllers) [names addObject:c.vendorName ?: c.productCategory ?: @\"Controller / 手柄\"];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmGamepad.m",
+    "source": "if (!_activeController) return @\"No controller connected / 未连接手柄\";",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmGamepad.m",
+    "source": "return [NSString stringWithFormat:@\"%@ (%ld) / 已连接\", _activeController.vendorName ?: _activeController.productCategory, (long)_controllers.count];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/front_ios.m",
+    "source": "message.text = @\"The previous session did not finish normally.\\nExport diagnostics before trying again.\\n\\n上次运行未正常结束，可先导出诊断，再尝试启动。\";",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/front_ios.m",
+    "source": "[start setTitle:@\"Start game / 启动游戏\" forState:UIControlStateNormal];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/front_ios.m",
+    "source": "lb.text = @\"Game files not found.\\nPut the RomFS folder into this App's Documents as \\\"romfs\\\" (Files app), then restart.\\n\\n没找到游戏文件：把 RomFS 文件夹以 romfs 为名放进本 App 的「文稿」后重开。\";",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/front_ios.m",
+    "source": "NSString *m = err == ENOSPC ? @\"存储空间不足，进度没有存上。请清理空间后再存档。\\nStorage is full, so progress was not saved. Free up space and save again.\"",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/front_ios.m",
+    "source": ": [NSString stringWithFormat:@\"存档写入失败（errno %d），进度没有存上。\\nSaving failed (errno %d); progress was not saved.\", err, err];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/front_ios.m",
+    "source": "UIAlertController *a = [UIAlertController alertControllerWithTitle:@\"存档失败 / Save failed\" message:m preferredStyle:UIAlertControllerStyleAlert];",
+    "purpose": "Localized user interface text"
+  }
+]

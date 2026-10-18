@@ -4,7 +4,7 @@
 // SetResultHandledByApplication only write SDK-internal switches and are not taken over.
 #include "hle.h"
 
-static void once(const char *what) { LOG("init 接管：%s（空操作）", what); }
+static void once(const char *what) { LOG("Initialization override: symbol=%s; no-op", what); }
 
 HLE_FORCE("nndiagStartup", "连 lm 日志服务；诊断日志改由宿主直接输出", void, h_nndiagStartup, void) { once("nndiagStartup"); }
 HLE_FORCE("_ZN2nn2oe10InitializeEv", "连 am/oe 运行环境服务；运行环境查询逐个接成宿主默认值", void, h_oe_Initialize, void) { once("oe::Initialize"); }

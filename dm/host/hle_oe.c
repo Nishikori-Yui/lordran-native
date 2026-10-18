@@ -2,7 +2,7 @@
 // oe::Initialize is in hle_sdkinit.c, not here.
 // Environment switches: DM_OPMODE=0 handheld / 1 console (default 1, corresponding to the console-mode render profile); DM_LANG=language code (default en-US).
 #include "hle.h"
-#include "dm_uiscreen.h"
+#include "front.h"
 
 // The operation mode is runtime state (the front end can change it: iOS overheat downgrade switches to handheld): the single source is here, taken once from DM_OPMODE at startup, the environment variable is not read again afterwards
 #include <stdatomic.h>
@@ -28,13 +28,13 @@ static void mq_push(uint32_t m) {
     if (m == MSG_FOCUS || m == MSG_OPMODE || m == MSG_PERFMODE)
         for (int i = 0; i < g_mqn; i++)
             if (g_mq[(g_mqh + i) % MQ] == m) { pthread_mutex_unlock(&g_mq_lock); return; }
-    if (g_mqn == MQ) die("oe 通知队列溢出（游戏没在取？）");
+    if (g_mqn == MQ) die("Operation-mode notification queue overflow; guest may not be consuming events");
     g_mq[(g_mqh + g_mqn++) % MQ] = m;
     pthread_cond_broadcast(&g_mq_cond);
     pthread_mutex_unlock(&g_mq_lock);
 }
 void dm_oe_res_changed(void) { if (getenv("DM_TEST_OE_FOCUS_FIRST")) mq_push(MSG_FOCUS);   /* Test: queue 31 behind a focus notification (the order at iOS app startup) */
-    if (g_ntf_perfmode) mq_push(MSG_PERFMODE); else LOG("【红】分辨率要切，但游戏没打开性能模式变化通知"); }   // the render resolution should change (dm_uiscreen.c): make the game re-read the parameter bits
+    if (g_ntf_perfmode) mq_push(MSG_PERFMODE); else LOG_ERROR("Resolution change requested while guest performance-mode notifications are disabled"); }   // notify the game that the render mode changed
 // Operation mode reported to GetOperationMode only (used to make the game reload layouts when switching between controller / touch layouts, dm_padmode.c):
 // m ≥ 0 reports m and pushes one operation-mode notification; m < 0 reports the true value again and pushes one more.
 // The controller style (hle_hid.c connected_id) and performance mode keep their true values, so no "Reconnect controller" prompt appears and the render
@@ -46,7 +46,7 @@ void dm_oe_ui_opmode(int m) { g_ui_opmode = m < 0 ? -1 : m; atomic_store(&g_ui_a
 void dm_set_opmode(int m) {   // called by the front end (overheat downgrade etc.): change the state and push 30 / 31 according to the switches the game has turned on
     int old = dm_opmode(); if (old == m) return;
     g_opmode = m;
-    LOG("oe 运行模式 %d → %d", old, m);
+    LOG("Operation mode changed: %d -> %d", old, m);
     if (g_ntf_opmode) mq_push(MSG_OPMODE);
     if (g_ntf_perfmode) mq_push(MSG_PERFMODE);
 }
@@ -55,10 +55,10 @@ static _Atomic int g_focus = 1; static _Atomic uint64_t g_focus_in_ns;   // time
 int dm_focus_now(void) { return atomic_load(&g_focus); }
 uint64_t dm_focus_in_since(void) { return atomic_load(&g_focus_in_ns); }   // graphics layer display link watchdog: stalls are only computed while active, counted from activation (nvn_mtl.m mtl_present_wait)
 void dm_focus_set(int st) {
-    if (st < 1 || st > 3) die("dm_focus_set 非法状态 %d", st);
+    if (st < 1 || st > 3) die("Invalid focus state: %d", st);
     if (st == 1) atomic_store(&g_focus_in_ns, now_ns());
     if (atomic_exchange(&g_focus, st) == st) return;
-    LOG("oe 焦点状态 → %d", st);
+    LOG("Focus state changed: %d", st);
     mq_push(MSG_FOCUS);
 }
 static int opmode(void) { return dm_opmode(); }
@@ -83,7 +83,7 @@ HLE_FORCE("_ZN2nn2oe18GetPerformanceModeEv", "性能模式查询；与运行模�
 HLE_FORCE("_ZN2nn2oe27GetPerformanceConfigurationENS0_15PerformanceModeE", "查 CPU/GPU 频率档（经 apm）；按模式报缺省档", int, h_oe_GetPerfCfg, int mode) { return mode == 1 ? 0x00010001 : 0x00010000; }
 HLE_FORCE("_ZN2nn2oe24SetAlbumImageOrientationENS_5album16ImageOrientationE", "截图方向（经 am）；宿主无系统截图", void, h_oe_AlbumOrient, int o) { (void)o; }
 HLE_FORCE("_ZN2nn2oe27SetPerformanceConfigurationENS0_15PerformanceModeEi", "设 CPU/GPU 频率档；宿主不调频", void, h_oe_SetPerfCfg, int mode, int cfg) {
-    LOG("oe::SetPerformanceConfiguration mode=%d cfg=%#x（忽略）", mode, cfg);
+    LOG("oe::SetPerformanceConfiguration ignored: mode=%d configuration=%#x", mode, cfg);
 }
 
 // Scripted state changes (verify lifecycle / overheat downgrade without a window): DM_OE_SCRIPT="focus=3@10,focus=1@20,opmode=0@30" (second N); bg=1 / bg=0 run the whole background round trip (see script_bg)
@@ -106,20 +106,20 @@ static void *oe_script(void *arg) {
             need++; while (atomic_load(&g_ls_unloads) < need) usleep(20000);
             usleep((useconds_t)(at * 1e6));
         } else {
-            if (sscanf(tok, "%15[a-z]=%d@%lf", key, &v, &at) != 3) die("DM_OE_SCRIPT 项「%s」格式应为 键=值@秒 或 键=值@ingame+秒", tok);
+            if (sscanf(tok, "%15[a-z]=%d@%lf", key, &v, &at) != 3) die("Invalid DM_OE_SCRIPT entry: %s; expected key=value@seconds or key=value@ingame+seconds", tok);
             uint64_t due = t0 + (uint64_t)(at * 1e9), now = now_ns();
             if (due > now) usleep((useconds_t)((due - now) / 1000));
         }
         if (!strcmp(key, "focus")) dm_focus_set(v);
         else if (!strcmp(key, "opmode")) dm_set_opmode(v);
         else if (!strcmp(key, "bg")) script_bg(v);
-        else die("DM_OE_SCRIPT 未知键「%s」（focus / opmode / bg）", key);
+        else die("Unknown DM_OE_SCRIPT key: %s; expected focus, opmode or bg", key);
     }
     return NULL;
 }
 static void oe_script_start(void) {
     const char *e = getenv("DM_OE_SCRIPT"); if (!e) return;
-    pthread_t th; if (pthread_create(&th, NULL, oe_script, strdup(e))) die("DM_OE_SCRIPT 线程");
+    pthread_t th; if (pthread_create(&th, NULL, oe_script, strdup(e))) die("Failed to create operation-mode script thread");
     pthread_detach(th);
 }
 static pthread_once_t g_oe_once = PTHREAD_ONCE_INIT;
@@ -129,99 +129,7 @@ HLE_FORCE("_ZN2nn2oe20SetFocusHandlingModeENS0_17FocusHandlingModeE", "前后台
 
 // Notification: returns bool (w0), the host has no system notifications
 // ---------- 3D internal render scale ----------
-// The game has a static 3D render scale built in: renderer object (global pointer [main+0x31e0848]) member +0x66a4 (float, always 1.0 in the original game).
-// The resolution change function main+0x8582f0(output width, output height) → main+0x1627ef0 rebuilds the 3D target as "scale × output width/height" (+0xee78 / +0xee7c),
-// the UI layer and Final Result are still built at the output size (+0xee88 / +0xee8c), and at the end the game's own upscale shader ps_upsample_p brings it back to the output size.
-// The boot flow does not call 0x8582f0, so it has to be called once actively; the call site must be where the game main thread fetches system notifications -- the same context in which the game itself handles mode switches
-// (calling it in the present HLE self-deadlocks: the render lock is already held by the present path).
-// Default: iOS 0.75, Mac host 1.0 (the screenshot gate compares against Switch ground truth); DM_3D_SCALE=0.5–1.0 overrides.
-// The visual ruler ground truth phase (A / B of DM_NVN_RULER=1) forces 1.0, it only takes effect after switching to the mode under test.
-// Dynamic scale (system throttling looks at utilization, the thermal state is only a coarse signal → adjust by actual dropped frames): the controller consumes the actual present intervals reported by the present thread
-// (same source as perf.txt), three levels configured value (0.75) → 0.72 → 0.70; lower limit 0.70 (0.65 is visibly different). For the rules see scale3d_ctl_step.
-// Switches: DM_3D_SCALE_DYN=0 off; DM_THERMAL_NOFALLBACK=1 (power / frame time measurement) also turns it off -- the scale must be pinned during measurement.
-// DM_3D_SCALE_DYN_INJECT=start frame-end frame: diagnostic, within these frames every interval fed to the controller is taken as 25 ms (the Mac has no present timestamps, this is used to verify the whole lower / raise chain).
-#include <TargetConditionals.h>
-#define SCALE3D_MIN 0.70f
-#define SCALE3D_MID 0.72f
-// Pure-function controller (unit test t_oe.c feeds sequences directly): level 0 = configured value, larger is lower. Safety valve: only acts on perceptible dropped frames.
-//   Window: one window per 2 seconds of accumulated present intervals, frame rate in the window = presented frames ÷ sum of intervals (frames dropped by the system are not counted, that time falls into the interval of the next presented frame).
-//   Lower: frame rate of two consecutive windows both < target × 0.92 (55.2 at 60 fps) → lower one level.
-//   Raise: frame rate of 10 consecutive windows (20 seconds) all ≥ target × 0.97 (58.2 at 60 fps) → raise one level; if knocked back within 10 seconds of going up, the next raise needs 30 consecutive windows (60 seconds).
-//   Judging is suspended for 2 seconds after a level change (rebuilding the 3D target itself causes a hitch). Target frame rate = 1000 ÷ period_ms (0 = 60 fps).
-// The old rule (lower as soon as slow frames > 5% in a 2-second window, raise needs 60 consecutive seconds with zero slow frames, knock-back ×3) lowered too easily and almost never came back up: on the test iPhone, of 582 run entries 33 were lowered and 0 came back up,
-// and two real-device logs were also lowered to 0.70 at thermal state 2 with frame rate 59.8–60; the slow frame count is kept only in the diagnostic log and no longer takes part in the decision.
-typedef struct { int level, max_level; double period_ms; uint64_t hold_until, last_up; double win_ms, last_fps; unsigned win_n; int bad_run, good_run, need_good; } scale3d_ctl;
-#define S3_SEC 1000000000ull
-static void scale3d_ctl_hold(scale3d_ctl *c, uint64_t now, uint64_t ns) {   // suspend judging for a while (after entering a run / returning to foreground / changing level): the window and the consecutive counts are cleared
-    if (now + ns > c->hold_until) c->hold_until = now + ns;
-    c->win_ms = 0; c->win_n = 0; c->bad_run = c->good_run = 0;
-}
-static int scale3d_ctl_step(scale3d_ctl *c, double iv_ms, uint64_t now) {   // returns the current level
-    if (now < c->hold_until || iv_ms <= 0) return c->level;   // judging suspended / no reading (0) / dropped (−1)
-    c->win_ms += iv_ms; c->win_n++;
-    if (c->win_ms < 2000) return c->level;
-    double tgt = 1000.0 / (c->period_ms > 0 ? c->period_ms : 1000.0 / 60), fps = c->win_n * 1000.0 / c->win_ms;
-    c->last_fps = fps; c->win_ms = 0; c->win_n = 0;
-    if (fps < tgt * 0.92) {
-        c->good_run = 0;
-        if (++c->bad_run >= 2 && c->level < c->max_level) {
-            if (c->last_up && now - c->last_up < 10 * S3_SEC) c->need_good = 30;   // dropped again within 10 seconds of going up: the next raise needs 60 seconds
-            c->level++; scale3d_ctl_hold(c, now, 2 * S3_SEC);
-        }
-    } else {
-        c->bad_run = 0;
-        if (fps >= tgt * 0.97) { if (++c->good_run >= (c->need_good ? c->need_good : 10) && c->level > 0) { c->level--; c->last_up = now; c->need_good = 0; scale3d_ctl_hold(c, now, 2 * S3_SEC); } }
-        else c->good_run = 0;
-    }
-    return c->level;
-}
-static _Atomic int g_scale3d_level;
-static _Atomic int g_scale3d_resumed;
-void dm_3d_scale_resumed(void) { atomic_store(&g_scale3d_resumed, 1); }   // front end: just returned to foreground. Slow frames in the first few seconds back are recovery (surface rebuild, caches gone cold), not GPU pressure: suspend judging for 3 seconds
-void dm_3d_scale_feed(double iv_ms) {   // called by the present thread every frame (forwarded from diag.c dm_perf_present): actual present interval in ms, −1 = dropped, 0 = no reading
-    static scale3d_ctl c = {.max_level = 2}; static int on = -1; static long inj0 = -1, inj1 = -1;
-    if (on < 0) { const char *e = getenv("DM_3D_SCALE_DYN"), *j = getenv("DM_3D_SCALE_DYN_INJECT"); on = !(e && !strcmp(e, "0")) && !getenv("DM_THERMAL_NOFALLBACK");
-        if (j) { inj0 = atol(j); inj1 = strchr(j, '-') ? atol(strchr(j, '-') + 1) : inj0; } }
-    if (!on) return;
-    if (inj0 >= 0) { long f = (long)dm_nvn_frame_count(); iv_ms = f >= inj0 && f <= inj1 ? 25.0 : 16.7; }
-    uint64_t now = now_ns();
-    if (atomic_exchange(&g_scale3d_resumed, 0)) scale3d_ctl_hold(&c, now, 3 * S3_SEC);
-    { static int was; int in = dm_ingame_now();   // not judged outside a run (menu / loading); not judged in the first 20 seconds of a run either (slow frames in the first ten-odd seconds of a run are loading, not GPU pressure)
-      if (!in) { was = 0; scale3d_ctl_hold(&c, now, S3_SEC); return; }
-      if (!was) { was = 1; if (inj0 < 0) scale3d_ctl_hold(&c, now, 20 * S3_SEC); } }
-    { int mtl_fps_target(void); double p = mtl_fps_target() == 30 ? 1000.0 / 30 : 0; if (p != c.period_ms) { c.period_ms = p; scale3d_ctl_hold(&c, now, 2 * S3_SEC); } }   // power-saving mode (30 fps): the target period changes with it, judging is suspended for 2 seconds after the switch
-    int was = c.level, lv = scale3d_ctl_step(&c, iv_ms, now);
-    if (lv != was) LOG("3D 比例控制：窗口帧率 %.1f（目标 %.0f）→ %s到第 %d 级%s", c.last_fps, c.period_ms > 0 ? 1000.0 / c.period_ms : 60.0, lv > was ? "降" : "升", lv, c.need_good ? "（刚升又掉：下次升档要 60 秒）" : "");
-    atomic_store(&g_scale3d_level, lv);
-}
-void dm_3d_scale_hot(int hot) { (void)hot; }   // overheating no longer lowers the level directly (now by actual dropped frames); the symbol is kept for the front end
-static _Atomic float g_scale3d_cur = 1.0f;
-float dm_3d_scale_cur(void) { return atomic_load(&g_scale3d_cur); }
-static void scale3d_tick(void) {
-    static float want_cfg = -1, cur = 1.0f; static module_t *main;
-    if (want_cfg < 0) {
-        const char *e = getenv("DM_3D_SCALE"); want_cfg = TARGET_OS_IPHONE ? 0.75f : 1.0f;
-        if (e) { char *end; float v = strtof(e, &end); if (end == e || *end || !(v >= 0.5f && v <= 1.0f)) die("DM_3D_SCALE 非法：%s（要求 0.5–1.0）", e); want_cfg = v; }
-        for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) main = &g_mod[i];
-        // The addresses above (renderer global pointer, resolution change function, member offsets) all belong to D2R build db0507f3…; in other builds (every Mario version) the same addresses are unrelated data and code
-        // (Mario v0's main+0x8582f0 is in the middle of a static initializer), so writing and calling them would corrupt memory. Only enabled on that build
-        if (main && strcmp(main->build_id, "db0507f36b84200ac05f75d76ed5026f")) { LOG("3D 渲染比例：main 构建 %s 没有对应地址，不调（只认 D2R db0507f3…）", main->build_id[0] ? main->build_id : "（产物无构建号）"); main = NULL; }
-    }
-    int lv = atomic_load(&g_scale3d_level);   // dynamic level: 0 = configured value, 1 = 0.72, 2 = 0.70 (none higher than the configured value)
-    float dyn = lv == 0 ? want_cfg : lv == 1 ? SCALE3D_MID : SCALE3D_MIN; if (dyn > want_cfg) dyn = want_cfg;
-    float want = dm_nvn_ruler_truth() ? 1.0f : dyn;
-    if (want == cur || !main || dm_nvn_frame_count() < 30) return;
-    uintptr_t renderer = *(uintptr_t *)(main->base + 0x31e0848); if (!renderer) return;
-    uint32_t ow = *(uint32_t *)(renderer + 0xee88), oh = *(uint32_t *)(renderer + 0xee8c); if (!ow || !oh) return;
-    { extern void mtl_rt_force_full(int) __attribute__((weak)); if (mtl_rt_force_full) mtl_rt_force_full(4); }   // runtime extrapolation: the few frames before and after a scale change are all drawn in full (the frame where the main pass changes size cannot be extrapolated)
-    float *scale = (float *)(renderer + 0x66a4); dm_guest_write_prepare(scale, sizeof *scale); *scale = want;
-    ((void (*)(uint32_t, uint32_t))(main->base + 0x8582f0))(ow, oh);
-    cur = want; atomic_store(&g_scale3d_cur, want);
-    LOG("3D 渲染比例 %.2f：3D 目标 %ux%u，输出 %ux%u（帧 %llu）", want, *(uint32_t *)(renderer + 0xee78), *(uint32_t *)(renderer + 0xee7c),
-        *(uint32_t *)(renderer + 0xee88), *(uint32_t *)(renderer + 0xee8c), (unsigned long long)dm_nvn_frame_count());
-}
 HLE_FORCE("_ZN2nn2oe25TryPopNotificationMessageEPj", "系统通知队列；前端状态变化入队", unsigned, h_oe_TryPopMsg, uint32_t *msg) {
-    scale3d_tick();
     pthread_once(&g_oe_once, oe_script_start);
     pthread_mutex_lock(&g_mq_lock);
     int ok = g_mqn > 0;
@@ -230,9 +138,8 @@ HLE_FORCE("_ZN2nn2oe25TryPopNotificationMessageEPj", "系统通知队列；前�
     // The resolution parameter bits live in the thread slot, and the game reads them on the thread that fetches notifications to change the render size (on receiving 31 "performance mode changed", from main+0xe10ddc; 30 only updates a flag).
     // When they are read: each time the handler is entered, once after the first notification is fetched (0xe10d5c / 0xe10d60), and notifications fetched later in the loop still use the values from that read. So every time one is taken, the value due at this moment is written into the current thread's slot --
     // writing only when 31 is taken is not enough: when 31 is queued behind another notification (e.g. focus 15), the parameter bits have already been read after fetching 15 (iOS app: the front end did not switch to 16:9, in the Mac host run 31 happened to be queued first).
-    if (ok) for (int i = 0; i < 2; i++) if (g_keyres[i]) pthread_setspecific(g_keyres[i], (void *)dm_game_res(i));
-    if (ok && *msg == MSG_PERFMODE) dm_uiscreen_res_reread();
-    if (ok) LOG("oe 通知被游戏取走：%u", *msg);   // state changes are rare, printing each one does not flood the log
+    if (ok) for (int i = 0; i < 2; i++) if (g_keyres[i]) pthread_setspecific(g_keyres[i], (void *)front_game_res(i));
+    if (ok) LOG("Operation-mode notification consumed by guest: %u", *msg);   // state changes are rare, printing each one does not flood the log
     return ok;
 }
 // The blocking form (Link's Awakening pops on a thread of its own, main+0xfa1ff8): the SDK's version waits on the system event oe::Initialize would have created,

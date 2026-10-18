@@ -8,11 +8,7 @@
 #include "dm.h"
 #include "dm_input.h"
 #include "dm_padmap.h"
-#include "dm_uiscreen.h"
 #include "../gfx/nvn/nvn_mtl.h"
-void mtl_set_ui_rect_fn(void (*fn)(double *y, double *h));
-static void ui_rect_frac(double *fy, double *fh) { int x, y, w, h, rw = 0, rh = 0; dm_ui_rect(&x, &y, &w, &h); if (dm_screen_real(&rw, &rh) && rh > 0) { *fy = (double)y / rh; *fh = (double)h / rh; } }   // Same as front_ios.m: vertical position and height of the UI rectangle (as fractions of the frame height)
-__attribute__((constructor)) static void ui_shift_reg(void) { mtl_set_ui_rect_fn(ui_rect_frac); }   // Must also take effect when running without a window (screenshots / gate checks), so it is not placed where the layer is created
 #include "front.h"
 #include "hle.h"
 #include <signal.h>
@@ -114,7 +110,7 @@ static int key_bit(unsigned short code) {
             case 15: return 3;  // R = use item = Y
             case 5:  return 11; // G = gesture menu = Minus
             case 53: return 10; // Esc = menu = Plus
-            case 12: return dm_uiscreen_ingame() ? 5 : 1; // Q = lock-on in a run, menu cancel outside a run
+            case 12: return 1; // Q = menu cancel
             case 36: return 0;  // Return = confirm as a convenient PC keyboard equivalent
             case 123: return 12; case 126: return 13; case 124: return 14; case 125: return 15;
         }
@@ -182,7 +178,7 @@ static void on_key(NSEvent *e, int down) {
     if (b >= 0) g_key_btn = down ? (g_key_btn | 1ull << b) : (g_key_btn & ~(1ull << b));
     push();
     if (down && (b >= 0 || c == 0 || c == 1 || c == 2 || c == 13)) {
-        LOG("Mac 键盘事件 keyCode=%hu → buttons=%#llx sticks=(%d,%d)", c,
+        LOG("Mac keyboard event: key_code=%hu buttons=%#llx sticks=(%d,%d)", c,
             (unsigned long long)g_btn, (g_d - g_a) * DM_STICK_MAX, (g_w - g_s) * DM_STICK_MAX);
     }
 }
@@ -191,7 +187,7 @@ typedef struct { void (*fn)(void); } guest_arg;
 static void *guest_tramp(void *p) {
     static char alt[65536];                       // The signal alternate stack is per thread; crash printing must also work on the guest thread
     stack_t ss = {.ss_sp = alt, .ss_size = sizeof alt}; sigaltstack(&ss, 0);
-    ((guest_arg *)p)->fn(); LOG("客体线程结束"); exit(0);
+    ((guest_arg *)p)->fn(); LOG("Guest thread exited"); exit(0);
 }
 
 void front_run(void (*guest)(void)) {
@@ -274,7 +270,7 @@ void front_run(void (*guest)(void)) {
             g_mouse_left = g_mouse_right = g_mouse_middle = 0;
             g_mouse_rx = g_mouse_ry = 0; ++g_mouse_motion_seq;
             push(); pad_clear(); dm_touch_set(NULL, 0);
-            LOG("Mac 游戏窗口失去键盘焦点");
+            LOG("Game window lost keyboard focus");
             if (!win.miniaturized) dm_focus_set(2);
         }];
         [nc addObserverForName:NSWindowDidBecomeKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) {
@@ -282,7 +278,7 @@ void front_run(void (*guest)(void)) {
             [win makeFirstResponder:v];
             push();
             pad_refresh();
-            LOG("Mac 游戏窗口重新获得键盘焦点");
+            LOG("Game window gained keyboard focus");
             mtl_link_resume();
             dm_focus_set(1);
         }];

@@ -17,9 +17,8 @@ static ssize_t fake_pwrite(int fd, const void *buf, size_t n, off_t off);
 ssize_t pwrite(int, const void *, size_t, off_t);
 
 struct dm_flags g_flag; uint64_t g_t0_ns; uint64_t now_ns(void) { return 0; }   // stubs for log timestamps and the read path (not used by the write path)
-void dm_prof_add(int id, uint64_t ns, uint64_t b) { (void)id; (void)ns; (void)b; } void dm_guest_write_prepare(void *a, size_t n) { (void)a; (void)n; }
+void dm_guest_write_prepare(void *a, size_t n) { (void)a; (void)n; }
 extern int g_nfail, g_lasterr;                                        // front-end notification count (the strong implementation in t_fs_stub.c replaces the weak one in hle_fs.c)
-void dm_fs_save_poison(int e);
 static int g_mode, g_calls;                   // 0 write normally; 1 always return 0; 2 write only 3 bytes the first time
 static ssize_t fake_pwrite(int fd, const void *buf, size_t n, off_t off) {
     g_calls++;
@@ -138,7 +137,7 @@ int main(void) {
     // 6a Recloning after a refused commit fails: do not exit, the work directory is untouched and the committed version unchanged; the next commit is refused again and the reclone succeeds; the transaction after that commits normally
     setenv("DM_TEST_FS_FAILAT", "reclone:1", 1);
     CHECK(write_save("save:/a", "bad") == RES_OK, "写 a=bad");
-    dm_fs_save_poison(ENOSPC); int nf0 = g_nfail;
+    save_poison(ENOSPC); int nf0 = g_nfail;
     CHECK(h_fs_Commit("save") == RES_FAIL && g_nfail == nf0 + 1, "本事务被拒（重新克隆注入失败），进程还在，前端通知 1 次");
     snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "new"), "已提交目录 a 仍是 new");
     snprintf(p, sizeof p, "%s/a", work); CHECK(same(p, "bad"), "工作目录没删（a 还是 bad）");
@@ -169,17 +168,20 @@ int main(void) {
     snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "ok3"), "已提交 a = ok3");
 
 
-    // Language switch rewriting the settings file (settings_lang_apply): expected values computed by hand from the rule -- only when it "does not match the switch" are Language / VoiceLanguage changed to 0 (English) or 8 (Simplified Chinese); other keys and other languages are untouched
-    { extern int g_t_lang; char sd[1200], sf[1300], gotj[512]; snprintf(sd, sizeof sd, "%s/langt", root); mkdir(sd, 0755); snprintf(sf, sizeof sf, "%s/Settings", sd); mkdir(sf, 0755); snprintf(sf, sizeof sf, "%s/Settings/Settings.json", sd);
-      #define LANGCASE(dm, in, want, what) do { g_t_lang = (dm); put(sf, (in)); settings_lang_apply(sd); FILE *lf = fopen(sf, "rb"); size_t ln_ = lf ? fread(gotj, 1, sizeof gotj - 1, lf) : 0; if (lf) fclose(lf); gotj[ln_] = 0; CHECK(!strcmp(gotj, (want)), "语言开关：%s", (what)); } while (0)
-      LANGCASE(-1, "{ \"Language\": 8, \"VoiceLanguage\": 8 }", "{ \"Language\": 8, \"VoiceLanguage\": 8 }", "没点过应用：一个字不动");
-      LANGCASE(1, "{ \"A\": 1, \"Language\": 8, \"VoiceLanguage\": 8, \"B\": 2 }", "{ \"A\": 1, \"Language\": 0, \"VoiceLanguage\": 0, \"B\": 2 }", "开关 = 英文、文件是简中：文字和语音都改成 0，别的键不动");
-      LANGCASE(0, "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "{ \"Language\": 8, \"VoiceLanguage\": 8 }", "开关 = 中文、文件是英文：都改成 8");
-      LANGCASE(0, "{ \"Language\": 9, \"VoiceLanguage\": 9 }", "{ \"Language\": 9, \"VoiceLanguage\": 9 }", "开关 = 中文、玩家在原版里选了繁中：不改回简中");
-      LANGCASE(1, "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "开关 = 英文、文件已是英文：不动");
-      LANGCASE(1, "{ \"Language\": 0, \"VoiceLanguage\": 8 }", "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "开关 = 英文、文字已英文但语音还是中文：语音跟上");
-      LANGCASE(1, "{ \"Language\": 12 }", "{\n    \"VoiceLanguage\": 0, \"Language\": 0 }", "开关 = 英文、两位数的语言号且没有语音键：改写并补上语音键");
-      g_t_lang = -1; }
+    // Mounting and committing must preserve opaque game data without injecting host settings.
+    char settings[1300], settings_dir[1200];
+    snprintf(settings_dir, sizeof settings_dir, "%s/Settings", save); mkdir(settings_dir, 0755);
+    snprintf(settings, sizeof settings, "%s/Settings.json", settings_dir);
+    const char *original = "{ \"Language\": 9, \"Low Vision Mode\": 1 }";
+    put(settings, original);
+    setenv("DM_TOUCH_DEFAULTS", "1", 1); setenv("DM_STASH_SEED", "1", 1);
+    g_nmnt = 0;
+    CHECK(h_fs_MountSave("save", NULL) == RES_OK, "mount preserves game settings");
+    CHECK(read_fs("save:/Settings/Settings.json", got, sizeof got) && !strcmp(got, original), "settings bytes unchanged on mount");
+    CHECK(h_fs_CommitSaveData("save") == RES_OK && same(settings, original), "SDK 4 CommitSaveData preserves settings");
+    snprintf(p, sizeof p, "%s/ModernSharedStashSoftCoreV2", save);
+    CHECK(access(p, F_OK) != 0, "mount creates no foreign save files");
+    unsetenv("DM_TOUCH_DEFAULTS"); unsetenv("DM_STASH_SEED");
 
     char cmd[1200]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", root); system(cmd);
     printf("== %d 项，失败 %d ==\n", checks, fails);

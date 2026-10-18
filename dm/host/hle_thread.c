@@ -70,7 +70,7 @@ static thr_t *g_wait;          // All waiting threads (lock / condition / addres
 
 static uint32_t h_new(int type, void *obj) {     // Caller holds G
     for (int i = 1; i < MAX_H; i++) if (!g_h[i].type) { g_h[i].type = type; g_h[i].obj = obj; return 0x1000 + i; }
-    die("句柄表满");
+    die("Handle table is full");
 }
 static void *h_peek(uint32_t h, int type) {      // Lookup only, no report
     if (h == H_CUR_THREAD && type == O_THREAD) return pthread_getspecific(g_keythr);
@@ -80,12 +80,12 @@ static void *h_peek(uint32_t h, int type) {      // Lookup only, no report
 }
 static void *h_get(uint32_t h, int type) {       // Reports if not found (a wrong handle is a real error)
     void *o = h_peek(h, type);
-    if (!o) LOG("句柄无效 %#x（要类型 %d）", h, type);
+    if (!o) LOG("Invalid handle: %#x expected_type=%d", h, type);
     return o;
 }
 static thr_t *cur(void) {
     thr_t *t = pthread_getspecific(g_keythr);
-    if (!t) die("非客体线程调用了线程 SVC");
+    if (!t) die("Thread SVC called outside a guest thread");
     return t;
 }
 // Let higher-priority threads of the same core run first: Horizon schedules per core, and when a signal from one thread wakes a higher-priority thread pinned to the same core, that thread preempts at once and runs until it blocks again before the signalling thread continues.
@@ -113,7 +113,7 @@ int dm_yield_to_core_peers(unsigned max_us) {
         if (!busy) return waited;
         if (now_ns() - t0 > (uint64_t)max_us * 1000) {
             static _Atomic int nlog; if (nlog++ < 8) { module_t *m = module_of((void *)blr);   // the first few cap hits: who waits, who keeps running
-                LOG("同核抢占让步到上限：线程 %#x（优先级 %d 核 %d）等 %#x（优先级 %d，最近 svc %#x lr=%s+%#llx）", self->handle, self->prio, self->core, bh, bp, bsvc, m ? m->name : "?", (unsigned long long)(m ? blr - (uint64_t)m->base : blr)); }
+                LOG("Same-core preemption yield limit reached: thread=%#x priority=%d core=%d waiting_for=%#x priority=%d last_svc=%#x lr=%s+%#llx", self->handle, self->prio, self->core, bh, bp, bsvc, m ? m->name : "?", (unsigned long long)(m ? blr - (uint64_t)m->base : blr)); }
             return -1;
         }
         { struct timespec ts = {0, 50000}; nanosleep(&ts, 0); } waited = 1;
@@ -141,16 +141,7 @@ static void wake(thr_t *t, int64_t res) {
     if (self && self != t && !t->host_owned && t->prio < self->prio && t->mask == 1ull << (self->core & 63)) self->yield_pending = 1;
 }
 // Suspend until woken or timed out (ns<0 infinite, 0 immediate timeout); returns wres or R_TIMEOUT
-static int64_t block_inner(thr_t *t, int kind, int64_t ns);
-static int64_t block(thr_t *t, int kind, int64_t ns) {   // Boot timeline: accumulated by wait kind (all threads) + the main thread listed separately
-    if (!g_flag.bootprof) return block_inner(t, kind, ns);
-    uint64_t t0 = now_ns(); int64_t r = block_inner(t, kind, ns); uint64_t d = now_ns() - t0;
-    static const int id[] = {0, PROF_WAIT_LOCK, PROF_WAIT_CV, PROF_WAIT_ADDR, PROF_WAIT_SYNC};
-    dm_prof_add(id[kind & 7], d, 0);
-    if (t->handle == 0x1001) dm_prof_add(PROF_MAIN_WAIT, d, 0);
-    return r;
-}
-static int64_t block_inner(thr_t *t, int kind, int64_t ns) {
+static int64_t block(thr_t *t, int kind, int64_t ns) {
     t->wkind = kind; t->woke = 0; t->next = g_wait; g_wait = t; t->wseq = ++g_wseq;
     if (ns == 0) { wait_unlink(t); t->wkind = 0; return R_TIMEOUT; }
     struct timespec dl;
@@ -211,7 +202,7 @@ static void *thread_main(void *p) {
     guest_thread_init();
     pthread_mutex_lock(&G); while (!t->started) pthread_cond_wait(&t->cv, &G); pthread_mutex_unlock(&G);
     dm_thread_enter(t->entry, t->arg, t->stack_top);   // Does not return: the guest must exit through ExitThread
-    die("客体线程入口返回");
+    die("Guest thread entry returned");
 }
 static void thr_free(thr_t *t) {   // Holding G; unlink from the all-threads chain and free
     for (thr_t **p = &g_all; *p; p = &(*p)->all) if (*p == t) { *p = t->all; break; }
@@ -229,7 +220,7 @@ static void thread_exit(thr_t *t) {
     pthread_mutex_unlock(&G);
     pthread_exit(NULL);
 }
-void dm_thread_returned(void) { die("客体线程入口函数返回（Horizon 要求 ExitThread）"); }
+void dm_thread_returned(void) { die("Guest thread entry returned; Horizon requires ExitThread"); }
 
 // IL2CPP's Boehm garbage collector stops the world: SetThreadActivity(handle, paused) on each thread, GetThreadContext3 to read registers for roots, scan the stack, then resume. Both used to be placeholders that reported success:
 // threads kept running and the context was empty, so the collector missed pointers held only in registers and freed objects still in use (finalizers releasing native resources with them). They now really stop, as on Horizon:
@@ -343,7 +334,7 @@ void dm_guest_clock_advanced(void) {
 
 // Handle thread / synchronization SVCs; returns 1 = handled
 static const char *thr_name(thr_t *t, char *nb, size_t n) {   // SDK ThreadType+0x1a0 = name pointer
-    if (!t->arg) return t->handle == 0x1001 ? "主线程" : "?";
+    if (!t->arg) return t->handle == 0x1001 ? "main thread" : "?";
     uint64_t np = 0; vm_size_t got = 0;
     if (vm_read_overwrite(mach_task_self(), t->arg + 0x1a0, 8, (vm_address_t)&np, &got) || !np ||
         vm_read_overwrite(mach_task_self(), np, n - 1, (vm_address_t)nb, &got)) return "?";
@@ -392,22 +383,22 @@ static void thr_bt(thr_t *t) {
     if (thread_get_state(t->mport, ARM_THREAD_STATE64, (thread_state_t)&st, &n) == KERN_SUCCESS) {
         // Threads not waiting in a system call (running guest code, possibly spinning on a condition): print the callee-saved registers x19–x28, plus 128 bytes of the memory pointed to by each of x19 / x20.
         // The state seen in the occasional "no frames after entering a run": the main thread spins in the job pool's "help while waiting" (main+0x14f08d8), x19 = wait object, x20 = job pool -- only with these can one tell which batch it is waiting for and what the unfinished count is
-        if (t->wkind == 0) { char rl[400]; int q = snprintf(rl, sizeof rl, "[dm]   %#x 寄存器 pc=", t->handle); uint64_t pc = __darwin_arm_thread_state64_get_pc(st); module_t *pm = module_of((void *)pc);
+        if (t->wkind == 0) { char rl[400]; int q = snprintf(rl, sizeof rl, "handle=%#x registers pc=", t->handle); uint64_t pc = __darwin_arm_thread_state64_get_pc(st); module_t *pm = module_of((void *)pc);
             q += pm ? snprintf(rl + q, sizeof rl - q, "%s+%#llx", pm->name, pc - (uint64_t)pm->base) : snprintf(rl + q, sizeof rl - q, "%#llx", pc);
             for (int i = 19; i <= 28; i++) q += snprintf(rl + q, sizeof rl - q, " x%d=%#llx", i, st.__x[i]);
-            fprintf(stderr, "%s\n", rl);
+            DM_LOG_DEBUG("threads", "%s", rl);
             for (int i = 19; i <= 20; i++) { uint8_t raw[128]; vm_size_t g = 0; uint64_t a = st.__x[i];
                 if (a < 0x100000000ull || vm_read_overwrite(mach_task_self(), a, sizeof raw, (vm_address_t)raw, &g) || g != sizeof raw) continue;
                 char hx[420]; int h = 0; for (int k = 0; k < 128; k += 4) h += snprintf(hx + h, sizeof hx - h, "%08x ", *(uint32_t *)(raw + k));
-                uint64_t vt = *(uint64_t *)raw; module_t *vm_ = module_of((void *)vt); char vs[64] = ""; if (vm_) snprintf(vs, sizeof vs, "（首 8 字节 = %s+%#llx）", vm_->name, vt - (uint64_t)vm_->base);
-                fprintf(stderr, "[dm]   %#x x%d → %#llx 起 128 字节%s: %s\n", t->handle, i, a, vs, hx); } }
+                uint64_t vt = *(uint64_t *)raw; module_t *vm_ = module_of((void *)vt); char vs[64] = ""; if (vm_) snprintf(vs, sizeof vs, " (first_8_bytes=%s+%#llx)", vm_->name, vt - (uint64_t)vm_->base);
+                DM_LOG_DEBUG("threads", "handle=%#x x%d=%#llx first_128_bytes%s: %s", t->handle, i, a, vs, hx); } }
         uint64_t fp = __darwin_arm_thread_state64_get_fp(st), lr = __darwin_arm_thread_state64_get_lr(st);
         // Threads running guest code: print the 1 KiB above the stack top as is (the registers saved by the outer frames are in there, so the wait object and resource address can be recovered afterwards)
         if (t->wkind == 0 && module_of((void *)__darwin_arm_thread_state64_get_pc(st))) { uint64_t sp = __darwin_arm_thread_state64_get_sp(st), stk[128]; vm_size_t g = 0;   // Printed only if pc is inside a guest module: a thread in sleep / yield has its pc in a system library, and the stack is not worth looking at
             if (sp > 0x100000000ull && !vm_read_overwrite(mach_task_self(), sp, sizeof stk, (vm_address_t)stk, &g) && g == sizeof stk)
-                for (int r = 0; r < 128; r += 8) fprintf(stderr, "[dm]   %#x 栈 sp+%#05x: %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx\n", t->handle, r * 8,
+                for (int r = 0; r < 128; r += 8) DM_LOG_DEBUG("threads", "handle=%#x stack sp+%#05x: %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx", t->handle, r * 8,
                         stk[r], stk[r + 1], stk[r + 2], stk[r + 3], stk[r + 4], stk[r + 5], stk[r + 6], stk[r + 7]); }
-        char line[1024]; int p = snprintf(line, sizeof line, "[dm]   %#x 回溯:", t->handle), nf = 0; uint64_t wait_fp = 0;
+        char line[1024]; int p = snprintf(line, sizeof line, "handle=%#x backtrace:", t->handle), nf = 0; uint64_t wait_fp = 0;
         for (int k = 0; k < 64 && fp && nf < 20 && p < (int)sizeof line - 40; k++) {
             module_t *m = module_of((void *)lr);
             if (m) { p += snprintf(line + p, sizeof line - p, " %s+%#llx", m->name, lr - (uint64_t)m->base); nf++; }
@@ -416,31 +407,31 @@ static void thr_bt(thr_t *t) {
             if (m && !strcmp(m->name, "main") && lr - (uint64_t)m->base == 0x132db30) wait_fp = fp;   // The return point is inside the resource wait function main+0x132d988 (after it calls the job pool's "help while waiting"): the frame pointer at this moment is its own
             fp = fr[0]; lr = fr[1];
         }
-        fprintf(stderr, "%s\n", line);
+        DM_LOG_DEBUG("threads", "%s", line);
         // The resource wait function main+0x132d988 (prologue sub sp,#0x50 … add x29,sp,#0x40) places the wait object {vtable, pointer to the event pointer} at the bottom of its own stack (0x132db14 stp x8,x23,[sp]),
         // so the wait object = its frame pointer −0x40; what that points to, −0x10 = the resource wait object {+0 in-flight job, +8 mutex pointer, +0x10 event pointer}. It is located by the return point 0x132db30, regardless of which instruction of the wait loop the thread is stopped on right now.
         // The old code took "the previous frame" based on 0x14f0934 and was off by one level, reading the resource wait object as the wait object; 「在途作业 为空」(in-flight job is null) and 「事件 / 锁 读不到」(event / lock unreadable) were both misreads
         if (wait_fp) { uint64_t wo[2] = {0, 0}, res[3] = {0, 0, 0}, wjob = 0; vm_size_t g = 0;
             #define RD(addr, buf) ((addr) > 0x100000000ull && !vm_read_overwrite(mach_task_self(), (addr), sizeof(buf), (vm_address_t)(buf), &g) && g == sizeof(buf))
             #define HEX(tag, addr, nbytes) { uint32_t raw[32]; vm_size_t gg = 0; if ((addr) > 0x100000000ull && !vm_read_overwrite(mach_task_self(), (addr), (nbytes), (vm_address_t)raw, &gg) && gg == (nbytes)) { \
-                char hx[300]; int h = 0; for (unsigned q = 0; q < (nbytes) / 4; q++) h += snprintf(hx + h, sizeof hx - h, "%08x ", raw[q]); fprintf(stderr, "[dm]   %#x 作业池等待：%s %#llx: %s\n", t->handle, tag, (unsigned long long)(addr), hx); } \
-                else fprintf(stderr, "[dm]   %#x 作业池等待：%s %#llx 读不到\n", t->handle, tag, (unsigned long long)(addr)); }
+                char hx[300]; int h = 0; for (unsigned q = 0; q < (nbytes) / 4; q++) h += snprintf(hx + h, sizeof hx - h, "%08x ", raw[q]); DM_LOG_DEBUG("threads", "handle=%#x job_pool_wait=%s address=%#llx data=%s", t->handle, tag, (unsigned long long)(addr), hx); } \
+                else DM_LOG_DEBUG("threads", "handle=%#x job_pool_wait=%s address=%#llx unreadable", t->handle, tag, (unsigned long long)(addr)); }
             if (RD(wait_fp - 0x40, wo)) { module_t *vm_ = module_of((void *)wo[0]);
-                fprintf(stderr, "[dm]   %#x 作业池等待：等待对象 %#llx 虚表 %s+%#llx（应为 main+0x20f2408），所指 %#llx\n", t->handle, (unsigned long long)(wait_fp - 0x40), vm_ ? vm_->name : "?", vm_ ? wo[0] - (uint64_t)vm_->base : wo[0], wo[1]);
+                DM_LOG_DEBUG("threads", "handle=%#x wait_object=%#llx vtable=%s+%#llx expected=main+0x20f2408 target=%#llx", t->handle, (unsigned long long)(wait_fp - 0x40), vm_ ? vm_->name : "?", vm_ ? wo[0] - (uint64_t)vm_->base : wo[0], wo[1]);
                 if (RD(wo[1] - 0x10, res)) {
-                    fprintf(stderr, "[dm]   %#x 作业池等待：资源等待对象 %#llx：在途作业 %#llx（%s）、互斥锁 %#llx、事件 %#llx。判别：在途作业为空 = 信号已被某次等待消费；非空且事件未置位 = 完成信号没来；事件已置位 = 等待循环的问题\n",
-                            t->handle, (unsigned long long)(wo[1] - 0x10), res[0], res[0] ? "非空" : "为空", res[1], res[2]);
-                    HEX("事件本体 64 字节", res[2], 64);
-                    HEX("互斥锁本体 32 字节（+8 重入计数、+0x10 持有线程对象、+0x18 锁字 = 持有者句柄）", res[1], 32);
+                    DM_LOG_DEBUG("threads", "handle=%#x resource_wait=%#llx pending_job=%#llx (%s) mutex=%#llx event=%#llx; null job means signal consumed; pending job with unset event means completion not signaled; set event suggests a wait-loop issue",
+                            t->handle, (unsigned long long)(wo[1] - 0x10), res[0], res[0] ? "non-null" : "null", res[1], res[2]);
+                    HEX("event object, 64 bytes", res[2], 64);
+                    HEX("mutex object, 32 bytes (+8 recursion count, +0x10 owner thread object, +0x18 lock word = owner handle)", res[1], 32);
                     // Job object (filled by the submit function main+0x147f154): +0x10 flags (filtered by a per-thread-class mask when taking a job, 0xeda190 / 0xdf8fac), +0x20 next in the queue, dependency table from +0x30 (low 31 bits = count), +0x60 resource, +0x68 pointer to the event pointer
-                    if (res[0]) { HEX("在途作业对象 +0 起 128 字节", res[0], 128); HEX("在途作业对象 +0x80 起 128 字节", res[0] + 0x80, 128); } wjob = res[0]; } }
+                    if (res[0]) { HEX("pending job object, first 128 bytes", res[0], 128); HEX("pending job object, 128 bytes at +0x80", res[0] + 0x80, 128); } wjob = res[0]; } }
             // Job pool: when the thread is stopped on an instruction of the wait loop main+0x14f08d8 itself, x20 is the pool; when it is stopped in a function called from it, x20 cannot be trusted and is not printed
             { uint64_t pc = __darwin_arm_thread_state64_get_pc(st); module_t *pm = module_of((void *)pc); uint64_t off = pm && !strcmp(pm->name, "main") ? pc - (uint64_t)pm->base : 0;
               // Queue (0xeda190): {+0 tail, +8 head, +0x10 count, +0x18 lock}, node +0x10 flags, +0x20 next. Walk from the head for at most 8 nodes to see whether the awaited job is in this pool
-              if (off >= 0x14f0900 && off < 0x14f09b8) { uint64_t qa = st.__x[20] + 0x410, nd = 0; HEX("作业队列头（池 = x20，+0x410 起 32 字节）", qa, 32); int in = 0, cnt = 0;
-                  if (RD(qa + 8, &nd)) for (; nd && cnt < 8; cnt++) { uint64_t nb[5] = {0}; if (!RD(nd, nb)) break; fprintf(stderr, "[dm]   %#x 作业池等待：  队列第 %d 个 %#llx 标志 %#x%s\n", t->handle, cnt, (unsigned long long)nd, (uint32_t)nb[2], nd == wjob ? "（就是被等的作业）" : ""); in |= nd == wjob; nd = nb[4]; }
-                  fprintf(stderr, "[dm]   %#x 作业池等待：被等的作业%s x20 这个池的队列前 %d 个里\n", t->handle, in ? "在" : "不在", cnt); }
-              else fprintf(stderr, "[dm]   %#x 作业池等待：线程不在等待循环自己的指令上，作业池没取\n", t->handle); }
+              if (off >= 0x14f0900 && off < 0x14f09b8) { uint64_t qa = st.__x[20] + 0x410, nd = 0; HEX("job queue head (pool=x20, 32 bytes at +0x410)", qa, 32); int in = 0, cnt = 0;
+                  if (RD(qa + 8, &nd)) for (; nd && cnt < 8; cnt++) { uint64_t nb[5] = {0}; if (!RD(nd, nb)) break; DM_LOG_DEBUG("threads", "handle=%#x queue_index=%d job=%#llx flags=%#x%s", t->handle, cnt, (unsigned long long)nd, (uint32_t)nb[2], nd == wjob ? " (awaited job)" : ""); in |= nd == wjob; nd = nb[4]; }
+                  DM_LOG_DEBUG("threads", "handle=%#x awaited_job=%s within the first %d entries of the x20 pool queue", t->handle, in ? "present" : "absent", cnt); }
+              else DM_LOG_DEBUG("threads", "handle=%#x is outside the job-pool wait loop; pool not inspected", t->handle); }
             #undef RD
             #undef HEX
         }
@@ -448,10 +439,10 @@ static void thr_bt(thr_t *t) {
     thread_resume(t->mport);
 }
 void svc_thread_dump(void) {
-    static const char *kinds[] = {"运行/未在等", "锁", "条件变量", "地址", "同步对象"};
+    static const char *kinds[] = {"running", "mutex", "condition_variable", "address", "synchronization_object"};
     int nh = 0; for (int i = 1; i < MAX_H; i++) nh += g_h[i].type != O_FREE;
-    fprintf(stderr, "[dm] 句柄表占用 %d / %d，累计建线程 %llu\n", nh, MAX_H, g_next_id - 0x51);
-    fprintf(stderr, "[dm] 同核抢占让步 %llu 次，共 %.1f ms，到上限 %llu 次\n", (unsigned long long)g_preempt_n, g_preempt_ns / 1e6, (unsigned long long)g_preempt_cap);
+    DM_LOG_DEBUG("threads", "handles_used=%d handles_capacity=%d threads_created_total=%llu", nh, MAX_H, g_next_id - 0x51);
+    DM_LOG_DEBUG("threads", "same_core_yields=%llu total_ms=%.1f yield_limit_hits=%llu", (unsigned long long)g_preempt_n, g_preempt_ns / 1e6, (unsigned long long)g_preempt_cap);
     for (thr_t *t = g_all; t; t = t->all) {
         module_t *m = module_of((void *)t->last_lr);
         // Thread name: SDK ThreadType+0x1a0 is the name pointer (ThreadManager::SetInitialThreadNameUnsafe 0x34a2a4); x2 of CreateThread = ThreadType*
@@ -461,19 +452,19 @@ void svc_thread_dump(void) {
             if (thread_info(t->mport, THREAD_BASIC_INFO, (thread_info_t)&bi, &n) == KERN_SUCCESS)
                 cpu = bi.user_time.seconds + bi.user_time.microseconds / 1e6 + bi.system_time.seconds + bi.system_time.microseconds / 1e6; }
         char own[96] = ""; if (t->wkind == 1 && t->waddr) { uint32_t w = 0; vm_size_t g2 = 0;   // 0x40000000 | Lock wait: lock word = owner handle | 0x40000000
-            if (!vm_read_overwrite(mach_task_self(), t->waddr, 4, (vm_address_t)&w, &g2)) snprintf(own, sizeof own, " 持有者 %#x", w & ~WAITERS_BIT); }
+            if (!vm_read_overwrite(mach_task_self(), t->waddr, 4, (vm_address_t)&w, &g2)) snprintf(own, sizeof own, " owner=%#x", w & ~WAITERS_BIT); }
         if (t->wkind == 2 && t->waddr) { uint32_t w = 0, k = 0; vm_size_t g2 = 0;              // Condition wait: current values of the associated lock word and the condition key (the deadlock dump lacked this item)
             vm_read_overwrite(mach_task_self(), t->waddr, 4, (vm_address_t)&w, &g2); vm_read_overwrite(mach_task_self(), t->wkey, 4, (vm_address_t)&k, &g2);
-            snprintf(own, sizeof own, " 锁字 %#x 条件键 %#llx=%#x", w, t->wkey, k); }
+            snprintf(own, sizeof own, " lock_word=%#x condition_key=%#llx=%#x", w, t->wkey, k); }
         uint8_t raw[64]; vm_size_t g3 = 0;                                                   // Raw 64 bytes of the object being waited on (the structure holding the read-write lock / condition variable): to see the counts and the owner
         int have_raw = (t->wkind == 1 || t->wkind == 2 || t->wkind == 3) && t->waddr && !vm_read_overwrite(mach_task_self(), t->waddr & ~0xfull, 64, (vm_address_t)raw, &g3) && g3 == 64;
         char life[96]; uint64_t nowns = now_ns();
-        if (t->exited) snprintf(life, sizeof life, " 建于拍 %u、退于拍 %u（%.1f 秒前）", t->born_tick, t->exit_tick, (nowns - t->exit_ns) / 1e9); else if (!t->born_ns) snprintf(life, sizeof life, " 进程启动时就在"); else snprintf(life, sizeof life, " 建于拍 %u（%.1f 秒前）", t->born_tick, (nowns - t->born_ns) / 1e9);
-        fprintf(stderr, "[dm] 线程 %#x 「%s」优先级 %d 核 %d 掩码 %#llx CPU %.2fs svc %llu %s%s%s 等:%s addr=%#llx%s 最近 svc %#x lr=%s+%#llx\n", t->handle, nm, t->prio, t->core, (unsigned long long)t->mask,
-                cpu, t->nsvc, t->exited ? "已退出" : "", t->started ? "" : "未启动", life, kinds[t->wkind & 7], t->waddr, own, t->last_svc,
+        if (t->exited) snprintf(life, sizeof life, " created_tick=%u exited_tick=%u elapsed_s=%.1f", t->born_tick, t->exit_tick, (nowns - t->exit_ns) / 1e9); else if (!t->born_ns) snprintf(life, sizeof life, " present_at_startup"); else snprintf(life, sizeof life, " created_tick=%u elapsed_s=%.1f", t->born_tick, (nowns - t->born_ns) / 1e9);
+        DM_LOG_DEBUG("threads", "handle=%#x name=%s priority=%d core=%d mask=%#llx cpu_s=%.2f svc_count=%llu %s%s%s wait=%s address=%#llx%s last_svc=%#x lr=%s+%#llx", t->handle, nm, t->prio, t->core, (unsigned long long)t->mask,
+                cpu, t->nsvc, t->exited ? "exited" : "", t->started ? "" : "not_started", life, kinds[t->wkind & 7], t->waddr, own, t->last_svc,
                 m ? m->name : "?", m ? t->last_lr - (uint64_t)m->base : t->last_lr);
         if (have_raw) { char hx[200]; int q = 0; for (int i = 0; i < 64; i += 4) q += snprintf(hx + q, sizeof hx - q, "%08x ", *(uint32_t *)(raw + i));
-                        fprintf(stderr, "[dm]   %#x 所等对象 %#llx 起 64 字节: %s\n", t->handle, t->waddr & ~0xfull, hx); }
+                        DM_LOG_DEBUG("threads", "handle=%#x wait_object=%#llx first_64_bytes=%s", t->handle, t->waddr & ~0xfull, hx); }
         thr_bt(t);
     }
     // Threads created by the host itself (prefetch, Granny background, graphics present, audio, etc.): not in the guest thread table, enumerated as mach threads, the first 12 frames symbolized with dladdr
@@ -484,7 +475,7 @@ void svc_thread_dump(void) {
             if (!guest && ths[i] != mach_thread_self() && thread_suspend(ths[i]) == KERN_SUCCESS) {
                 arm_thread_state64_t st; mach_msg_type_number_t n = ARM_THREAD_STATE64_COUNT;
                 if (thread_get_state(ths[i], ARM_THREAD_STATE64, (thread_state_t)&st, &n) == KERN_SUCCESS) {
-                    char line[1200]; int p = snprintf(line, sizeof line, "[dm] 宿主线程 %#x:", ths[i]);
+                    char line[1200]; int p = snprintf(line, sizeof line, "host_thread=%#x backtrace:", ths[i]);
                     uint64_t fp = __darwin_arm_thread_state64_get_fp(st), pc = __darwin_arm_thread_state64_get_pc(st);
                     for (int k = 0; k < 12 && p < (int)sizeof line - 80; k++) {
                         Dl_info di; module_t *m = module_of((void *)pc);
@@ -495,7 +486,7 @@ void svc_thread_dump(void) {
                         if (!fp || vm_read_overwrite(mach_task_self(), fp, 16, (vm_address_t)fr, &g2) || g2 != 16 || fr[0] <= fp) break;
                         fp = fr[0]; pc = fr[1];
                     }
-                    fprintf(stderr, "%s\n", line);
+                    DM_LOG_DEBUG("threads", "%s", line);
                 }
                 thread_resume(ths[i]);
             }
@@ -563,7 +554,6 @@ static int svc_thread_impl(int num, uint64_t *regs) {
     case 0x0A: thread_exit(cur()); return 1;
     case 0x0B: {  // SleepThread(x0 ns); 0/-1/-2 = the various kinds of yield
         int64_t ns = (int64_t)regs[0];
-        uint64_t t0 = g_flag.bootprof ? now_ns() : 0;
         if (ns > 0 && dm_detclock_enabled()) {
             uint64_t deadline = guest_ns() + (uint64_t)ns;
             while (guest_ns() < deadline) { struct timespec ts = {0, 1000000}; nanosleep(&ts, 0); }
@@ -573,7 +563,6 @@ static int svc_thread_impl(int num, uint64_t *regs) {
             if (me && me->handle == 0x1001) { uint64_t y0 = now_ns(); sched_yield(); g_main_yield_ns += now_ns() - y0; g_main_yield_n++; }
             else sched_yield();
         }
-        if (g_flag.bootprof) { uint64_t d = now_ns() - t0; dm_prof_add(PROF_SLEEP, d, 0); thr_t *me = pthread_getspecific(g_keythr); if (me && me->handle == 0x1001) dm_prof_add(PROF_MAIN_WAIT, d, 0); }
         return 1;
     }
     case 0x0C: { thr_t *t = h_get((uint32_t)regs[1], O_THREAD); regs[0] = t ? 0 : R_BAD_HANDLE; regs[1] = t ? (uint64_t)t->prio : 0; return 1; }
@@ -604,11 +593,11 @@ static int svc_thread_impl(int num, uint64_t *regs) {
                 if (t->paused || t->exited) break;
                 struct timespec dl; clock_gettime(CLOCK_REALTIME, &dl); dl.tv_nsec += 100000; if (dl.tv_nsec >= 1000000000) { dl.tv_sec++; dl.tv_nsec -= 1000000000; }
                 pthread_cond_timedwait(&t->pcv, &G, &dl);
-                if (!warned && now_ns() - t0 > 1000000000ull) { warned = 1; LOG("【红】暂停线程 %#x 超过 1 秒还没停住（一直在宿主代码里？）", t->handle); }
+                if (!warned && now_ns() - t0 > 1000000000ull) { warned = 1; LOG_ERROR("Thread suspension timed out after 1 s: handle=%#x; thread may still be executing host code", t->handle); }
             }
         } else { atomic_store(&t->pause_req, 0); pthread_cond_broadcast(&t->pcv); }
         pthread_mutex_unlock(&G);
-        { static int n; if (n++ < 4) LOG("SetThreadActivity %#x → %s（%s）", (uint32_t)regs[0], act ? "暂停" : "恢复", r ? "失败" : "成功"); }
+        { static int n; if (n++ < 4) LOG("SetThreadActivity: handle=%#x activity=%s result=%s", (uint32_t)regs[0], act ? "suspend" : "resume", r ? "failed" : "succeeded"); }
         regs[0] = (uint64_t)r; return 1;
     }
     case 0x33: {  // GetThreadContext3(x0 out ThreadContext*, w1 thread): only for stopped threads
@@ -712,7 +701,7 @@ static int svc_thread_impl(int num, uint64_t *regs) {
                    : (h_peek(h, O_EVENT_W) ? h_peek(h, O_EVENT_W) : h_peek(h, O_EVENT_R));
         int64_t r = 0;
         if (!e) { r = (num == 0x17 && h_peek(h, O_THREAD)) ? R_BAD_STATE : R_BAD_HANDLE;
-                  if (r == R_BAD_HANDLE) LOG("事件 SVC %#x 句柄无效 %#x", num, h); }
+                  if (r == R_BAD_HANDLE) LOG("Invalid event handle: svc=%#x handle=%#x", num, h); }
         else if (num == 0x11) { e->signaled = 1; wake_sync_waiters(); }
         else if (num == 0x17 && !e->signaled) r = R_BAD_STATE;
         else e->signaled = 0;
@@ -776,15 +765,15 @@ static uint32_t se_find(void *ev) {
 void hle_bind_system_event(void *ev, int autoclear) {      // Must be called on a guest thread (it has to execute SDK code)
     pthread_mutex_lock(&g_se_lock); uint32_t wh = se_find(ev); pthread_mutex_unlock(&g_se_lock);
     if (wh) return;
-    if (!pthread_getspecific(g_keythr)) die("hle_bind_system_event 须在客体线程上调用");
+    if (!pthread_getspecific(g_keythr)) die("hle_bind_system_event must be called on a guest thread");
     static uint32_t (*create)(void *, int, int); static uint32_t (*getw)(const void *);
     if (!create) { create = guest_sym("_ZN2nn2os17CreateSystemEventEPNS0_15SystemEventTypeENS0_14EventClearModeEb");
                    getw = guest_sym("_ZN2nn2os30GetWritableHandleOfSystemEventEPKNS0_15SystemEventTypeE"); }
     uint32_t r = create(ev, autoclear, 1);
-    if (r) die("CreateSystemEvent 失败 %#x", r);
+    if (r) die("CreateSystemEvent failed: result=%#x", r);
     wh = getw(ev);
     pthread_mutex_lock(&g_se_lock);
-    if (g_nse >= (int)(sizeof g_se / sizeof g_se[0])) die("SystemEvent 绑定表满");
+    if (g_nse >= (int)(sizeof g_se / sizeof g_se[0])) die("SystemEvent binding table is full");
     g_se[g_nse].ev = ev; g_se[g_nse++].wh = wh;
     pthread_mutex_unlock(&g_se_lock);
 }
@@ -793,7 +782,7 @@ void hle_signal_system_event(void *ev) {   // An unbound one is bound on the spo
     if (!wh) { hle_bind_system_event(ev, 0); pthread_mutex_lock(&g_se_lock); wh = se_find(ev); pthread_mutex_unlock(&g_se_lock); }
     pthread_mutex_lock(&G);
     event_t *e = h_get(wh, O_EVENT_W);
-    if (!e) die("SystemEvent 写端句柄失效 %#x", wh);
+    if (!e) die("Invalid SystemEvent write handle: %#x", wh);
     e->signaled = 1; wake_sync_waiters();
     pthread_mutex_unlock(&G);
 }

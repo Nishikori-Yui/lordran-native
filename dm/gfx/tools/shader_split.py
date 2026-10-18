@@ -1,362 +1,285 @@
 #!/usr/bin/env python3
-# All of Mario's shaders → the "package directory" dmsh_build.py understands + the shader map + the translation query answer table (thread group / shared memory of compute shaders).
-# Sources (a full scan, not relying on file names): every file under RomFS (.zs is zstd-decompressed first, Yaz0 is decompressed, SARC is expanded member by member) and ExeFS main (NSO, lz4-decompressed), looking for
-#   · BNSH ('BNSH\0\0\0\0', carried by bfsha / particle effect esetb / UI layout blarc / embedded in main):
-#       +0x60 grsc block; +0x7c variation count u32; +0x80 variation table pointer (pointers are relative to the BNSH start). A variation is 0x40 bytes; the binary program is at +0x10;
-#       the binary program has 6 stage pointers from +0x08: vertex, hull, domain, geometry, pixel, compute; the stage code descriptor has +0x08 control pointer, +0x10 code area pointer, +0x18 code area length, +0x1c control length.
-#   · BAHS (agl's sharcb: the agl / gsys resource packs, GameAglShader in the Secred pack): file header +0x1c code region start, +0x18 code region length;
-#       each binary entry in the table area is 16 bytes {code offset (relative to the code region, 0x100-aligned), 0, control length 0x880 / 0x88c (3D World 0x848), signed offset of the control relative to this entry's address}.
-#       Control sections are shared between programs, so pairing goes by entry, never by finding code from a control; entries are recognized by a triple check of "control magic + code magic + consistent lengths".
-#   · Unity (UnityFS bundles and the serialized files under Data, read by unityfs.py): the Switch subprograms of each Shader object; the program code = a 0x60 header + one block per stage.
-#       The header is 4 i32 ×6 arrays indexed by NVN stage (0 vertex 1 pixel 2 geometry 3 hull 4 domain 5 compute): [0] unused (0 or a scratch size), [1] block offset (from +0x60, -1 = no such stage), [2] control length, [3] code length;
-#       block = control section + code area. A program's vertex / pixel stages form a pair. The game's own serialized files (data.unity3d, unity default resources) carry no type trees and borrow the bundles' Shader type tree of the same hash (second pass)
-#   · MSHD (MercurySteam, Metroid Dread system/shd/*.bshdat): each stage = a control section (+0x20 = control length; sometimes a small compiler option table follows) + the code area starting at the next code header;
-#       NV assembly text follows the first 0x880 bytes of the control section, and SASS disassembly text follows the code area. All 478 files hold "vertex, pixel" in pairs (1, 2 or 4 pairs), paired two by two in order
-# Code area: 0x30 header + (graphics) 0x50 SPH + instructions; header magic 0x12345678 for graphics, 0x12345679 for compute. The control section starts with 0x98761234, +0x704 = code area length,
-#   +0x700 = start of the c1 constant segment within the code area; for compute +0x748 thread group xyz (u32 ×3), +0x754 shared memory bytes (checked one by one against PC reflection on D2R's 22 compute shaders).
-# Stage: BNSH uses the stage slot; BAHS uses bits 10..13 of SPH word 0 (1 vertex 2 hull 3 domain 4 geometry 5 pixel), and a compute header means compute.
-# Key = sha256(first 0x880 bytes of the control section (its own length when control +0x20 says it is shorter, see ctl_len) + code area)[:16], the same as the host's prog_get: in this game many shaders share a control section but differ in code
-#   (SecredUber's 16600 stage shaders have only 3079 distinct control sections, with 6367 cases of same control, different code), so hashing the control alone picks the wrong library.
-# Output: <package dir>/<stage>_<source group>.bin, each record = 'BTCDBTCD' + header (+0x28 control length, +0x2c code length) padded to 0x38 + code area + control section, one copy per key;
-#   map rows have the same columns as D2R's shader_map.tsv (column 5 records where the key first appeared); the answer table has one row per compute shader {"local", "shared"} (shared memory rounded up to 16 bytes, as D2R did).
-# Usage: shader_split.py <RomFS dir> <ExeFS main> <output package dir> <output map> <output answer table> [<output pair table>]   (decompressing main needs lz4: run with dm's venv python)   Environment J=concurrency (default 8)
-#   With an update: give RomFS and main as comma-separated lists (base game first, e.g. data/v0/RomFS,data/v327680/RomFS); the output is the union of both versions (see main())
-#   Unity type trees need Unity's common string table, which is taken from the first main
-# Pair table: (vertex key, pixel key) of every BNSH variation (every Unity program); dmsh_build uses it to give vertex shaders the outputs their pixel shaders read but they do not write (see dmsh_build.py vs_pad)
-import collections, concurrent.futures as cf, hashlib, json, os, re, struct, subprocess, sys
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../games')); import game as _game
-GAME = _game.load()   # the current game profile (DM_GAME, required): source group rules and the table header note
-GROUPS, NOTE = GAME.pairs('shader_groups'), GAME.get('shader_note')
-GLSLC = GAME.get('shader_main_glslc', 'off') == 'on'   # GLSLC compiler outputs in main (glslc_shaders)
-SEPARABLE = GAME.get('shader_separable', 'off') == 'on'   # single-stage programs combined per stage at draw time (separable_pairs)
+"""Extract Dark Souls: Remastered NVN shaders into the offline package format.
 
-CTL_MAGIC, GFX_MAGIC, CS_MAGIC = bytes.fromhex('34127698'), bytes.fromhex('78563412'), bytes.fromhex('79563412')
-STAGES = ['vs', 'hs', 'ds', 'gs', 'ps', 'cs']
+Dark Souls stores its GLSLC outputs in BND3 binders inside BHD5/BDT archives.
+The executable also contains a small set of GLSLC outputs in its read-only image.
+No other game's shader container formats belong in this repository.
+"""
+import collections
+import concurrent.futures as cf
+import hashlib
+import json
+import os
+import re
+import struct
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../games'))
+import game as _game
+
+GAME = _game.load()
+GROUPS, NOTE = GAME.pairs('shader_groups'), GAME.get('shader_note')
+SEPARABLE = GAME.get('shader_separable', 'off') == 'on'
+
+CTL_MAGIC = bytes.fromhex('34127698')
+GFX_MAGIC = bytes.fromhex('78563412')
+CS_MAGIC = bytes.fromhex('79563412')
 SPH_STAGE = {1: 'vs', 2: 'hs', 3: 'ds', 4: 'gs', 5: 'ps'}
 ZH = {'vs': '顶点', 'hs': '外壳', 'ds': '域', 'gs': '几何', 'ps': '像素', 'cs': '计算'}
 
-def red(msg): sys.exit('【红】' + msg)
+
+def red(msg):
+    sys.exit('【红】' + msg)
+
 
 def ctl_len(ctl):
-    """Number of control bytes in the key: control +0x20 holds the section's own length. Every control section of Mario, Fire Emblem Engage, Metroid Dread and 13 Sentinels is at least 0x880 bytes, so the first 0x880 are used;
-    SDK 10's Super Mario 3D World + Bowser's Fury has 2,888 that are only 0x850 bytes (the bfsha in ShaderData, 6 layouts), with other data right after them, so only their own length is used (the same as the host's keys_hash)"""
+    """Return the fixed 0x880-byte control-section key length used by D2R."""
     n = struct.unpack_from('<I', ctl, 0x20)[0]
     return n if 0x760 <= n < 0x880 else 0x880
+
 
 def skey(ctl, code):
     return hashlib.sha256(ctl[:ctl_len(ctl)] + code).hexdigest()[:16]
 
+
 def check(where, st, ctl, code):
-    """control section and code area consistent; returns the reason if not"""
-    if ctl[:4] != CTL_MAGIC or len(ctl) < ctl_len(ctl): return '控制段异常'
-    # a compute code area may have no header (SDK 10's Super Mario 3D World + Bowser's Fury and D2R: instructions start at +0; dmsh_build strips only a 0x12345679 header)
-    if st == 'cs' and code[:4] in (CS_MAGIC, GFX_MAGIC) and code[:4] != CS_MAGIC or st != 'cs' and code[:4] != GFX_MAGIC: return '代码区头魔数与阶段不符'
-    if struct.unpack_from('<I', ctl, 0x704)[0] != len(code): return '控制段 +0x704 与代码区长不符'
+    """Validate the control section and code area used by one GLSLC output."""
+    if ctl[:4] != CTL_MAGIC or len(ctl) < ctl_len(ctl):
+        return '控制段异常'
+    if st == 'cs':
+        if code[:4] == GFX_MAGIC:
+            return '代码区头魔数与阶段不符'
+    elif code[:4] != GFX_MAGIC:
+        return '代码区头魔数与阶段不符'
+    if struct.unpack_from('<I', ctl, 0x704)[0] != len(code):
+        return '控制段 +0x704 与代码区长不符'
     return None
 
-def bnsh_shaders(d, base, label):
-    if d[base + 0x60:base + 0x64] != b'grsc': red(f'{label} BNSH @{base:#x} 没有 grsc 块')
-    nvar, pvar = struct.unpack_from('<IQ', d, base + 0x7c)
+
+def glslc_shaders(data, label, required=True):
+    """Extract D2R GLSLC outputs, including SDK 4.5 linkage-table layouts."""
     out = []
-    for v in range(nvar):
-        prog = struct.unpack_from('<Q', d, base + pvar + 0x40 * v + 0x10)[0]
-        if not prog: continue
-        for si, st in enumerate(STAGES):
-            sc = struct.unpack_from('<Q', d, base + prog + 8 + 8 * si)[0]
-            if not sc: continue
-            pctl, pcode, ncode, nctl = struct.unpack_from('<QQII', d, base + sc + 8)
-            ctl, code = d[base + pctl:base + pctl + nctl], d[base + pcode:base + pcode + ncode]
-            why = check(label, st, ctl, code)
-            if why: red(f'{label} BNSH @{base:#x} 变体 {v} {st}：{why}')
-            out.append((f'{label}#BNSH@{base:#x}#var{v}', st, ctl, code))
+    for magic in re.finditer(b'\x91\x68\x86\x19', data):
+        header = magic.start()
+        size = struct.unpack_from('<I', data, header + 0x44)[0]
+        control = data.find(CTL_MAGIC, header, header + size) if 0x880 < size <= len(data) - header else -1
+        if control < 0 or data.find(CTL_MAGIC, control + 4, header + size) >= 0:
+            continue
+        nctl = struct.unpack_from('<I', data, control + 0x20)[0]
+        ncode = struct.unpack_from('<I', data, control + 0x704)[0]
+        if nctl < 0x880 or control + nctl + ncode > header + size:
+            continue
+        code_start = control + nctl
+        # SDK 4.5 puts a texture-linkage table between some fragment controls and code.
+        if data[code_start:code_start + 4] not in (GFX_MAGIC, CS_MAGIC) and size >= 0xd0:
+            control_off = struct.unpack_from('<I', data, header + 0x94)[0]
+            code_off, code_size = struct.unpack_from('<II', data, header + 0xc4)
+            if (control_off == control - header and code_off >= nctl and
+                    code_size == ncode and control + code_off + ncode <= header + size):
+                code_start = control + code_off
+        ctl, code = data[control:control + nctl], data[code_start:code_start + ncode]
+        if code[:4] == CS_MAGIC:
+            stage = 'cs'
+        elif code[:4] == GFX_MAGIC:
+            stage = SPH_STAGE.get((struct.unpack_from('<I', code, 0x30)[0] >> 10) & 0xf)
+        else:
+            stage = None
+        if not stage or check(label, stage, ctl, code):
+            continue
+        out.append((f'{label}#GLSLC@{header:#x}', stage, ctl, code))
+    if required and not out:
+        red(f'{label}：档案没有有效的 GLSLC 输出')
     return out
 
-def bahs_shaders(d, label):
-    region, rsz = struct.unpack_from('<I', d, 0x1c)[0], struct.unpack_from('<I', d, 0x18)[0]
-    if region + rsz > len(d): red(f'{label} BAHS 代码区越界')
-    out = []
-    for a in range(0, region - 16, 4):
-        off, z, csz, rel = struct.unpack_from('<IIIi', d, a)
-        if z or not (csz in (0x880, 0x88c) or 0x760 <= csz < 0x880) or off % 0x100: continue   # control length: Mario 0x880 / 0x88c, 3D World's BAHS version 9 0x848
-        c = a + rel
-        if c < 0 or c + csz > region or d[c:c + 4] != CTL_MAGIC: continue
-        n = struct.unpack_from('<I', d, c + 0x704)[0]
-        if off + n > rsz: continue
-        code, ctl = d[region + off:region + off + n], d[c:c + csz]
-        st = 'cs' if code[:4] == CS_MAGIC else SPH_STAGE.get((struct.unpack_from('<I', code, 0x30)[0] >> 10) & 0xf) if code[:4] == GFX_MAGIC else None
-        if not st or check(label, st, ctl, code): continue
-        out.append((f'{label}#BAHS@{a:#x}', st, ctl, code))
-    return out
-
-def mshd_shaders(d, label):
-    out, c = [], d.find(CTL_MAGIC)
-    while c >= 0:
-        nctl = struct.unpack_from('<I', d, c + 0x20)[0]
-        g = d.find(GFX_MAGIC, c + nctl)
-        if nctl < 0x880 or g < 0 or g - c - nctl > 0x400: red(f'{label} MSHD 控制段 @{c:#x}：长 {nctl:#x}，之后找不到代码区头')
-        ncode = struct.unpack_from('<I', d, c + 0x704)[0]
-        ctl, code = d[c:c + nctl], d[g:g + ncode]
-        st = SPH_STAGE.get((struct.unpack_from('<I', code, 0x30)[0] >> 10) & 0xf)
-        if st != ('vs', 'ps')[len(out) % 2]: red(f'{label} MSHD @{c:#x}：第 {len(out)} 个阶段是 {st}，不是顶点 / 像素交替')
-        why = check(label, st, ctl, code)
-        if why: red(f'{label} MSHD @{c:#x} {st}：{why}')
-        out.append((f'{label}#MSHD#var{len(out) // 2}', st, ctl, code))
-        c = d.find(CTL_MAGIC, g + ncode)
-    if len(out) % 2: red(f'{label} MSHD：{len(out)} 个阶段，不成对')
-    return out
-
-def glslc_shaders(d, label, required=True):
-    """GLSLC compiler outputs (838 in 13 Sentinels' main read-only segment, one stage each): from the magic 0x19866891, +0x44 = the whole output's length; each output holds exactly one control section with the code area right after it (control +0x20 = control length).
-    The magic is only 4 bytes and other games' mains have it too (Fire Emblem Engage has 11), so this runs only when the profile's shader_main_glslc is on, and keeps only outputs that pass the triple check"""
-    out = []
-    for m in re.finditer(b'\x91\x68\x86\x19', d):
-        h = m.start(); size = struct.unpack_from('<I', d, h + 0x44)[0]
-        c = d.find(CTL_MAGIC, h, h + size) if 0x880 < size <= len(d) - h else -1
-        if c < 0 or d.find(CTL_MAGIC, c + 4, h + size) >= 0: continue
-        nctl, ncode = struct.unpack_from('<I', d, c + 0x20)[0], struct.unpack_from('<I', d, c + 0x704)[0]
-        if nctl < 0x880 or c + nctl + ncode > h + size: continue
-        code_start = c + nctl
-        # SDK 4.5 GLSLC adds a texture-linkage table after some fragment
-        # controls (DbgFont.fpo: 12 bytes). Its output header records the
-        # code offset relative to the control at +0xc4, and its size at +0xc8.
-        if d[code_start:code_start + 4] not in (GFX_MAGIC, CS_MAGIC) and size >= 0xd0:
-            control_off = struct.unpack_from('<I', d, h + 0x94)[0]
-            code_off, code_size = struct.unpack_from('<II', d, h + 0xc4)
-            if control_off == c - h and code_off >= nctl and code_size == ncode and c + code_off + ncode <= h + size:
-                code_start = c + code_off
-        ctl, code = d[c:c + nctl], d[code_start:code_start + ncode]
-        st = 'cs' if code[:4] == CS_MAGIC else SPH_STAGE.get((struct.unpack_from('<I', code, 0x30)[0] >> 10) & 0xf) if code[:4] == GFX_MAGIC else None
-        if not st or check(label, st, ctl, code): continue
-        out.append((f'{label}#GLSLC@{h:#x}', st, ctl, code))
-    if required and not out: red(f'{label}：档案开了 shader_main_glslc，却没有一份 GLSLC 输出')
-    return out
 
 def fromsoftware_shaders(path, label):
-    """Dark Souls stores GLSLC outputs in BND3 binders inside BHD5/BDT archives."""
+    """Extract GLSLC stages from the D2R BHD5/BDT archive pair."""
     import fromsoftware
+
     out = []
     for name, packed in fromsoftware.bhd5_members(path):
         data = fromsoftware.dcx(packed)
-        if data[:4] != b'BND3' or b'\x91\x68\x86\x19' not in data: continue
+        if data[:4] != b'BND3' or b'\x91\x68\x86\x19' not in data:
+            continue
         for member, blob in fromsoftware.bnd3_members(data):
             if member.lower().endswith(('.vpo', '.fpo', '.gpo', '.cpo')):
                 out.extend(glslc_shaders(fromsoftware.dcx(blob), f'{label}/{name}/{member}'))
     return out
 
-def yaz0(s):
-    """Yaz0 decompression (Super Mario 3D World + Bowser's Fury: almost all of RomFS is .szs = SARC wrapped in Yaz0). Pure Python runs at about 20–45 MB/s per core, under a minute for the whole 4.7 GB RomFS in parallel, and needs no extra dependency.
-    Group header bits: 1 = one literal byte; 0 = back-reference, 2 bytes {length high nibble, 12-bit distance} (distance + 1); length 0 reads one more byte + 0x12, else + 2. Overlapping copies are expanded by their period"""
-    n = int.from_bytes(s[4:8], 'big'); out = bytearray(); si = 16
-    while len(out) < n:
-        h = s[si]; si += 1
-        for _ in range(8):
-            if h & 0x80:
-                out.append(s[si]); si += 1
-            else:
-                b1, b2 = s[si], s[si + 1]; si += 2
-                dist, ln = ((b1 & 15) << 8 | b2) + 1, b1 >> 4
-                if ln: ln += 2
-                else: ln = s[si] + 0x12; si += 1
-                st = len(out) - dist
-                out += out[st:st + ln] if dist >= ln else (out[st:] * (ln // dist + 1))[:ln]
-            if len(out) >= n: break
-            h <<= 1
-    return bytes(out[:n])
-
-def sarc_members(d):
-    hl, bom, size, doff = struct.unpack_from('<HHII', d, 4)
-    n = struct.unpack_from('<H', d, hl + 6)[0]
-    names = hl + 12 + 16 * n + 8
-    for i in range(n):
-        h, attr, s, e = struct.unpack_from('<IIII', d, hl + 12 + 16 * i)
-        nm = d[names + (attr & 0xffffff) * 4:].split(b'\0')[0].decode('utf-8', 'replace') if attr >> 24 else f'#{i}'
-        yield nm, d[doff + s:doff + e]
-
-NV_STAGES = ['vs', 'ps', 'gs', 'hs', 'ds', 'cs']   # NVN stage order
-COMMON, TREES = None, {}   # Unity common strings and borrowed type trees (given when the pool starts)
-
-def _pool_init(common, trees):
-    global COMMON, TREES
-    COMMON, TREES = common, trees
-
-def unity_program(code, where):
-    """Unity's Switch program code → [(stage, control, code)]"""
-    h = struct.unpack_from('<24i', code, 0); out = []; end = 0x60
-    for i, st in enumerate(NV_STAGES):
-        off, nctl, ncode = h[6 + i], h[12 + i], h[18 + i]
-        if off == -1: continue
-        a = 0x60 + off; ctl, cd = code[a:a + nctl], code[a + nctl:a + nctl + ncode]
-        why = check(where, st, ctl, cd) if a + nctl + ncode <= len(code) else '块越界'
-        if why: red(f'{where} {st}：{why}')
-        out.append((st, ctl, cd)); end = max(end, a + nctl + ncode)
-    if end != len(code): red(f'{where}：程序代码 {len(code):#x} 字节，各阶段块只到 {end:#x}')
-    return out
-
-def unity_shaders(d, label, out, trees):
-    """Shaders in a UnityFS bundle or serialized file → out; raises NoTree when no type tree is available"""
-    import unityfs
-    if COMMON is None: red(f'{label}：是 Unity 资源，但 main 里没有 Unity 公共字符串表')
-    sers = unityfs.bundle_files(d) if d[:8] == b'UnityFS\0' else [('', d)]
-    for node, x in sers:
-        if not unityfs.is_serialized(x): continue
-        for cid, pid, o in unityfs.serialized_objects(x, COMMON, {unityfs.CLASS_SHADER}, trees):
-            name = o['m_ParsedForm']['m_Name'] if 'm_ParsedForm' in o else o.get('m_Name', '?')
-            for plat, k, sp in unityfs.shader_programs(o):
-                where = f'{label}{":" + node if node else ""}#{name}#var{plat}.{k}'
-                code = unityfs.subprogram(sp)[4]
-                out.extend((where, st, ctl, cd) for st, ctl, cd in unity_program(code, where))
-
-def scan_blob(d, label, out):
-    if d[:4] == b'Yaz0': d = yaz0(d)
-    if d[:4] == b'SARC':
-        for nm, m in sarc_members(d): scan_blob(m, f'{label}/{nm}', out)
-        return
-    if d[:4] == b'BAHS': out.extend(bahs_shaders(d, label)); return
-    if d[:4] == b'MSHD': out.extend(mshd_shaders(d, label)); return
-    for m in re.finditer(b'BNSH\0\0\0\0', d):
-        size = struct.unpack_from('<I', d, m.start() + 0x1c)[0]
-        if m.start() + size <= len(d) and d[m.start() + 0x60:m.start() + 0x64] == b'grsc': out.extend(bnsh_shaders(d, m.start(), label))
 
 def group(label):
-    """source group (second half of the package file name)"""
-    if label.startswith('main'): return 'main'
-    for k, g in GROUPS:   # the profile's shader_groups, first match wins
-        if k in label: return g
+    """Return the profile-defined source group for a shader label."""
+    if label.startswith('main'):
+        return 'main'
+    for key, source_group in GROUPS:
+        if key in label:
+            return source_group
     return 'other'
 
+
 def ps_inputs(code):
-    """Generic attributes a pixel shader reads: SPH words 6–13 are the input map, 8 bits for each of the 32 attributes (Ryujinx ShaderHeader.ImapTypes), non-zero = read; the translated MSL inputs are exactly user(locn<attribute>)"""
-    return {i for i in range(32) if struct.unpack_from('<I', code, 0x30 + 4 * (6 + (i >> 2)))[0] >> ((i & 3) * 8) & 0xff}
+    """Return the SPH attribute locations read by a pixel shader."""
+    return {
+        i for i in range(32)
+        if struct.unpack_from('<I', code, 0x30 + 4 * (6 + (i >> 2)))[0] >> ((i & 3) * 8) & 0xff
+    }
+
 
 def separable_pairs(keys):
-    """Single-stage programs (13 Sentinels: each GLSLC output becomes a program with one stage, and BindProgram's stage bits combine vertex and pixel programs per draw) have their real pairs only at draw time.
-    vs_pad uses only the union of the locations the paired pixel shaders read, so every vertex shader is paired with a "cover": the fewest pixel shaders whose read locations together equal those of all pixel shaders (greedy, ties go to the smaller key);
-    padded that way, a vertex shader links with any pixel shader. All pairs would be 376 × 375 rows; the cover needs a few rows × 376"""
-    ins = {k: ps_inputs(v[3]) for k, v in keys.items() if v[1] == 'ps'}
-    left, cover = set().union(*ins.values()) if ins else set(), []
-    while left:
-        k = min(ins, key=lambda k: (-len(ins[k] & left), k)); cover.append(k); left -= ins[k]
-    return {(v, p) for v in keys if keys[v][1] == 'vs' for p in cover}, cover
+    """Build cover pairs for D2R's single-stage GLSLC programs."""
+    inputs = {key: ps_inputs(value[3]) for key, value in keys.items() if value[1] == 'ps'}
+    remaining, cover = set().union(*inputs.values()) if inputs else set(), []
+    while remaining:
+        key = min(inputs, key=lambda item: (-len(inputs[item] & remaining), item))
+        cover.append(key)
+        remaining -= inputs[key]
+    return {
+        (vertex, pixel)
+        for vertex in keys if keys[vertex][1] == 'vs'
+        for pixel in cover
+    }, cover
+
 
 def var_pairs(found):
-    """(vertex key, pixel key) within the same BNSH variation"""
-    var = collections.defaultdict(dict)
-    for where, st, ctl, code in found:
-        if '#var' in where: var[where][st] = skey(ctl, code)
-    return {(v['vs'], v['ps']) for v in var.values() if 'vs' in v and 'ps' in v}
+    """Return vertex/pixel pairs from labels that carry a variation marker."""
+    variants = collections.defaultdict(dict)
+    for where, stage, ctl, code in found:
+        if '#var' in where:
+            variants[where][stage] = skey(ctl, code)
+    return {
+        (value['vs'], value['ps']) for value in variants.values()
+        if 'vs' in value and 'ps' in value
+    }
+
 
 def scan_file(args):
-    """→ (relative path, {key: …}, pairs, extra); extra = this file's Unity type trees, or 'defer' (no type tree, scanned again in the second pass)"""
-    path, rel = args
-    if path.endswith('.bdt') and os.path.isfile(os.path.splitext(path)[0] + '.bhd5'):
-        found = fromsoftware_shaders(path, '/' + rel)
-        return rel, {skey(c, k): (w, s, c, k) for w, s, c, k in found}, var_pairs(found), {}
-    d = subprocess.run(['zstd', '-d', '-c', '-q', path], capture_output=True, check=True).stdout if path.endswith('.zs') else open(path, 'rb').read()
-    if d[:4] == b'Yaz0': d = yaz0(d)
-    found = []; trees = {}
-    if d[:8] == b'UnityFS\0' or (d[8:11] == b'\0\0\0' and __import__('unityfs').is_serialized(d)):
-        import unityfs
-        try: unity_shaders(d, '/' + rel, found, trees if not TREES else dict(TREES))
-        except unityfs.NoTree: return rel, {}, set(), 'defer'
-    elif b'BNSH\0\0\0\0' not in d and b'BAHS' not in d and d[:4] != b'MSHD' and not (d[:4] == b'SARC' and b'Yaz0' in d): return rel, {}, set(), {}   # a SARC may hold Yaz0 members
-    else: scan_blob(d, '/' + rel, found)
-    uniq = {}
-    for where, st, ctl, code in found:
-        key = skey(ctl, code)
-        if key in uniq and (uniq[key][2] != ctl or uniq[key][3] != code): red(f'键 {key} 相同而控制段或代码区不同（{where}）')
-        uniq.setdefault(key, (where, st, ctl, code))
-    return rel, uniq, var_pairs(found), trees
+    """Scan one D2R BDT archive; non-BDT files are intentionally ignored."""
+    path, relative = args
+    if not path.endswith('.bdt'):
+        return relative, {}, set(), {}
+    found = fromsoftware_shaders(path, '/' + relative)
+    unique = {skey(ctl, code): (where, stage, ctl, code) for where, stage, ctl, code in found}
+    return relative, unique, var_pairs(found), {}
+
 
 def nso_image(path):
+    """Decompress the three segments of an ExeFS NSO image."""
     import lz4.block
-    d = open(path, 'rb').read()
-    flags = struct.unpack_from('<I', d, 0xc)[0]; segs = [struct.unpack_from('<III', d, 0x10 + i * 0x10) for i in range(3)]; csz = struct.unpack_from('<III', d, 0x60)
-    img = bytearray(segs[2][1] + segs[2][2])
-    for i, (fo, mo, sz) in enumerate(segs):
-        raw = d[fo:fo + csz[i]]
-        img[mo:mo + sz] = lz4.block.decompress(raw, uncompressed_size=sz) if flags >> i & 1 else raw
-    return bytes(img)
+
+    data = open(path, 'rb').read()
+    flags = struct.unpack_from('<I', data, 0xc)[0]
+    segments = [struct.unpack_from('<III', data, 0x10 + i * 0x10) for i in range(3)]
+    compressed_sizes = struct.unpack_from('<III', data, 0x60)
+    image = bytearray(segments[2][1] + segments[2][2])
+    for i, (file_offset, memory_offset, size) in enumerate(segments):
+        raw = data[file_offset:file_offset + compressed_sizes[i]]
+        image[memory_offset:memory_offset + size] = (
+            lz4.block.decompress(raw, uncompressed_size=size) if flags >> i & 1 else raw
+        )
+    return bytes(image)
+
 
 def main():
-    romfs_l, main_l, pkg, mapout, factsout = sys.argv[1:6]
+    romfs_list, main_list, package_dir, mapout, factsout = sys.argv[1:6]
     pairsout = sys.argv[6] if len(sys.argv) > 6 else None
-    # Several versions (base game + update): the RomFS and main arguments are comma-separated and paired one to one; the output is their union (keys are content hashes, shaders shared by versions appear once).
-    # The first version's source column is unchanged; later versions are prefixed with their workspace directory name (e.g. v327680): /v327680/Shader/…, main@v327680. They sort after the first version, so existing rows keep their package indices.
-    romfs_v, main_v = romfs_l.split(','), main_l.split(',')
-    if len(romfs_v) != len(main_v): red(f'RomFS {len(romfs_v)} 个、main {len(main_v)} 个，要一一对应')
-    files, results, common = [], [], None
-    for i, (romfs, mainnso) in enumerate(zip(romfs_v, main_v)):
-        tag = os.path.basename(os.path.dirname(os.path.abspath(romfs))) if i else ''
-        files += sorted((os.path.join(dp, f), (tag + '/' if tag else '') + os.path.relpath(os.path.join(dp, f), romfs)) for dp, _, fs in os.walk(romfs) for f in fs)
-        img = nso_image(mainnso)
-        if not i:
-            import unityfs
-            try: common = unityfs.common_strings(img)
-            except ValueError: common = None   # not a Unity game
-        found = []; scan_blob(img, 'main' + ('@' + tag if tag else ''), found)
-        if GLSLC: found += glslc_shaders(img, 'main' + ('@' + tag if tag else ''))
-        results.append(('main', {skey(c, k): (w, s, c, k) for w, s, c, k in found}, var_pairs(found), {}))
-    keys = {}
-    # First pass: every file; Unity bundles carry type trees, and the Shader trees are collected on the way. Second pass: Unity serialized files without type trees are scanned again with the borrowed trees
-    J = int(os.environ.get('J', '8'))
-    with cf.ProcessPoolExecutor(J, initializer=_pool_init, initargs=(common, {})) as ex: results += list(ex.map(scan_file, files, chunksize=16))
-    trees, defer = {}, []
-    for rel, uniq, pr, extra in results:
-        if extra == 'defer': defer.append(rel)
-        elif extra: trees.update(extra)
-    if defer:
-        byrel = {r: p for p, r in files}
-        with cf.ProcessPoolExecutor(J, initializer=_pool_init, initargs=(common, trees)) as ex: again = list(ex.map(scan_file, [(byrel[r], r) for r in defer]))
-        for rel, uniq, pr, extra in again:
-            if extra == 'defer': red(f'{rel}：Unity 序列化文件没有类型树，资源包里也没有同哈希的 Shader 类型树可借')
-        results = [r for r in results if r[3] != 'defer'] + again
-    per_src = collections.Counter(); pairs = set()
-    for rel, uniq, pr, _ in results:
-        pairs |= pr
-        for key, v in uniq.items():
+    romfs_versions, main_versions = romfs_list.split(','), main_list.split(',')
+    if len(romfs_versions) != len(main_versions):
+        red(f'RomFS {len(romfs_versions)} 个、main {len(main_versions)} 个，要一一对应')
+
+    files, results = [], []
+    for index, (romfs, main_nso) in enumerate(zip(romfs_versions, main_versions)):
+        tag = os.path.basename(os.path.dirname(os.path.abspath(romfs))) if index else ''
+        files += sorted(
+            (os.path.join(directory, name), (tag + '/' if tag else '') + os.path.relpath(os.path.join(directory, name), romfs))
+            for directory, _, names in os.walk(romfs)
+            for name in names
+            if name.endswith('.bdt') and os.path.isfile(os.path.join(directory, os.path.splitext(name)[0] + '.bhd5'))
+        )
+        image = nso_image(main_nso)
+        label = 'main' + ('@' + tag if tag else '')
+        found = glslc_shaders(image, label)
+        results.append(('main', {skey(ctl, code): (where, stage, ctl, code) for where, stage, ctl, code in found}, var_pairs(found), {}))
+
+    workers = int(os.environ.get('J', '8'))
+    with cf.ProcessPoolExecutor(workers) as executor:
+        results += list(executor.map(scan_file, files, chunksize=16))
+
+    keys, pairs = {}, set()
+    for _, unique, source_pairs, _ in results:
+        pairs |= source_pairs
+        for key, value in unique.items():
             if key in keys:
-                if keys[key][2] != v[2] or keys[key][3] != v[3]: red(f'键 {key} 相同而控制段或代码区不同（{v[0]} / {keys[key][0]}）')
+                if keys[key][2] != value[2] or keys[key][3] != value[3]:
+                    red(f'键 {key} 相同而控制段或代码区不同（{value[0]} / {keys[key][0]}）')
                 continue
-            keys[key] = v; per_src[group(v[0])] += 1
+            keys[key] = value
+
     if SEPARABLE:
-        sp, cover = separable_pairs(keys); pairs |= sp
+        single_stage_pairs, cover = separable_pairs(keys)
+        pairs |= single_stage_pairs
         print(f'单阶段程序：每个顶点着色器配 {len(cover)} 个像素着色器作覆盖（{" ".join(cover)}） | single-stage programs: every vertex shader is paired with a cover of {len(cover)} pixel shader(s)')
-    os.makedirs(pkg, exist_ok=True)
-    for f in os.listdir(pkg):
-        if f.endswith('.bin'): os.unlink(os.path.join(pkg, f))
-    recs = collections.defaultdict(list); rows = []; facts = {}; stat = collections.Counter()
-    for key in sorted(keys, key=lambda k: (group(keys[k][0]), keys[k][0], k)):   # the same input gives byte-identical output
-        where, st, ctl, code = keys[key]
-        name = f'{st}_{group(where)}.bin'
-        rec = bytearray(b'BTCDBTCD' + bytes(0x30)); struct.pack_into('<2I', rec, 0x28, len(ctl), len(code)); rec += code + ctl
-        if rec.find(CTL_MAGIC) != 0x38 + len(code): red(f'键 {key}：代码区里出现控制段魔数，dmsh_build 会切错')
-        if rec.count(b'BTCDBTCD') != 1: red(f'键 {key}：记录内出现记录分隔符')
-        rows.append((name, len(recs[name]), ZH[st], key, where)); recs[name].append(bytes(rec)); stat[st] += 1
-        if st == 'cs':
-            x, y, z = struct.unpack_from('<3I', ctl, 0x748); sh = struct.unpack_from('<I', ctl, 0x754)[0]
-            if not x * y * z: red(f'计算着色器 {key} 控制段 +0x748 线程组为 0（{where}）')
-            facts[key] = {'local': [x, y, z], 'shared': (sh + 15) // 16 * 16}
-    for name, rr in recs.items():
-        with open(os.path.join(pkg, name), 'wb') as f: f.write(b''.join(rr))
-    with open(mapout, 'w') as f:
-        kinds = ' / '.join(k for k, hit in (('BNSH / BAHS', any('#BNSH@' in r[4] or '#BAHS@' in r[4] for r in rows)), ('Unity Shader', any('#var' in r[4] and '#BNSH@' not in r[4] and '#MSHD#' not in r[4] for r in rows)),
-                                            ('MSHD', any('#MSHD#' in r[4] for r in rows)), ('GLSLC', any('#GLSLC@' in r[4] for r in rows))) if hit)
-        f.write(f'# kind: evidence  {NOTE}（RomFS + main 里的 {kinds}）→ 控制段 + 代码区键（dm/gfx/tools/shader_split.py）\n')
-        f.write('# 第 5 列记每个键首次出现的位置；本作没有 PC 版配对\n')
-        f.write('package\tindex\tstage\tdm_ctl_sha16\tsource\n')
-        for r in rows: f.write('\t'.join(map(str, r)) + '\n')
-    # Hand-written facts the machine code cannot give (the profile's shader_facts_manual.tsv, same row format) are merged over the generated ones, so the table stays reproducible
+
+    os.makedirs(package_dir, exist_ok=True)
+    for name in os.listdir(package_dir):
+        if name.endswith('.bin'):
+            os.unlink(os.path.join(package_dir, name))
+
+    records = collections.defaultdict(list)
+    rows, facts, stats, per_source = [], {}, collections.Counter(), collections.Counter()
+    for key in sorted(keys, key=lambda item: (group(keys[item][0]), keys[item][0], item)):
+        where, stage, ctl, code = keys[key]
+        filename = f'{stage}_{group(where)}.bin'
+        record = bytearray(b'BTCDBTCD' + bytes(0x30))
+        struct.pack_into('<2I', record, 0x28, len(ctl), len(code))
+        record += code + ctl
+        if record.find(CTL_MAGIC) != 0x38 + len(code):
+            red(f'键 {key}：代码区里出现控制段魔数，dmsh_build 会切错')
+        if record.count(b'BTCDBTCD') != 1:
+            red(f'键 {key}：记录内出现记录分隔符')
+        rows.append((filename, len(records[filename]), ZH[stage], key, where))
+        records[filename].append(bytes(record))
+        stats[stage] += 1
+        per_source[group(where)] += 1
+        if stage == 'cs':
+            x, y, z = struct.unpack_from('<3I', ctl, 0x748)
+            shared = struct.unpack_from('<I', ctl, 0x754)[0]
+            if not x * y * z:
+                red(f'计算着色器 {key} 控制段 +0x748 线程组为 0（{where}）')
+            facts[key] = {'local': [x, y, z], 'shared': (shared + 15) // 16 * 16}
+
+    for name, records_for_file in records.items():
+        with open(os.path.join(package_dir, name), 'wb') as output:
+            output.write(b''.join(records_for_file))
+
+    with open(mapout, 'w') as output:
+        output.write(f'# kind: evidence  {NOTE}（RomFS + main 里的 GLSLC）→ 控制段 + 代码区键（dm/gfx/tools/shader_split.py）\n')
+        output.write('# 第 5 列记每个键首次出现的位置；本作没有 PC 版配对\n')
+        output.write('package\tindex\tstage\tdm_ctl_sha16\tsource\n')
+        for row in rows:
+            output.write('\t'.join(map(str, row)) + '\n')
+
     manual = GAME.table('shader_facts_manual.tsv')
     if os.path.exists(manual):
-        for ln in open(manual):
-            if ln.strip() and not ln.startswith('#'): k, v = ln.rstrip('\n').split('\t', 1); facts[k] = {**facts.get(k, {}), **json.loads(v)}
-    with open(factsout, 'w') as f:
-        f.write('# 翻译查询的作答表（dm/gfx/tools/shader_split.py 生成，勿手改）：键 <TAB> 事实 JSON。本作没有 PC 版可配对：只有计算着色器的线程组 / 共享内存（取自控制段），其余查询按翻译器缺省\n')
-        for k in sorted(facts): f.write(k + '\t' + json.dumps(facts[k], sort_keys=True, separators=(',', ':')) + '\n')
-    if pairsout:
-        with open(pairsout, 'w') as f:
-            f.write('# kind: evidence  BNSH 变体里的顶点 / 像素着色器配对（dm/gfx/tools/shader_split.py 生成，勿手改）：顶点键 <TAB> 像素键 | vertex / pixel shader pairs within BNSH variations (generated, do not edit): vertex key <TAB> pixel key\n')
-            for a, b in sorted(pairs): f.write(f'{a}\t{b}\n')
-    print(f'着色器 {len(rows)} 个（' + '，'.join(f'{ZH[s]} {n}' for s, n in sorted(stat.items())) + '）；来源 ' + '，'.join(f'{g} {n}' for g, n in per_src.most_common()) + f'；计算着色器作答 {len(facts)} 行' + (f'；变体配对 {len(pairs)} 对' if pairsout else ''))
+        for line in open(manual):
+            if line.strip() and not line.startswith('#'):
+                key, value = line.rstrip('\n').split('\t', 1)
+                facts[key] = {**facts.get(key, {}), **json.loads(value)}
+    with open(factsout, 'w') as output:
+        output.write('# 翻译查询的作答表（dm/gfx/tools/shader_split.py 生成，勿手改）：键 <TAB> 事实 JSON。本作没有 PC 版配对：只有计算着色器的线程组 / 共享内存（取自控制段），其余查询按翻译器缺省\n')
+        for key in sorted(facts):
+            output.write(key + '\t' + json.dumps(facts[key], sort_keys=True, separators=(',', ':')) + '\n')
 
-if __name__ == '__main__': main()
+    if pairsout:
+        with open(pairsout, 'w') as output:
+            output.write('# kind: evidence  BNSH 变体里的顶点 / 像素着色器配对（shader_split.py generated; D2R uses single-stage cover pairs）\n')
+            for vertex, pixel in sorted(pairs):
+                output.write(f'{vertex}\t{pixel}\n')
+
+    counts = '，'.join(f'{ZH[stage]} {count}' for stage, count in sorted(stats.items()))
+    sources = '，'.join(f'{source} {count}' for source, count in per_source.most_common())
+    print(f'着色器 {len(rows)} 个（{counts}）；来源 {sources}；计算着色器作答 {len(facts)} 行' + (f'；变体配对 {len(pairs)} 对' if pairsout else ''))
+
+
+if __name__ == '__main__':
+    main()

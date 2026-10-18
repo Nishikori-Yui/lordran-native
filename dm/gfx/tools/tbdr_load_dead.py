@@ -5,6 +5,7 @@ import re, sys, collections
 BPP={70:4,71:4,80:4,81:4,90:4,92:4,93:4,115:8,125:16,55:4,25:2,65:4,105:4,103:4,252:4,250:2,260:5,255:4,10:1,20:2,30:2,60:4,53:4}
 P=collections.defaultdict(list); D={}; FA=None
 for l in open(sys.argv[1]):
+    l = l[l.index('[pass] '):] if '[pass] ' in l else l
     l=l.strip()
     m=re.match(r'\[pass\] F(\d+) P (\d+) (c\d+|d) ser=(\d+) fmt=(\d+) (\d+)x(\d+)(?:.*? lv(\d+))?.*?(clear|load|dontcare)$',l)
     if m:

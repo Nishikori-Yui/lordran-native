@@ -15,7 +15,7 @@ static int fake_setxattr(const char *p, const char *name, const void *v, size_t 
 #undef setxattr
 struct dm_flags g_flag; uint64_t g_t0_ns;
 uint64_t now_ns(void) { return 0; }
-void dm_prof_add(int id, uint64_t ns, uint64_t b) { (void)id; (void)ns; (void)b; }
+
 void dm_guest_write_prepare(void *a, size_t n) { (void)a; (void)n; }
 static int checks, fails;
 #define CHECK(c, text) do { checks++; int ok = !!(c); fails += !ok; printf("%s %s\n", ok ? "✓" : "✗", text); } while (0)
@@ -41,8 +41,6 @@ static int entry_count(void) {
     h_fs_ReadDirectory(&n, e, h, 32); h_fs_CloseDirectory(h); return (int)n;
 }
 static void *create_race(void *p) { return (void *)(uintptr_t)h_fs_CreateFile(p, 0); }
-module_t g_mod[MAX_MOD]; int g_nmod;   // Module table (MountSave picks save fixes by main build ID): this unit test loads no modules
-int dm_custom_lang_explicit(void) { return -1; }   // Language switch (dm_custom.c): not involved in this unit test, treated as the player never having tapped it
 int main(void) {
     char root[1024], save[1024], p[1100];
     const char *tmp = getenv("TMPDIR");

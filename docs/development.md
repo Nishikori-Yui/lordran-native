@@ -1,40 +1,41 @@
-# Development
+# Lordran Native development
 
-The README covers packing and playing. This page is for working on nxnative itself: how it is built, the script's options, running games on the Mac, adding a game, and per-game notes. Agent-oriented details (bring-up failure catalogue, graphics specifics, debugging recipes) are in [docs/agents](agents/README.md).
+The [README](../README.md) covers requirements, IPA packaging, controls and troubleshooting. This guide covers the Dark Souls: Remastered implementation (`01004AB00A260000`), packer options, manual Mac builds and regression checks. For extraction, bring-up failures and capture recipes, see the [porting and debugging guide](porting/README.md).
 
 ## How it works
 
-| Part | State |
+| Part | Responsibility |
 |---|---|
-| Rewriter (`dm/tools/patch_nso.py`, `DM_RULESET=native`) | Runs unchanged on every module of every supported game. Per-build cuts are keyed by the module's build ID |
-| Host (`dm/host`) | Stands in for the Horizon kernel and the system services the games call: threads and synchronization, memory, file system with transactional saves, HID, audio, movies (VP9 through libvpx, Vorbis sound through stb_vorbis), software keyboard, focus and lifecycle |
-| Graphics (`dm/gfx`) | NVN on Metal. Shaders are extracted by `shader_split.py` from Nintendo's containers and from Unity's `Shader` objects, then translated offline. Mario: 16,266 of 16,268 shaders compile. Engage: 9,268 of 9,269 |
-| Audio | Games that carry the SDK's audio renderer (Mario) run it in-process; games that use AudioOut directly (Engage: Wwise) feed it straight. Output goes through Core Audio (default on iOS, `DM_AUDIO=1` on the Mac) |
+| Rewriter (`dm/tools/patch_nso.py`, `DM_RULESET=native`) | Rewrites kernel-dependent instructions in the registered module builds for the target title. No game-specific code cuts, observation gates or resolution patches are applied |
+| Host (`dm/host`) | Provides Horizon kernel and system services: threads, synchronization, memory, transactional saves, HID, audio, movies, software keyboard, focus and lifecycle |
+| Graphics (`dm/gfx`) | Implements NVN on Metal. `shader_split.py` extracts the target title's BNSH / GLSLC shader corpus for offline translation and compilation into the profile cache |
+| Audio | AudioOut and the SDK audio renderer are hosted in-process. Output goes through Core Audio (default on iOS, `DM_AUDIO=1` on the Mac) |
 | Input | iOS: the touch gamepad and physical controllers. Mac: scripted input (`DM_KEYS=<seconds>:<button>,…`, with `DM_KBD=<text>` answering the system keyboard) or `DM_WINDOW=1` for a window with keyboard input |
 | iOS app | One unsigned IPA for iPhone and iPad. The rewritten code is embedded in the executable; the shader libraries, the RomFS and the game icon are inside the app |
-| Known gaps | Conditional render is always drawn; sparse virtual-pool mappings; `DrawElementsIndirect`. TBDR optimizations are off by default (they don't understand bindless textures yet). No amiibo. The bundled prewarm lists are empty. On the Mac, Mario's menu and dialogue text render blank (fine on the iPhone) |
+| Known gaps | Conditional render is always drawn; sparse virtual-pool mappings; `DrawElementsIndirect`. TBDR optimizations are off by default. No online features. |
 
 ## The packing script in detail
 
 `scripts/build_ipa_from_nsp.py` (`-h` lists every option):
 
 ```
-# written to the Desktop with your own home-screen name
-python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys -o ~/Desktop/Mario.ipa --app-name "Mario Wonder"
+# choose an output path inside the game's work folder
+python3 scripts/build_ipa_from_nsp.py game/01004AB00A260000 -k game/01004AB00A260000/prod.keys -o game/01004AB00A260000/test.ipa
 
-# pack Mario 1.0.0 instead of 1.2.1 (the folder still needs both NSPs: the shader tables cover both versions)
-python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys -p v0
+# pack the base game instead of 1.0.3 (the folder still needs both NSPs: the shader tables cover both versions)
+python3 scripts/build_ipa_from_nsp.py game/01004AB00A260000 -k game/01004AB00A260000/prod.keys -p v0
 
 # keep the extracted game files (to run the game on the Mac, or to skip extraction next time)
-python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys --keep-extracted
+python3 scripts/build_ipa_from_nsp.py game/01004AB00A260000 -k game/01004AB00A260000/prod.keys --keep-extracted
 
 # a diagnostic build with environment switches baked in (one KEY=VALUE per line)
-python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys --env-file diag_env.txt
+python3 scripts/build_ipa_from_nsp.py game/01004AB00A260000 -k game/01004AB00A260000/prod.keys --env-file game/01004AB00A260000/diag_env.txt
 ```
 
 In Spyder, open the script, fill in the settings at the top (`NSP_DIR`, `PROD_KEYS`, and optionally `PACKAGE`, `OUT_IPA`, `APP_NAME`, `BUNDLE_ID`), and press F5. Empty paths are asked for at run time.
 
 What the script does:
+
 1. It finds the game profile from the title ID (the `[title ID]` in the file names, or the NSP's ticket; the update by its `[vN]` tag).
 2. It extracts the NSPs.
 3. It rewrites the code modules, checking each build ID against the profile.
@@ -42,33 +43,78 @@ What the script does:
 5. It builds the iOS shader libraries.
 6. It calls `build_ipa.sh`.
 
-Everything it writes stays in the NSP folder: intermediate files and logs in `<id>_build/`, the IPA next to the NSPs. The extracted game files are deleted at the end unless you pass `--keep-extracted`. It exits with 0 when done and 1 on an error. The app's bundle ID is `org.nxnative.<base game title ID>` (for example `org.nxnative.0100a6301214e000`); `--app-name` / `--bundle-id` (or `APP_NAME` / `BUNDLE_ID` in Spyder) override the name and ID.
+Everything it writes stays in the NSP folder: intermediate files and logs in `<id>_build/`, the IPA next to the NSPs. The extracted game files are deleted at the end unless you pass `--keep-extracted`. It exits with 0 when done and 1 on an error. The app's bundle ID is `org.nxnative.01004ab00a260000`; `--app-name` / `--bundle-id` (or `APP_NAME` / `BUNDLE_ID` in Spyder) override the name and ID.
 
-On the device, environment switches go in `Documents/env.txt` (one `KEY=VALUE` per line), and game files are also accepted at `Documents/romfs`.
+Lordran Native retains the existing `org.nxnative` bundle identifiers so the
+project rename preserves installed app identities and their data directories.
+The clone examples use the existing GitHub repository URL with
+`lordran-native` as the local directory name.
 
-## Port another game
+The packer uses `<NSP folder>/01004AB00A260000_build/`; the manual procedure below uses a separate `<NSP folder>/01004AB00A260000-work/` layout. Their extraction and cache paths differ. Do not use one layout's paths in the other without setting the appropriate overrides.
 
-Each game has a profile in `dm/games/<id>/`:
-- `game.tsv` holds the title ID, known builds, code modules, RomFS marker, memory split, NVN driver tables, app name and bundle ID;
-- the shader tables: `shader_map.tsv`, `shader_facts.tsv`, `shader_pairs.tsv`, `c1_full.tsv`, `pso_manifest.tsv`;
-- `dmsh_chain.h` holds the chain version.
+On the device, diagnostic environment switches go in `Documents/env.txt` (one `KEY=VALUE` per line), and game files are also accepted at `Documents/romfs`. Language, operation mode and the performance panel are owned by the in-game floating menu; language and operation mode changes restart the app.
 
-The shader tools pick a profile with `DM_GAME=<id>`; `make -C dm/host` and `build_ipa.sh` pick it with `GAME=<id>`. Profiles are named after the base game's title ID. There is no default game: without `GAME` / `DM_GAME` the tools stop and list the profiles. `python3 dm/games/game.py list` lists the profiles. Host code that relies on one build's fixed addresses checks that build's ID.
+## iOS performance panel
 
-To add a game:
-1. Run `scripts/build_ipa_from_nsp.py` on its NSP folder. With no matching profile, it writes a survey to `<title ID>_survey/survey.md`. The survey covers the modules, SDK, engine, containers, rewrite sites, and the imports compared with the host's hooks.
-2. Add a profile as described in [dm/games/README.md](../dm/games/README.md).
-3. Bring the game up following [docs/agents](agents/README.md): extraction, binary survey, a catalogue of host bring-up failures, graphics, and debugging recipes.
+The iOS performance HUD is enabled by default and is controlled by the in-game floating menu.
+Its main FPS and frame-time values use actual drawable presentation callbacks,
+not the UI timer or display refresh rate. `Game` counts submitted game frames;
+`GPU` is completed GPU work sampled eight game frames late. Both streams use
+a rolling one-second window and report zero FPS after a one-second stall.
+The panel refreshes twice per second and stops its timer while inactive.
+Tap it to collapse the details; the choice persists across launches.
+`RAM` is the process physical footprint and `Metal` is Metal's allocated
+resource size, both in MiB; they overlap and must not be added together.
+The resolution is the game's swapchain texture size. The thermal status is
+the system's nominal/fair/serious/critical classification.
+
+## Profile scope
+
+This checkout is dedicated to Dark Souls: Remastered (`01004AB00A260000`). The only
+profile is `dm/games/01004AB00A260000/`; its `game.tsv`, build IDs, shader
+maps, chain header and prewarm data are the source of truth. The packing script
+rejects other title IDs instead of generating surveys for unrelated games.
+
+## Regression checks
+
+The host and test Makefiles default to `01004AB00A260000` and reject another
+profile. Run these from the repository root after a host change:
+
+```sh
+make -C dm/host dmhost
+make -C dm/host/tests run
+```
+
+The host tests cover save transactions and failure recovery, case-sensitive
+paths, notification ordering, audio output and pause/resume, software keyboard
+input, controller layout, thread cleanup, condition variables, and service
+clocks including New York calendar conversion. The audio-output test needs
+access to Core Audio; a sandbox that denies AudioUnit creation cannot validate
+that test. The tests do not require game files or the old D2R Python test
+environment.
+
+For a game regression, use a separate copy of the player's save directory
+under the game's work folder. Keep its `.work` and `.new` transaction siblings
+separate from the player's live save. A windowless run omits `DM_WINDOW`;
+`DM_KEYS` can drive the title and continue menus, and `DM_NVN_SHOT` captures
+rendered frames. Check the log for loading, successful save commits, missing
+imports and fatal errors, then inspect captures from gameplay. Stop only the
+test process, and do not start it while the player's game is running.
 
 ## Build by hand (Mac)
 
-You need the same tools as the script. The shader translator is the prebuilt `dm/gfx/tools/dmsh_xlate_bin`, the build that matches `dmsh_chain.lock`; a fresh `dotnet publish` gives different fingerprints. The commands use three variables:
+Run these commands from the repository root with the tools listed in the README. Use the prebuilt shader translator in `dm/gfx/tools/dmsh_xlate_bin`, which matches `dmsh_chain.lock`; a fresh `dotnet publish` produces different fingerprints.
+
+The commands use three variables:
+
 - `G`, the profile;
-- `W`, the game's work folder: `<title ID>-work` inside the game's NSP folder, outside this repository and off the home folder (it grows to the size of the game files);
+- `W`, the manual build directory: `<title ID>-work` inside the game's private NSP folder under `game/`;
 - `VER`, a version folder named after the NSP version.
 
-```
-G=010015100B514000; W="<NSP folder>/$G-work"; VER=v327680
+```sh
+G=01004AB00A260000
+W="$PWD/game/01004AB00A260000/$G-work"
+VER=v196608
 # 1. extract: the base game alone (update -), or an update layered over it (the last argument lets unchanged files become clones)
 dotnet build dm/tools/nx_extract -c Release -o $W/build/nx_extract
 $W/build/nx_extract/nx_extract <prod.keys> <base NSP> - $W/data/v0
@@ -84,19 +130,22 @@ python3 dm/gfx/tools/c1_guard.py $W/build/cache/metal_shader_cache/b-<chain vers
 make -C dm/host GAME=$G dmhost
 python3 dm/tools/make_ext_font.py $W/build/font/nintendo_ext.ttf
 # 5. run on the Mac
-DM_ROOT=$W DM_ROMFS=$W/data/$VER/RomFS DM_SAVE=$W/run/save DM_TEMP=$W/run/temp DM_MSL_DIR=$W/build/cache/metal_shader_cache DM_FONT_DIR=$W/build/font dm/host/dmhost $W/build/patched_$VER
-# 6. iOS shader libraries (about 15 min for Mario), then the IPA (default <NSP folder>/<the profile's ipa>)
+DM_WINDOW=1 DM_ROOT=$W DM_ROMFS=$W/data/$VER/RomFS DM_SAVE=$W/run/save DM_TEMP=$W/run/temp DM_MSL_DIR=$W/build/cache/metal_shader_cache DM_FONT_DIR=$W/build/font dm/host/dmhost $W/build/patched_$VER
+# 6. iOS shader libraries, then the IPA (default <NSP folder>/<the profile's ipa>)
 IOSOUT=$W/build/ios/dmsh_b DM_GAME=$G python3 dm/gfx/tools/dmsh_build.py $W/shader/pkg $W/build/cache/metal_shader_cache
 GAME=$G W=$W dm/ios/tools/build_ipa.sh [out.ipa]
 ```
 
 Notes on these steps:
+
+- The extraction commands contain placeholders for your key and NSP paths. The shader check needs the chain version generated in step 3.
+- Step 5 opens a game window. Omit `DM_WINDOW` for a windowless test. Do not start another game process while the player's game is running.
 - `build_ipa.sh` takes the rewritten modules from `$W/build/patched_<package>` and the RomFS from `$W/data/<package>/RomFS`; `PATCHED` and `ROMFS` override them.
 - It also bundles a standard font (macOS's Arial Unicode, `STD_FONT=` overrides it) and the generated `nintendo_ext.ttf`.
 - The icon is the `icon.jpg` that `nx_extract` saves next to `RomFS/`; `DM_ICON=` points at another image.
 - `DM_ENV_FILE=` bakes environment switches into the app, and `DM_DISPLAY_NAME=` renames it.
 - If Xcode's Locations setting puts products in a custom place, the script finds the app through the build log.
-- hactool cannot read every update (Mario 1.2.1's patch NCA gives "Invalid BKTR layout!"), which is why `nx_extract` uses LibHac.
+- `nx_extract` uses LibHac because some Switch update NCAs cannot be read by hactool.
 
 ## Prewarm lists
 
@@ -106,46 +155,31 @@ Metal compiles each combination of shaders and pipeline settings for the GPU the
 - `dm/games/<id>/pso_manifest.tsv` is the seed list bundled with the app, prewarmed before `pso_user.tsv`.
 
 The lines name shaders by content key and hold no compiled code and nothing personal, so a list recorded on one device works on any other. To seed the bundled list:
-1. Record on the Mac with prewarm off, so everything is built on demand: `DM_PSO_MANIFEST=off DM_PSO_RECORD=<file>`, playing the scenes players reach first. Engage's list covers boot, the opening movie, the title, a save load and the prologue battle.
+
+1. Record on the Mac with prewarm off, so everything is built on demand: `DM_PSO_MANIFEST=off DM_PSO_RECORD=<file>`, then play the boot, title, save-load and first-area scenes.
 2. Append the recorded lines below the header comments, in the recorded order. Duplicates are dropped at load.
 3. Rebuild the IPA.
 
 Record on the game version you ship. At launch the log names each list it read and its line count (`管线预热清单 … 行`), or says that `pso_user.tsv` does not exist yet.
 
-## Game notes
+## Target title notes
 
-**Super Mario Bros. Wonder (`010015100B514000`)**
-- **Versions:** v0 (1.0.0) and 1.2.1 (v327680). With the update layered over v0, unchanged files become APFS clones, so the merged RomFS adds only about 114 MB to the 3.5 GB base.
-- **Shaders:** 12,811 in v0 and 16,268 across both versions; the tables hold both.
-- **1.2.1:** it is a new `main` build (SDK 16.2.12), whose resource-heap cut (+16 KB slack) was carried over with `dm/tools/nso_fnmap.py`. It also makes new SDK calls, which the host answers: `nn::nfp` finds no amiibo, `pl::IsRunningOnOunce` is false, the shop call is a no-op, and `account::PopOpenUsers` returns none.
-- **Mac input:** `DM_KEYS="12:A,14:A,20:A,26:A,32:A"` reaches the opening course.
-
-**Fire Emblem Engage (`0100A6301214E000`)**
-- **Engine:** Unity 2020.3 IL2CPP, SDK 12.3.7. The shaders are read out of Unity bundles (`unityfs.py`).
-- **Memory:** a 5 GB guest block, the total proven on a phone, with a 2.5 GB application pool. A per-build cut shrinks the SDK's address-region node area to 62 MB.
-- **Audio:** Wwise drives AudioOut directly.
-- **Movies:** VP9, decoded on the host.
-- **60 fps:** the Switch version runs at 30; one patch to its code switches it to the 60 fps timing the game already has, so nothing runs too fast.
-
-**The Legend of Zelda: Breath of the Wild (`01007EF00011E000`)**
-- A patch to the game's frame-interval logic lifts its 30 fps limit to 60 without changing the game speed (it falls back to 30 by itself when a frame takes too long).
-- The game waits for each frame's GPU work before submitting the next, so the host hands its translated commands to the GPU in segments ([04](agents/04-graphics.md)).
-- **HUD prompt shadows and glows:** each prompt bar captures itself into a blurred mask the game keeps in the red channel of an R8 texture whose channel mapping says alpha = 1; the profile's `alpha_from_red` key makes every layout shader read alpha from red for such render targets, otherwise prompts sit on hard-edged dark boxes or cream cloud rectangles ([04](agents/04-graphics.md)).
-
-**The Legend of Zelda: Link's Awakening (`01006BB00C6F0000`)**
-- **Engine:** Grezzo's engine on NintendoWare, SDK 8.2.0 (the oldest so far), NVN 53. Modules main + subsdk0 (GLSLC, NVN's runtime shader compiler) + subsdk1 (movie) + sdk; 9,698 shaders from the bfsha archives, effects and layouts.
-- **Window origin:** the only game so far that keeps NVN's default lower-left (OpenGL) window origin; the host flips its viewports and winding and the window image at present ([04](agents/04-graphics.md)). Before that, text the game renders into textures came out upside down.
-- **Movies:** VP9 with a 5.1 Vorbis sound track; the host decodes the sound with stb_vorbis.
-- **Lighting:** tiled forward lighting whose tile lists a compute shader builds each frame; it needs the dispatch size in NVN's driver segment `c0` ([04](agents/04-graphics.md)). Before the host supplied it, lights piled into the bottom tile row and the doorway step flickered with white tiles.
-- **Sound:** SDK 8 numbers the audio renderer's commands differently (the output command is 0x10, not 0x13); the host recognises the output command by its size. Before that, music and sound effects were silent and only the movies had sound ([03](agents/03-bringup.md)).
-- **Mac input:** the title wants L+R: `DM_KEYS="f6000:L+R~0.4,f6300:A,f6500:A,f6700:Down,f6800:A"` reaches a new file's name entry (a fresh save directory via `SV=`).
-- **Frame rate:** gameplay runs at 60 like on the Switch; the game itself drops to 30 (present interval 2) for event cutscenes.
+- The supported packages are the base game (`v0`, 1.0.0) and update
+  `v196608` (1.0.3). The main and SDK build IDs are checked before rewriting.
+- The Mac frontend uses the PC keyboard / mouse layout and maps physical
+  controllers to the Nintendo button layout shown by the game.
+- The renderer uses the target title's bindless texture tables and the profile's
+  shader-chain cache. Keep generated shader libraries beside the game work
+  folder, never in the repository.
+- Validation evidence and unresolved issues are documented in the
+  [bring-up notes](../dm/games/01004AB00A260000/bringup.md). Runtime logs stay
+  under the game's work folder in `game/`.
 
 ## Tools (`dm/tools`)
 
 | Tool | What it does |
 |---|---|
-| `nx_extract/` | NSP → ExeFS / RomFS / icon with LibHac, merging an update over the base game (C#, `dotnet build`). `--manifest` writes ExeFS and a RomFS file list only, for surveys |
+| `nx_extract/` | NSP → ExeFS / RomFS / icon with LibHac, merging the update over the base game (C#, `dotnet build`) |
 | `nso_fnmap.py` | Carries offsets from one build to another (function matching with addresses masked; globals via their references) |
 | `nso2elf.py` | Converts NSO to ELF for Ghidra / REA |
 | `insn_census.py` | Counts the instruction sites the rewriter must handle |

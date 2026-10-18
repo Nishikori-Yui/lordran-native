@@ -55,26 +55,13 @@ static int detclock_cfg(void) {
 static uint64_t wall_guest_ns(void) { return atomic_load(&g_gfz) ? atomic_load(&g_gfrozen) : now_ns() - atomic_load(&g_glag); }
 uint64_t guest_ns(void) { return atomic_load(&g_gdet_on) ? atomic_load(&g_gdet) : wall_guest_ns(); }
 int dm_detclock_enabled(void) { return detclock_cfg() && atomic_load(&g_gdet_on); }
-// Run entry alignment: the number of presented frames in the front end / character select phase varies with real time (loading advances on a background thread by wall clock), so the guest clock value accumulated since the first frame differs every run --
-// pictures that depend on absolute time (such as the liquid level of the life / mana orbs) still differ at the same tick (measured: at tick E + 2 frames two passes differ by about 18,000 pixels, concentrated at the two orb positions).
-// On seeing the UI message FrontEndNavigation:ToGame (before the run is created and the server tick deadline is initialized) the guest clock is set to the fixed value 2^52 ns (forward jumps only),
-// from then on it advances purely by presents: which frame tick E lands on and the absolute time at that moment are determined by the step alone.
-#define DET_TOGAME_NS (1ull << 52)
-static void det_on_uimsg(const char *cat, const char *act, const char *arg) {
-    (void)arg; if (strcmp(cat, "FrontEndNavigation") || strcmp(act, "ToGame")) return;
-    uint64_t cur = atomic_load(&g_gdet);
-    if (cur >= DET_TOGAME_NS) { LOG("【红】DM_DETCLOCK：进局时客体时钟 %llu ≥ 对齐值 2^52，不回拨（对齐未生效）", (unsigned long long)cur); return; }
-    atomic_store(&g_gdet, DET_TOGAME_NS);
-    LOG("DM_DETCLOCK：进局（ToGame）客体时钟对齐到 2^52 ns（前跳 %.3f s）", (DET_TOGAME_NS - cur) / 1e9);
-}
 void dm_guest_frame_tick(void) {
     crash_watch_frame();
     atomic_fetch_add(&g_guest_frame, 1);
     if (!detclock_cfg()) return;
     if (!atomic_load(&g_gdet_on)) {
         atomic_store(&g_gdet, wall_guest_ns()); atomic_store(&g_gdet_on, 1);
-        void uimsg_subscribe(void (*)(const char *, const char *, const char *)); uimsg_subscribe(det_on_uimsg);
-        LOG("DM_DETCLOCK：首次出图起客体时钟按出图推进，步长 %llu ns；进局时对齐到 2^52 ns", (unsigned long long)g_gdet_step); return;
+        LOG("Deterministic clock: advancing by presented frames, step_ns=%llu; aligned to 2^52 ns on entering gameplay", (unsigned long long)g_gdet_step); return;
     }
     if (!atomic_load(&g_gfz)) { atomic_fetch_add(&g_gdet, g_gdet_step); dm_guest_clock_advanced(); }
 }
@@ -99,34 +86,11 @@ uint64_t dm_entropy64(void) {
     if (!detclock_cfg()) return ((uint64_t)arc4random() << 32) | arc4random();
     uint64_t z = atomic_fetch_add(&g_detrng, 0x9E3779B97F4A7C15ull) + 0x9E3779B97F4A7C15ull;
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull; z = (z ^ (z >> 27)) * 0x94D049BB133111EBull; z ^= z >> 31;
-    uint64_t n = atomic_fetch_add(&g_detrng_n, 1) + 1; if (n == 1 || n % 1000 == 0) LOG("DM_DETCLOCK：确定熵第 %llu 次", (unsigned long long)n);
+    uint64_t n = atomic_fetch_add(&g_detrng_n, 1) + 1; if (n == 1 || n % 1000 == 0) LOG("Deterministic entropy request: count=%llu", (unsigned long long)n);
     return z;
 }
 HLE("getentropy", int, g_getentropy, void *p, size_t n) {
     if (!detclock_cfg()) { arc4random_buf(p, n); return 0; }
     for (size_t i = 0; i < n; i += 8) { uint64_t v = dm_entropy64(); memcpy((uint8_t *)p + i, &v, n - i < 8 ? n - i : 8); }
     return 0;
-}
-
-// ---------- nn::mem::StandardAllocator::Allocate(size): 13 Sentinels' large blocks aligned to 64 KB ----------
-// 13 Sentinels 1.10's own malloc (main 4b632573…, main+0x310550) is StandardAllocator::Allocate(size). It gets the storage of a GPU memory pool from malloc rounded only to 4 KB (main+0x3073b8),
-//   then cuts three ring heaps out of the pool at 64 KB alignment relative to the GPU address (main+0x30c118), and the pool size is exactly their sum (main+0x307adc). On the Switch a pool's GPU address is aligned to a big page;
-//   the host's GPU address is the CPU address, which is only 4 KB aligned, so up to 60 KB is lost at the start, the third ring heap (16 MB, used by the main thread's allocations while a command buffer is recorded) does not fit and keeps base 0,
-//   and the first allocation while recording writes through a null pointer (main+0x2fa9a0, when the prologue enters its first battle).
-//   So on this build allocations of 64 KB or more are aligned to 64 KB (Allocate(size, 0x10000)), which puts the pool storage on a 64 KB boundary. Other builds forward unchanged
-#define DM_SENTINELS_110_BUILD "4b632573ca5c160eabb70519fb622718"
-static void *(*g_sa_alloc)(void *, size_t), *(*g_sa_alloc_al)(void *, size_t, size_t);
-static int g_sa_big_align;
-static pthread_once_t g_sa_once = PTHREAD_ONCE_INIT;
-static void sa_init(void) {
-    module_t *ms = NULL; for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "sdk")) ms = &g_mod[i];
-    g_sa_alloc = ms ? module_sym(ms, "_ZN2nn3mem17StandardAllocator8AllocateEm") : NULL;
-    g_sa_alloc_al = ms ? module_sym(ms, "_ZN2nn3mem17StandardAllocator8AllocateEmm") : NULL;
-    if (!g_sa_alloc || !g_sa_alloc_al) die("SDK 里找不到 StandardAllocator::Allocate");
-    g_sa_big_align = !strcmp(dm_main_build(), DM_SENTINELS_110_BUILD);
-    if (g_sa_big_align) LOG("StandardAllocator::Allocate：本构建 ≥ 64 KB 的分配按 64 KB 对齐（显存池存储，见 hle_os.c）");
-}
-HLE_FORCE("_ZN2nn3mem17StandardAllocator8AllocateEm", "原样转调 SDK；十三机兵防卫圈 1.10 的 ≥ 64 KB 分配按 64 KB 对齐（显存池起点）", void *, h_mem_SAAllocate, void *self, size_t size) {
-    pthread_once(&g_sa_once, sa_init);
-    return g_sa_big_align && size >= 0x10000 ? g_sa_alloc_al(self, size, 0x10000) : g_sa_alloc(self, size);
 }

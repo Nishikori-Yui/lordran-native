@@ -5,4 +5,5 @@
 .DS_Store
 # Local game dumps, keys, extraction results, and porting artifacts.
 /game/
+/private-docs/
 __pycache__/

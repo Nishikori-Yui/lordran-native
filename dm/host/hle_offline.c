@@ -96,15 +96,26 @@ HLE_FORCE("_ZN2nn3ngc15ProfanityFilter10InitializeEPvmb", "敏感词过滤初始
 HLE_FORCE("_ZN2nn3ngc15ProfanityFilter19CheckProfanityWordsEPjjPPKDsm", "敏感词检查：全部无敏感词", Result, h_ngc_Check16, void *self, uint32_t *out, unsigned mask, const void **words, uint64_t n) {
     (void)self; (void)mask; (void)words; for (uint64_t i = 0; out && i < n; i++) out[i] = 0; return RES_OK;
 }
+// Masking also goes through the filter's private work heap. The offline host
+// has no system word-list save, so bypass both text overloads instead of
+// entering the SDK with an uninitialized filter object.
+HLE_FORCE("_ZN2nn3ngc15ProfanityFilter24MaskProfanityWordsInTextEPiPtj", "敏感词替换：宿主无词库，不修改 UTF-16 文本", Result, h_ngc_Mask16, void *self, int *out, uint16_t *text, unsigned length) {
+    (void)self; (void)text; (void)length; if (out) *out = 0; return RES_OK;
+}
+HLE_FORCE("_ZN2nn3ngc15ProfanityFilter24MaskProfanityWordsInTextEPiPcj", "敏感词替换：宿主无词库，不修改 UTF-8 文本", Result, h_ngc_Mask8, void *self, int *out, char *text, unsigned length) {
+    (void)self; (void)text; (void)length; if (out) *out = 0; return RES_OK;
+}
+HLE_FORCE("_ZN2nn3ngc15ProfanityFilter11SetMaskModeENS1_8MaskModeE", "敏感词替换模式：离线过滤器忽略", void, h_ngc_SetMaskMode, void *self, int mode) { (void)self; (void)mode; }
+HLE_FORCE("_ZN2nn3ngc15ProfanityFilter8FinalizeEv", "敏感词过滤结束：宿主无词库", void, h_ngc_Finalize, void *self) { (void)self; }
 
 // ---------- err: error display applet. Only logged, no UI is shown ----------
-HLE_FORCE("_ZN2nn3err9ShowErrorENS0_9ErrorCodeE", "错误显示小程序；宿主只记日志", void, h_err_ShowCode, uint64_t code) { LOG("游戏请求显示错误：%04u-%04u", (unsigned)(code & 0xffffffff), (unsigned)(code >> 32)); }
-HLE_FORCE("_ZN2nn3err9ShowErrorERKNS0_18ErrorResultVariantE", "错误显示小程序；宿主只记日志", void, h_err_ShowVar, const void *v) { (void)v; LOG("游戏请求显示错误（ErrorResultVariant）"); }
-HLE_FORCE("_ZN2nn3err40ShowUnacceptableAddOnContentVersionErrorEv", "追加内容版本不符错误小程序；宿主只记日志", void, h_err_AocVer, void) { LOG("游戏请求显示错误：追加内容版本不符"); }
-HLE_FORCE("_ZN2nn3err39ShowUnacceptableApplicationVersionErrorEv", "游戏版本不符错误小程序；宿主只记日志", void, h_err_AppVer, void) { LOG("游戏请求显示错误：游戏版本不符"); }
+HLE_FORCE("_ZN2nn3err9ShowErrorENS0_9ErrorCodeE", "错误显示小程序；宿主只记日志", void, h_err_ShowCode, uint64_t code) { LOG("Guest requested error display: %04u-%04u", (unsigned)(code & 0xffffffff), (unsigned)(code >> 32)); }
+HLE_FORCE("_ZN2nn3err9ShowErrorERKNS0_18ErrorResultVariantE", "错误显示小程序；宿主只记日志", void, h_err_ShowVar, const void *v) { (void)v; LOG("Guest requested error display: ErrorResultVariant"); }
+HLE_FORCE("_ZN2nn3err40ShowUnacceptableAddOnContentVersionErrorEv", "追加内容版本不符错误小程序；宿主只记日志", void, h_err_AocVer, void) { LOG("Guest requested error display: add-on content version mismatch"); }
+HLE_FORCE("_ZN2nn3err39ShowUnacceptableApplicationVersionErrorEv", "游戏版本不符错误小程序；宿主只记日志", void, h_err_AppVer, void) { LOG("Guest requested error display: application version mismatch"); }
 
 // ---------- web: web page applet (online lobby). Unavailable ----------
-HLE_FORCE("_ZN2nn3web13ShowLobbyPageEPNS0_20LobbyPageReturnValueERKNS0_16ShowLobbyPageArgE", "联机大厅网页小程序（剪）", Result, h_web_Lobby, void *rv, const void *arg) { (void)rv; (void)arg; LOG("web::ShowLobbyPage（剪）"); return RES_FAIL; }
+HLE_FORCE("_ZN2nn3web13ShowLobbyPageEPNS0_20LobbyPageReturnValueERKNS0_16ShowLobbyPageArgE", "联机大厅网页小程序（剪）", Result, h_web_Lobby, void *rv, const void *arg) { (void)rv; (void)arg; LOG("web::ShowLobbyPage unavailable (offline host)"); return RES_FAIL; }
 
 // ---------- C interface (nnsocket* / nnssl*): offline as well. The arguments are all in registers and the host does not look at them ----------
 HLE_FORCE("nnsocketAccept", "离线（剪）", int, h_c_sk_Accept, void) { return -1; }

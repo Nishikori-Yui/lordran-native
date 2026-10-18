@@ -1,5 +1,6 @@
 #include "../nvn/nvn_mtl.m"
 int prog_key(const prog_t *p, unsigned stage, uint8_t key[8]) { (void)p; (void)stage; memset(key, 0, 8); return 0; }   // shader keys from hle_nvn.c: this test does not link it, so a zero key (the missing stub broke the link)
+uint64_t nvn_new_serial(void) { static uint64_t serial; return ++serial; }
 void *front_metal_layer(void){return NULL;}
 module_t *module_of(const void *p){(void)p;return NULL;}
 module_t g_mod[MAX_MOD];int g_nmod;
@@ -34,6 +35,12 @@ int main(void){@autoreleasepool{
  E("缺bindings拒绝",0,ro(@{@"route":@"B"}));
  E("缺driver语义信息拒绝",0,ro(@{@"route":@"B",@"bindings":@[]}));
  E("存在driver间接读取拒绝",0,ro(@{@"route":@"B",@"bindings":@[],@"drv_reads":@{@"0":@YES}}));
- NSString *d=[NSString stringWithFormat:@"%s%s/build/cache/metal_shader_cache/b-%s", getenv("DM_ROOT") ?: getenv("HOME"), getenv("DM_ROOT") ? "" : "/dm-work", DMSH_CHAIN];
- for(NSString *k in @[@"06ece8336c8c242c",@"6d19a794f1206668",@"fa27a102ecd14b3e",@"1bd6a72fa95c6a07"]){NSData *s=[NSData dataWithContentsOfFile:[NSString stringWithFormat:@"%@/%@_b.json",d,k]];NSDictionary *j=[NSJSONSerialization JSONObjectWithData:s options:0 error:nil];E(k.UTF8String,1,ro(j));}
+ NSDictionary *valid = @{@"route": @"B", @"drv_reads": @{}, @"bindings": @[
+     @{@"kind": @"cbuf", @"msl_type": @"constant _16*"},
+     @{@"kind": @"c1", @"msl_type": @"constant _16*"},
+     @{@"kind": @"sbuf", @"msl_type": @"const device _27*", @"rw": @NO},
+     @{@"kind": @"samp", @"msl_type": @"sampler"},
+     @{@"kind": @"tex", @"msl_type": @"texture2d<float>"},
+     @{@"kind": @"tbuf", @"msl_type": @"texture_buffer<float>"}]};
+ E("self-contained valid route-B fixture",1,ro(valid));
  printf("RT_RANGE_RO cases=%d failed=%d\n",cases,bad);return bad!=0;}}
