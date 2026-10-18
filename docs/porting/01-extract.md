@@ -21,18 +21,21 @@ ht -t nca --listromfs $W/build/nsp/<program>.nca > romfs_list.txt     # quick lo
 ht -t nca --exefsdir=$W/data/v0/ExeFS --romfsdir=$W/data/v0/RomFS $W/build/nsp/<program>.nca
 ```
 
-- Dark Souls ExeFS holds `main.npdm`, `rtld`, `main`, `sdk` and `subsdk0`. The profile loads the last three modules; the host replaces `rtld`.
+- The target title's ExeFS holds `main.npdm`, `rtld`, `main`, `sdk` and `subsdk0`. The profile loads the last three modules; the host replaces `rtld`.
 - Update NSPs: the update's Program NCA is a patch NCA; extract it with `--basenca=<base program nca>` so RomFS is the merged view. Keep base and update in separate directories (`data/v0`, `data/v<ver>`); the rewriter and the host take one ExeFS at a time.
 - If hactool stops with `Invalid BKTR layout!`, use `dm/tools/nx_extract` (C#, LibHac 0.19): `nx_extract <prod.keys> <base.nsp> <update.nsp> <out dir> [<base RomFS dir>]`. It reads the NCAs straight out of both NSPs, imports the common tickets itself, prints the display version and module build IDs, and with a base RomFS dir writes identical files as APFS clones.
 - After an update, register its module build IDs in the profile. The rewriter rejects unknown module builds and applies no game-specific code cuts. Carry any fixed host addresses (`->base + 0x…`) over with `dm/tools/nso_fnmap.py <old.orig.bin> <new.orig.bin> 0x…`: it matches functions with address bits masked and maps globals through their `adrp` references; check each result by disassembly (`sdis.py`). Also diff the imported SDK symbols: new imports that reach a system service need host implementations, or the real SDK aborts after connecting to `sm:`.
 - Decompressed NSO images for analysis: `dm/tools/nso.py <nso> <out.bin>` (lz4; use a venv that has `lz4`). `dm/tools/nso2elf.py` makes an ELF for Ghidra / REA / objdump.
 
-## Workspace layout used so far
+## Manual workspace layout
 
-The work folder `$W` sits in the game's NSP folder, beside the NSP script's `<title>_build/`, never in the home folder:
+Keep the NSP folder under the Git-ignored `game/` directory. Manual builds use
+`$W` = `<NSP folder>/01004AB00A260000-work`, with the layout below. The IPA
+packer uses a separate `01004AB00A260000_build/` directory beside it, with
+extracted files under `extract/` rather than `data/`.
 
-```
-<NSP folder>/<title>-work/
+```text
+game/01004AB00A260000/01004AB00A260000-work/
   build/nsp/            NCAs + tik/cert + nsp.log
   data/v0/{ExeFS,RomFS} extracted base game (v<ver> for updates)
   probe/                decompressed images (main.orig.bin, sdk.orig.bin), small experiments

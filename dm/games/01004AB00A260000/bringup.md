@@ -1,4 +1,4 @@
-# DARK SOULS: REMASTERED bring-up
+# Title 01004AB00A260000 bring-up
 
 Status on 2026-10-18: experimental. An unsigned iOS IPA builds. User captures
 show Mac character creation and asylum gameplay, with incorrect world textures,
@@ -25,7 +25,7 @@ native-texture buffers predate `movie::Buffer::GetNvnSync`; that accessor is
 optional because the host writes each output texture synchronously.
 
 The SDK's blocked-user-list overloads open `friend:a` lazily, even after the
-existing `friends::Initialize` offline hook. Dark Souls 1.0.3 calls the overload
+existing `friends::Initialize` offline hook. Version 1.0.3 calls the overload
 without a UID at `main+0x92326c`. Both overloads now return the host's offline
 failure with an output count of zero. An earlier `sm::Initialize` no-op left
 the SDK's service-manager object null and crashed at `sdk+0xa0974`; that hook
@@ -53,11 +53,9 @@ The game's work folder is `<NSP folder>/01004AB00A260000-work`.
   built app is unsigned. No provisioning profile or dump keys are bundled.
 - Artifact metadata and SHA-256 are saved in
   `build/ios/pkg/validation.json` under the work folder.
-- The repaired 2026-10-18 artifact is
-  `<NSP folder>/DarkSoulsRemastered-gfx-20261018.ipa`,
-  with shader chain `0eefab8cf997`. ZIP CRCs, all 3,099 packaged reflection
-  versions, the embedded host's chain, and unsigned status were checked.
-  Its validation record is also saved in
+- The repaired 2026-10-18 IPA uses shader chain `0eefab8cf997`. ZIP CRCs,
+  all 3,099 packaged reflection versions, the embedded host's chain, and
+  unsigned status were checked. Its validation record is saved in
   `analysis/gfx-20261018/ipa-validation.json`.
 
 Rebuild the same IPA from the prepared work folder:
@@ -68,7 +66,7 @@ export GAME=01004AB00A260000
 export W="<NSP folder>/01004AB00A260000-work"
 export MSL_IOS="$W/shader/ios"
 # FONT_PY must name a Python interpreter with fontTools installed.
-dm/ios/tools/build_ipa.sh "<NSP folder>/DarkSoulsRemastered.ipa"
+dm/ios/tools/build_ipa.sh "<NSP folder>/LordranNative.ipa"
 ```
 
 ## Remaining work
@@ -341,3 +339,30 @@ has the same cause. The twelve reflection captures in
 Their changing uniforms alone do not prove a timing defect.
 Conditional render commands still use the always-draw fallback, and the
 cube/2D mismatch remains a separate unresolved issue.
+
+## Launch regression and timestamped diagnostics (2026-10-19)
+
+The supplied launch diagnostic report records a startup `SIGTRAP`, with `x0=0`,
+`lr=CFRelease+0x14c` and `tex_by_id+0x184` on the host backtrace. This is a
+different failure from the earlier unexplained exits under memory pressure.
+The previous cache cleanup patch cleared `rp->view` inside `tex_mtl` during
+package re-upload, then the caller attempted `CFRelease(rp->view)` using its
+pre-resolution cache snapshot. Resolve the base first, inspect the current
+cache afterwards, and share an idempotent cleanup for base/alternate/alpha
+views. Old GPU references continue to retire through the existing fence.
+
+`t_tex_registry` reproduces the pre-fix trap on real Metal hardware and
+passes 64 consecutive uploads/resolutions plus alias cleanup and
+finalization after the fix, including with Metal validation enabled.
+The NVN integration tests pass 67 checks both normally and with
+`DM_TEST_NO_BC=1`; sampler pools pass 58 checks. These Mac checks exercise
+the fallback paths but do not establish physical iPhone 13 compatibility.
+Its supplied screenshots show developer-verification errors before the app
+runs, not an application crash backtrace.
+
+Host and iOS stderr streams now prefix lines with UTC millisecond timestamps,
+including multi-line and fragmented diagnostics. Export filenames include
+the UTC export time and a unique suffix; older retained logs remain intact.
+Tests cover fragmented writes, concurrent writers, keeping the emergency
+crash descriptor open, timestamped export names and independent exports.
+Validation logs remain under `run/launchfix-*.log` in the game's work folder.

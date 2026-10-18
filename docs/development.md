@@ -1,14 +1,14 @@
-# Development
+# Lordran Native development
 
-The README covers packing and playing. This page is for working on the Dark Souls: Remastered port: how it is built, the script's options, and running the game on the Mac. Agent-oriented details (bring-up failure catalogue, graphics specifics, debugging recipes) are in [docs/agents](agents/README.md).
+The [README](../README.md) covers requirements, IPA packaging, controls and troubleshooting. This guide covers the Dark Souls: Remastered implementation (`01004AB00A260000`), packer options, manual Mac builds and regression checks. For extraction, bring-up failures and capture recipes, see the [porting and debugging guide](porting/README.md).
 
 ## How it works
 
-| Part | State |
+| Part | Responsibility |
 |---|---|
-| Rewriter (`dm/tools/patch_nso.py`, `DM_RULESET=native`) | Rewrites kernel-dependent instructions in the registered Dark Souls module builds. No game-specific code cuts, observation gates or resolution patches are applied |
-| Host (`dm/host`) | Stands in for the Horizon kernel and the system services the games call: threads and synchronization, memory, file system with transactional saves, HID, audio, movies (VP9 through libvpx, Vorbis sound through stb_vorbis), software keyboard, focus and lifecycle |
-| Graphics (`dm/gfx`) | NVN on Metal. Shaders are extracted by `shader_split.py` from Nintendo's containers and from Unity's `Shader` objects, then translated offline. Dark Souls Remastered shaders are extracted from its BNSH / GLSLC corpus and compiled into the profile cache. |
+| Rewriter (`dm/tools/patch_nso.py`, `DM_RULESET=native`) | Rewrites kernel-dependent instructions in the registered module builds for the target title. No game-specific code cuts, observation gates or resolution patches are applied |
+| Host (`dm/host`) | Provides Horizon kernel and system services: threads, synchronization, memory, transactional saves, HID, audio, movies, software keyboard, focus and lifecycle |
+| Graphics (`dm/gfx`) | Implements NVN on Metal. `shader_split.py` extracts the target title's BNSH / GLSLC shader corpus for offline translation and compilation into the profile cache |
 | Audio | AudioOut and the SDK audio renderer are hosted in-process. Output goes through Core Audio (default on iOS, `DM_AUDIO=1` on the Mac) |
 | Input | iOS: the touch gamepad and physical controllers. Mac: scripted input (`DM_KEYS=<seconds>:<button>,…`, with `DM_KBD=<text>` answering the system keyboard) or `DM_WINDOW=1` for a window with keyboard input |
 | iOS app | One unsigned IPA for iPhone and iPad. The rewritten code is embedded in the executable; the shader libraries, the RomFS and the game icon are inside the app |
@@ -19,22 +19,23 @@ The README covers packing and playing. This page is for working on the Dark Soul
 `scripts/build_ipa_from_nsp.py` (`-h` lists every option):
 
 ```
-# written to the Desktop with your own home-screen name
-python3 scripts/build_ipa_from_nsp.py ~/Games/DarkSoulsRemastered -k ~/keys/prod.keys -o ~/Desktop/DarkSoulsRemastered.ipa
+# choose an output path inside the game's work folder
+python3 scripts/build_ipa_from_nsp.py game/01004AB00A260000 -k game/01004AB00A260000/prod.keys -o game/01004AB00A260000/test.ipa
 
 # pack the base game instead of 1.0.3 (the folder still needs both NSPs: the shader tables cover both versions)
-python3 scripts/build_ipa_from_nsp.py ~/Games/DarkSoulsRemastered -k ~/keys/prod.keys -p v0
+python3 scripts/build_ipa_from_nsp.py game/01004AB00A260000 -k game/01004AB00A260000/prod.keys -p v0
 
 # keep the extracted game files (to run the game on the Mac, or to skip extraction next time)
-python3 scripts/build_ipa_from_nsp.py ~/Games/DarkSoulsRemastered -k ~/keys/prod.keys --keep-extracted
+python3 scripts/build_ipa_from_nsp.py game/01004AB00A260000 -k game/01004AB00A260000/prod.keys --keep-extracted
 
 # a diagnostic build with environment switches baked in (one KEY=VALUE per line)
-python3 scripts/build_ipa_from_nsp.py ~/Games/DarkSoulsRemastered -k ~/keys/prod.keys --env-file diag_env.txt
+python3 scripts/build_ipa_from_nsp.py game/01004AB00A260000 -k game/01004AB00A260000/prod.keys --env-file game/01004AB00A260000/diag_env.txt
 ```
 
 In Spyder, open the script, fill in the settings at the top (`NSP_DIR`, `PROD_KEYS`, and optionally `PACKAGE`, `OUT_IPA`, `APP_NAME`, `BUNDLE_ID`), and press F5. Empty paths are asked for at run time.
 
 What the script does:
+
 1. It finds the game profile from the title ID (the `[title ID]` in the file names, or the NSP's ticket; the update by its `[vN]` tag).
 2. It extracts the NSPs.
 3. It rewrites the code modules, checking each build ID against the profile.
@@ -44,9 +45,18 @@ What the script does:
 
 Everything it writes stays in the NSP folder: intermediate files and logs in `<id>_build/`, the IPA next to the NSPs. The extracted game files are deleted at the end unless you pass `--keep-extracted`. It exits with 0 when done and 1 on an error. The app's bundle ID is `org.nxnative.01004ab00a260000`; `--app-name` / `--bundle-id` (or `APP_NAME` / `BUNDLE_ID` in Spyder) override the name and ID.
 
-On the device, environment switches go in `Documents/env.txt` (one `KEY=VALUE` per line), and Dark Souls game files are also accepted at `Documents/romfs`.
+Lordran Native retains the existing `org.nxnative` bundle identifiers so the
+project rename preserves installed app identities and their data directories.
+The clone examples use the existing GitHub repository URL with
+`lordran-native` as the local directory name.
 
-The iOS performance HUD is enabled by default (`DM_HUD=0` disables it).
+The packer uses `<NSP folder>/01004AB00A260000_build/`; the manual procedure below uses a separate `<NSP folder>/01004AB00A260000-work/` layout. Their extraction and cache paths differ. Do not use one layout's paths in the other without setting the appropriate overrides.
+
+On the device, diagnostic environment switches go in `Documents/env.txt` (one `KEY=VALUE` per line), and game files are also accepted at `Documents/romfs`. Language, operation mode and the performance panel are owned by the in-game floating menu; language and operation mode changes restart the app.
+
+## iOS performance panel
+
+The iOS performance HUD is enabled by default and is controlled by the in-game floating menu.
 Its main FPS and frame-time values use actual drawable presentation callbacks,
 not the UI timer or display refresh rate. `Game` counts submitted game frames;
 `GPU` is completed GPU work sampled eight game frames late. Both streams use
@@ -60,7 +70,7 @@ the system's nominal/fair/serious/critical classification.
 
 ## Profile scope
 
-This checkout is intentionally dedicated to Dark Souls: Remastered. The only
+This checkout is dedicated to Dark Souls: Remastered (`01004AB00A260000`). The only
 profile is `dm/games/01004AB00A260000/`; its `game.tsv`, build IDs, shader
 maps, chain header and prewarm data are the source of truth. The packing script
 rejects other title IDs instead of generating surveys for unrelated games.
@@ -93,13 +103,18 @@ test process, and do not start it while the player's game is running.
 
 ## Build by hand (Mac)
 
-You need the same tools as the script. The shader translator is the prebuilt `dm/gfx/tools/dmsh_xlate_bin`, the build that matches `dmsh_chain.lock`; a fresh `dotnet publish` gives different fingerprints. The commands use three variables:
+Run these commands from the repository root with the tools listed in the README. Use the prebuilt shader translator in `dm/gfx/tools/dmsh_xlate_bin`, which matches `dmsh_chain.lock`; a fresh `dotnet publish` produces different fingerprints.
+
+The commands use three variables:
+
 - `G`, the profile;
-- `W`, the game's work folder: `<title ID>-work` inside the game's NSP folder, outside this repository and off the home folder (it grows to the size of the game files);
+- `W`, the manual build directory: `<title ID>-work` inside the game's private NSP folder under `game/`;
 - `VER`, a version folder named after the NSP version.
 
-```
-G=01004AB00A260000; W="<NSP folder>/$G-work"; VER=v196608
+```sh
+G=01004AB00A260000
+W="$PWD/game/01004AB00A260000/$G-work"
+VER=v196608
 # 1. extract: the base game alone (update -), or an update layered over it (the last argument lets unchanged files become clones)
 dotnet build dm/tools/nx_extract -c Release -o $W/build/nx_extract
 $W/build/nx_extract/nx_extract <prod.keys> <base NSP> - $W/data/v0
@@ -115,13 +130,16 @@ python3 dm/gfx/tools/c1_guard.py $W/build/cache/metal_shader_cache/b-<chain vers
 make -C dm/host GAME=$G dmhost
 python3 dm/tools/make_ext_font.py $W/build/font/nintendo_ext.ttf
 # 5. run on the Mac
-DM_ROOT=$W DM_ROMFS=$W/data/$VER/RomFS DM_SAVE=$W/run/save DM_TEMP=$W/run/temp DM_MSL_DIR=$W/build/cache/metal_shader_cache DM_FONT_DIR=$W/build/font dm/host/dmhost $W/build/patched_$VER
+DM_WINDOW=1 DM_ROOT=$W DM_ROMFS=$W/data/$VER/RomFS DM_SAVE=$W/run/save DM_TEMP=$W/run/temp DM_MSL_DIR=$W/build/cache/metal_shader_cache DM_FONT_DIR=$W/build/font dm/host/dmhost $W/build/patched_$VER
 # 6. iOS shader libraries, then the IPA (default <NSP folder>/<the profile's ipa>)
 IOSOUT=$W/build/ios/dmsh_b DM_GAME=$G python3 dm/gfx/tools/dmsh_build.py $W/shader/pkg $W/build/cache/metal_shader_cache
 GAME=$G W=$W dm/ios/tools/build_ipa.sh [out.ipa]
 ```
 
 Notes on these steps:
+
+- The extraction commands contain placeholders for your key and NSP paths. The shader check needs the chain version generated in step 3.
+- Step 5 opens a game window. Omit `DM_WINDOW` for a windowless test. Do not start another game process while the player's game is running.
 - `build_ipa.sh` takes the rewritten modules from `$W/build/patched_<package>` and the RomFS from `$W/data/<package>/RomFS`; `PATCHED` and `ROMFS` override them.
 - It also bundles a standard font (macOS's Arial Unicode, `STD_FONT=` overrides it) and the generated `nintendo_ext.ttf`.
 - The icon is the `icon.jpg` that `nx_extract` saves next to `RomFS/`; `DM_ICON=` points at another image.
@@ -137,29 +155,31 @@ Metal compiles each combination of shaders and pipeline settings for the GPU the
 - `dm/games/<id>/pso_manifest.tsv` is the seed list bundled with the app, prewarmed before `pso_user.tsv`.
 
 The lines name shaders by content key and hold no compiled code and nothing personal, so a list recorded on one device works on any other. To seed the bundled list:
+
 1. Record on the Mac with prewarm off, so everything is built on demand: `DM_PSO_MANIFEST=off DM_PSO_RECORD=<file>`, then play the boot, title, save-load and first-area scenes.
 2. Append the recorded lines below the header comments, in the recorded order. Duplicates are dropped at load.
 3. Rebuild the IPA.
 
 Record on the game version you ship. At launch the log names each list it read and its line count (`管线预热清单 … 行`), or says that `pso_user.tsv` does not exist yet.
 
-## Dark Souls: Remastered notes
+## Target title notes
 
 - The supported packages are the base game (`v0`, 1.0.0) and update
   `v196608` (1.0.3). The main and SDK build IDs are checked before rewriting.
 - The Mac frontend uses the PC keyboard / mouse layout and maps physical
   controllers to the Nintendo button layout shown by the game.
-- The renderer uses the Dark Souls bindless texture tables and the profile's
+- The renderer uses the target title's bindless texture tables and the profile's
   shader-chain cache. Keep generated shader libraries beside the game work
   folder, never in the repository.
-- The current bring-up gaps are documented in
-  `dm/games/01004AB00A260000/bringup.md` and the run logs under `game/`.
+- Validation evidence and unresolved issues are documented in the
+  [bring-up notes](../dm/games/01004AB00A260000/bringup.md). Runtime logs stay
+  under the game's work folder in `game/`.
 
 ## Tools (`dm/tools`)
 
 | Tool | What it does |
 |---|---|
-| `nx_extract/` | NSP → ExeFS / RomFS / icon with LibHac, merging the Dark Souls update over the base game (C#, `dotnet build`) |
+| `nx_extract/` | NSP → ExeFS / RomFS / icon with LibHac, merging the update over the base game (C#, `dotnet build`) |
 | `nso_fnmap.py` | Carries offsets from one build to another (function matching with addresses masked; globals via their references) |
 | `nso2elf.py` | Converts NSO to ELF for Ghidra / REA |
 | `insn_census.py` | Counts the instruction sites the rewriter must handle |

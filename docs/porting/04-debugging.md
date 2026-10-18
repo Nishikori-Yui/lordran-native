@@ -1,4 +1,4 @@
-# 05 — Debugging recipes
+# 04 — Debugging recipes
 
 ## Reading a crash report
 
@@ -95,13 +95,13 @@ Instruments' Metal Resource Events didn't record this process from the command l
 
 ## Render-pass investigation
 
-See [04](04-graphics.md) section 7. Notes: pass dumps are large and may contain non-UTF-8 bytes; filter with `LC_ALL=C grep -a "\[pass\] F600 " | grep -av " o cmd"`. A Python one-liner with PIL (the dm venv has it) gives mean colour and non-black share of each dumped PNG, which is quicker than opening 20 images.
+See [03](03-graphics.md) section 7. Notes: pass dumps are large and may contain non-UTF-8 bytes; filter with `LC_ALL=C grep -a "\[pass\] F600 " | grep -av " o cmd"`. A Python one-liner with PIL (the dm venv has it) gives mean colour and non-black share of each dumped PNG, which is quicker than opening 20 images.
 
 ## On-device diagnostics (iOS)
 
 The phone runs an unsigned IPA the user sideloads; nothing is attached to a debugger. The loop is: build an IPA with switches, the user plays and sends `Documents/log.txt` (the previous launch is `log.prev.txt`), read it, repeat.
 
-- **Switches**: `DM_ENV_FILE=<file> dm/ios/tools/build_ipa.sh` bakes `KEY=VALUE` lines into the app (`dm/env.txt`); `Documents/env.txt` overrides them without a rebuild. Every applied switch is logged at boot (`boot: 环境 KEY=VALUE（来源文件）`). The app's working directory is `Documents`, so relative output paths (`DM_NVN_SHOT=3600:shot_%d.png`, `DM_NVN_TEXDUMP`) land where the Files app can reach them.
+- **Switches**: `DM_ENV_FILE=<file> dm/ios/tools/build_ipa.sh` bakes `KEY=VALUE` lines into the app (`dm/env.txt`); `Documents/env.txt` overrides diagnostic switches without a rebuild. Language (`DM_LANG`), operation mode (`DM_OPMODE`) and the performance panel (`DM_HUD`) are controlled by the in-game floating menu instead. Every applied environment switch is logged at boot (`boot: 环境 KEY=VALUE（来源文件）`). The app's working directory is `Documents`, so relative output paths (`DM_NVN_SHOT=3600:shot_%d.png`, `DM_NVN_TEXDUMP`) land where the Files app can reach them.
 - **Which build ran**: the first lines name the modules (`main: … patch_off …`), the shader map size (`映射表 N 条`) and, for builds that have it, the build-ID gate line. Compare them with the build you sent before reading further; users sometimes send an old log. The save path (`fs 挂载 save:`) shows the data folder, which changes when a sideloading tool gives a reinstall a new one.
 - **Reading the periodic lines**: `[长帧]` gives each long frame's submit / GPU / pipeline-compile / upload split; a burst of `新建管线` in long frames after an install is first-use compilation (see "Prewarm lists" in [docs/development.md](../development.md)). In `显示节拍 至 N：…`, `空节拍` (refreshes with no new frame) and `合并丢弃旧帧` are totals since launch, not per window. `上屏 至帧 N` windows give dropped frames, p99 frame time and the physical footprint; `内存 至帧 N` gives resident and Metal-allocated memory. Memory that steps up at level loads and stays flat in between is not a leak.
 - **Screen recordings** from the user are useful for timing and visual symptoms; extract frames with `ffmpeg -ss <t> -i rec.mov -frames:v 1 out.png`.
