@@ -35,6 +35,8 @@ t_dirty_slots
 t_dirty_slots.dSYM/
 t_pfv
 t_pfv.dSYM/
+t_tex_registry
+t_tex_registry.dSYM/
 t_defer_chain
 t_defer_chain.dSYM/
 t_zskip

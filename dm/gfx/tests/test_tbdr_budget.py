@@ -56,6 +56,42 @@ class BudgetExport(unittest.TestCase):
         self.assertEqual(rows[0]['unknown_textures'], '1')
         self.assertEqual(rows[0]['texture_est_bytes'], '64')
 
+    def test_english_records_with_timestamp_level_and_thread(self):
+        prefix = '[2026-10-19T00:00:00.001Z] [DEBUG] [metal.pass] [thread=42] '
+        records = '''[pass] F700 P 1 c0 ser=1 fmt=70 8x4 ms1 lv0 sl0 clear
+[pass] F700 B 1 st1 tex reg0 tid=1 real ser=99 fmt=70 8x4x1
+[pass] F700 R 1 st1 ser=99
+[pass] F700 d 1 fs=unknown_b vc=3
+[pass] F700 F 1 merging next pass (tile readable): physical_attachments=1 previous_attachments=1
+'''
+        rows = self.export(''.join(prefix + line + '\n' for line in records.splitlines()))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['texture_est_bytes'], '128')
+        self.assertEqual(rows[0]['unknown_textures'], '0')
+        self.assertIn('tile', rows[0]['note'])
+
+    def test_pass_analysis_tools_accept_structured_prefix(self):
+        records = '''[pass] F700 P 1 c0 ser=1 fmt=70 1024x1024 ms1 lv0 sl0 clear
+[pass] F700 P 2 c0 ser=1 fmt=70 1024x1024 ms1 lv0 sl0 load
+[pass] F700 D 2 prim=4 vc=3 inst=1 blend=0 wm=f dt=0 dw=0 df=8 st=0 sc=0,0,1024,1024 tgt=1024x1024 vp=0,0,1024,1024
+[pass] F701 P 3 c0 ser=1 fmt=70 1024x1024 ms1 lv0 sl0 clear
+'''
+        prefix = '[2026-10-19T00:00:00.001Z] [DEBUG] [metal.pass] [thread=42] '
+        root = Path(DM_ROOT) / 'run/gfx'
+        root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='pass_test_', dir=root) as tmp:
+            raw, structured = Path(tmp) / 'raw.log', Path(tmp) / 'structured.log'
+            raw.write_text(records)
+            structured.write_text(''.join(prefix + line + '\n' for line in records.splitlines()))
+            for name in ('tbdr_pass_merge.py', 'tbdr_store_dead.py', 'tbdr_load_dead.py'):
+                with self.subTest(tool=name):
+                    results = [subprocess.run([sys.executable, str(TOOL.with_name(name)), str(log)],
+                        capture_output=True, text=True) for log in (raw, structured)]
+                    for result in results:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(results[0].stdout, results[1].stdout)
+                    self.assertIn('4.2' if name != 'tbdr_pass_merge.py' else '8.4', results[1].stdout)
+
     def test_texture_views_do_not_leak_between_passes(self):
         # Both passes output 8×4; the actual bound views of the same ser=99 are 8×4 and 4×4 respectively.
         # RGBA8: independent expectations of 128 / 64 bytes; the later pass's size must not overwrite the earlier pass's.

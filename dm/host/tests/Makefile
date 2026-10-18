@@ -6,9 +6,9 @@ endif
 B = build
 GAME_H = ../gen/$(GAME)/game_profile.h
 GINC = -I../gen/$(GAME) -I../../games/$(GAME)
-TESTS = t_padmap t_touch t_oe t_fs t_thread_leak t_fs_case t_audio t_audio_spsc t_swkbd t_altstack t_condvar t_condvar_old t_time
+TESTS = t_padmap t_touch t_oe t_fs t_thread_leak t_fs_case t_audio t_audio_spsc t_swkbd t_altstack t_condvar t_condvar_old t_time t_log_timestamp t_log t_crash_log
 .DEFAULT_GOAL := run
-$(addprefix $(B)/,$(TESTS)) $(B)/t_audio_spsc_tsan: Makefile $(GAME_H)
+$(addprefix $(B)/,$(TESTS)) $(B)/t_audio_spsc_tsan: Makefile $(GAME_H) ../dm_log.h
 $(GAME_H): ../../games/$(GAME)/game.tsv ../../games/game.py
 	$(MAKE) -C .. GAME=$(GAME) game_profile
 run: $(addprefix $(B)/,$(TESTS))
@@ -26,6 +26,17 @@ run: $(addprefix $(B)/,$(TESTS))
 	$(B)/t_padmap
 	$(B)/t_time
 	$(B)/t_time fixed
+	$(B)/t_log_timestamp
+	$(B)/t_log
+	$(B)/t_crash_log
+	python3 check_log_language.py
+	PYTHONPYCACHEPREFIX="$(abspath ../../../game/$(GAME)-work/build/pycache)" python3 -m unittest test_log_language.py
+$(B)/t_crash_log: t_crash_log.c t_altstack_stub.c ../crash.c ../dm.h ../dm_log_timestamp.h | $(B)
+	clang -O1 -g -Wall -Wextra -Wno-unused-function -I.. $(GINC) -o $@ t_crash_log.c t_altstack_stub.c ../crash.c
+$(B)/t_log: t_log.c ../dm_log.h ../dm_log_timestamp.h | $(B)
+	clang -O1 -g -Wall -Wextra -Werror -o $@ t_log.c
+$(B)/t_log_timestamp: t_log_timestamp.c ../dm_log_timestamp.h | $(B)
+	clang -O1 -g -Wall -Wextra -Werror -o $@ t_log_timestamp.c
 $(B)/t_padmap: t_padmap.c ../dm_padmap.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -o $@ t_padmap.c
 $(B)/t_touch: t_touch.c ../hle_touch.c ../front.h ../dm.h | $(B)

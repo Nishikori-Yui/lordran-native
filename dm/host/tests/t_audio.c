@@ -11,8 +11,20 @@ static _Atomic int g_sig;
 void hle_signal_system_event(void *g) { (void)g; atomic_fetch_add_explicit(&g_sig, 1, memory_order_seq_cst); }
 void hle_bind_system_event(void *g, int autoclear) { (void)g; (void)autoclear; }   // the real implementation needs a guest thread + SDK kernel event; the unit test only counts triggers
 module_t *module_of(const void *p) { (void)p; return NULL; }   // call sites in the log: no guest modules in the unit test
+static int test_downmix(void) {
+    const int16_t in[6] = {1000, 2000, 3000, 4000, 5000, 6000};
+    int16_t out[2];
+    downmix_stereo(in, out, 1, 6);
+    int64_t l = ((int64_t)in[0] * 1024 + (int64_t)in[2] * 724 + (int64_t)in[3] * 257 + (int64_t)in[4] * 724) / 1024;
+    int64_t r = ((int64_t)in[1] * 1024 + (int64_t)in[2] * 724 + (int64_t)in[3] * 257 + (int64_t)in[5] * 724) / 1024;
+    if (out[0] != l || out[1] != r) return 0;
+    const int16_t mono = -1234;
+    downmix_stereo(&mono, out, 1, 1);
+    return out[0] == mono && out[1] == mono;
+}
 int main(void) {
     char out[64], ev[64]; uint8_t prm[16]; gbuf b[3]; static int16_t pcm[3][4800 * 2];
+    if (!test_downmix()) { puts("FAIL 下混"); return 1; }
     h_au_InitParam(prm);
     if (h_au_Open(out, ev, NULL, prm)) return 1;
     if (h_au_Ch(out) != 2 || h_au_Rate(out) != 48000 || h_au_State(out) != STATE_STOPPED) { puts("FAIL 参数"); return 1; }
