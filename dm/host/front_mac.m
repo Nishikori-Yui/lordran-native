@@ -35,6 +35,9 @@ uint64_t front_game_res(int docked) {
 static int32_t clamp_axis(long v) {
     return v < -DM_STICK_MAX ? -DM_STICK_MAX : v > DM_STICK_MAX ? DM_STICK_MAX : (int32_t)v;
 }
+static int game_key_event(NSEvent *e, NSWindow *win) {
+    return e.window == win || (e.window == nil && NSApp.keyWindow == win);
+}
 static void push(void) {
     int32_t lx = (g_d - g_a) * DM_STICK_MAX, ly = (g_w - g_s) * DM_STICK_MAX;
     if (ds_layout()) {
@@ -56,6 +59,7 @@ static int key_bit(unsigned short code) {
             case 5:  return 11; // G = gesture menu = Minus
             case 53: return 10; // Esc = menu = Plus
             case 12: return dm_uiscreen_ingame() ? 5 : 1; // Q = lock-on in a run, menu cancel outside a run
+            case 36: return 0;  // Return = confirm as a convenient PC keyboard equivalent
             case 123: return 12; case 126: return 13; case 124: return 14; case 125: return 15;
         }
         return -1;
@@ -121,6 +125,10 @@ static void on_key(NSEvent *e, int down) {
     int b = key_bit(c);
     if (b >= 0) g_key_btn = down ? (g_key_btn | 1ull << b) : (g_key_btn & ~(1ull << b));
     push();
+    if (down && (b >= 0 || c == 0 || c == 1 || c == 2 || c == 13)) {
+        LOG("Mac 键盘事件 keyCode=%hu → buttons=%#llx sticks=(%d,%d)", c,
+            (unsigned long long)g_btn, (g_d - g_a) * DM_STICK_MAX, (g_w - g_s) * DM_STICK_MAX);
+    }
 }
 
 typedef struct { void (*fn)(void); } guest_arg;
@@ -149,10 +157,12 @@ void front_run(void (*guest)(void)) {
         v.layer = g_layer;
         win.acceptsMouseMovedEvents = YES;
         [win center];
-        [win makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];
+        [win makeKeyAndOrderFront:nil];
+        win.initialFirstResponder = v;
+        [win makeFirstResponder:v];
         [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown | NSEventMaskKeyUp handler:^NSEvent *(NSEvent *e) {
-            if (e.window != win) return e;   // Only swallow keys for the game window; other windows such as the software keyboard input box receive typing as usual
+            if (!game_key_event(e, win)) return e;   // Keep native text dialogs and other application windows independent
             if (!e.isARepeat) on_key(e, e.type == NSEventTypeKeyDown);
             return nil;   // Swallow it to avoid the system beep
         }];
@@ -200,9 +210,17 @@ void front_run(void (*guest)(void)) {
             g_mouse_left = g_mouse_right = g_mouse_middle = 0;
             g_mouse_rx = g_mouse_ry = 0; ++g_mouse_motion_seq;
             push(); dm_touch_set(NULL, 0);
+            LOG("Mac 游戏窗口失去键盘焦点");
             if (!win.miniaturized) dm_focus_set(2);
         }];
-        [nc addObserverForName:NSWindowDidBecomeKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; mtl_link_resume(); dm_focus_set(1); }];
+        [nc addObserverForName:NSWindowDidBecomeKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) {
+            (void)n;
+            [win makeFirstResponder:v];
+            push();
+            LOG("Mac 游戏窗口重新获得键盘焦点");
+            mtl_link_resume();
+            dm_focus_set(1);
+        }];
         [nc addObserverForName:NSWindowDidMiniaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_focus_set(3); dm_audio_suspend(1); dm_gfx_suspend(1); }];
         [nc addObserverForName:NSWindowDidDeminiaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_gfx_suspend(0); dm_audio_suspend(0); dm_focus_set(2); }];
         // Guest thread: 64 MiB stack (the Switch main thread stack is specified by npdm; the host gives plenty)
