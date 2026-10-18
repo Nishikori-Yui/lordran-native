@@ -53,6 +53,32 @@ profile is `dm/games/01004AB00A260000/`; its `game.tsv`, build IDs, shader
 maps, chain header and prewarm data are the source of truth. The packing script
 rejects other title IDs instead of generating surveys for unrelated games.
 
+## Regression checks
+
+The host and test Makefiles default to `01004AB00A260000` and reject another
+profile. Run these from the repository root after a host change:
+
+```sh
+make -C dm/host dmhost
+make -C dm/host/tests run
+```
+
+The host tests cover save transactions and failure recovery, case-sensitive
+paths, notification ordering, audio output and pause/resume, software keyboard
+input, controller layout, thread cleanup, condition variables, and service
+clocks including New York calendar conversion. The audio-output test needs
+access to Core Audio; a sandbox that denies AudioUnit creation cannot validate
+that test. The tests do not require game files or the old D2R Python test
+environment.
+
+For a game regression, use a separate copy of the player's save directory
+under the game's work folder. Keep its `.work` and `.new` transaction siblings
+separate from the player's live save. A windowless run omits `DM_WINDOW`;
+`DM_KEYS` can drive the title and continue menus, and `DM_NVN_SHOT` captures
+rendered frames. Check the log for loading, successful save commits, missing
+imports and fatal errors, then inspect captures from gameplay. Stop only the
+test process, and do not start it while the player's game is running.
+
 ## Build by hand (Mac)
 
 You need the same tools as the script. The shader translator is the prebuilt `dm/gfx/tools/dmsh_xlate_bin`, the build that matches `dmsh_chain.lock`; a fresh `dotnet publish` gives different fingerprints. The commands use three variables:
