@@ -295,6 +295,11 @@ For a focused next run, use `DM_NVN_KEYDUMP=<height-map fragment key>:12:1`
 to capture twelve matching draws across different frames, or use the
 reflection key for the affected material. Resolve the key from
 `shader_map.tsv`; do not infer a handle offset from the source name.
+
+The local launcher must set `DM_WINDOW=1`. Without it, the host deliberately
+runs windowless, and the log reports `无窗口，固定 60 Hz` even though the
+game and Metal renderer continue running. The generated launcher under the
+game work folder now sets this variable explicitly.
 Compare slot 0 uniforms and slot 10 handles, texture serials, view ranges,
 sampler reduction and alpha state together. The current capture has neither
 these per-draw records nor repaired-build images, so it cannot distinguish
