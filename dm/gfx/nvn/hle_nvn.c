@@ -184,10 +184,15 @@ NVN(nvnTexturePoolInitialize, NVNboolean, NVNtexturePool *tp, const NVNmemoryPoo
 NVN(nvnTexturePoolFinalize, void, NVNtexturePool *tp) { (void)tp; }
 NVN(nvnTexturePoolRegisterTexture, void, const NVNtexturePool *tp, int id, const NVNtexture *t, const NVNtextureView *v) { (void)tp; mtl_reg_tex(id, (const tex_t *)t, (const view_t *)v); }
 NVN(nvnSamplerPoolInitialize, NVNboolean, NVNsamplerPool *sp, const NVNmemoryPool *p, ptrdiff_t off, int n) {
-    *(dpool_t *)sp = (dpool_t){(const pool_t *)p, off, n}; OLOG("SamplerPool n=%d", n); return 1;
+    *(dpool_t *)sp = (dpool_t){(const pool_t *)p, off, n};
+    OLOG("SamplerPool n=%d pool=%p memory=%p off=%#lx", n, (void *)sp, (const void *)p, (long)off); return 1;
 }
 NVN(nvnSamplerPoolFinalize, void, NVNsamplerPool *sp) { (void)sp; }
-NVN(nvnSamplerPoolRegisterSampler, void, const NVNsamplerPool *sp, int id, const NVNsampler *s) { (void)sp; mtl_reg_samp(id, &((const samp_t *)s)->p); }
+NVN(nvnSamplerPoolRegisterSampler, void, const NVNsamplerPool *sp, int id, const NVNsampler *s) {
+    mtl_reg_samp((const dpool_t *)sp, id, &((const samp_t *)s)->p);
+    OLOG("SamplerPoolRegisterSampler pool=%p sid=%d mag=%u min=%u", (const void *)sp, id,
+         ((const samp_t *)s)->p.magf, ((const samp_t *)s)->p.minf);
+}
 
 // ---------- Textures ----------
 #define TB(b) ((tex_builder_t *)(b))

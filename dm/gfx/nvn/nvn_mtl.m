@@ -819,7 +819,7 @@ void mtl_drain(void) { present_drop_for_suspend(); mtl_present_flush(); mtl_init
 
 // ================= Render replay =================
 #include "../../host/front.h"
-static int g_red_once[86];
+static int g_red_once[87];
 #define RED_ONCE(k, ...) do { if (!g_red_once[k]++) MLOG("【红】" __VA_ARGS__); } while (0)
 // NVN vertex streams 0–15 → Metal vertex buffer slots: 0–13 go to 16–29 (30 is the constant fallback buffer), 14 and 15 to 14 and 15. Metal has only the 31 slots 0–30; translated shaders use only buffer(0) (the argument buffer),
 // and the host's own vertex functions read no vertex buffers. 13 Sentinels uses stream 15, and the old 16 + stream went out of range (Metal assertion: buffer index (31) must be < 31)
@@ -864,6 +864,7 @@ static int alias_has(id o) { return g_alias_set && o && CFSetContainsValue(g_ali
 // Engage frees pools on scene changes and rebuilds on new ones, so the old pools' render targets and other private textures stayed in the table forever (about 0.8 GB more GPU memory over 850 s of the title demo), and linear textures built directly on a pool also kept the whole pool buffer alive.
 // Also, when a pool object's address is reused, old entries would hand a texture on the old storage to the new pool's texture at the same offset and description. Evicted textures go through deferred release; if the serial table still holds one, that is just one more reference
 static void treg_drop_pool_views(const void *pool);
+static void sreg_drop_pool(const pool_t *pool);
 void mtl_alias_drop_pool(const void *pool) {
     if (!pool) return;
     pthread_mutex_lock(&g_smu);
@@ -885,6 +886,7 @@ void mtl_alias_drop_pool(const void *pool) {
     pthread_mutex_unlock(&g_smu);
     free(ks);
     treg_drop_pool_views(pool);   // outside g_smu: the texture ID registry lock g_rmu is taken before g_smu
+    sreg_drop_pool(pool);
 }
 static __unsafe_unretained id serial_get(uint64_t k) { pthread_mutex_lock(&g_smu); __unsafe_unretained id o = hm_get_id(&g_by_serial, &k); pthread_mutex_unlock(&g_smu); return o; }
 static void serial_put(uint64_t k, id o) { pthread_mutex_lock(&g_smu); id old = hm_get_id(&g_by_serial, &k); if (old) { if (alias_has(old)) defer_obj_unref(old); else defer_obj_release(old); } hm_put_id(&g_by_serial, &k, o); g_ser_gen++; pthread_mutex_unlock(&g_smu); }
@@ -2378,7 +2380,37 @@ static treg_t *g_treg; static int g_ntreg;
 // Lock-free copy of texture ID → serial (the replay hot path only needs the serial: store lookahead index, binding set of the clear-only hoist): texture IDs are 20 bits, fixed 1M entries (BSS, only touched pages are used),
 // release write at registration, relaxed atomic read on the reader side, without entering g_rmu (the former h_ser locked and unlocked on every lookup, thousands of times per frame in the camp)
 static _Atomic uint64_t g_tser[1 << 20];
-static samp_par *g_sreg; static uint8_t *g_sreg_ok; static void **g_sview; static uint64_t *g_srid; static int g_nsreg;   // g_sview: sampler ID → MTLSamplerState (retained)
+// Dark Souls creates twelve sampler pools and switches them within a frame.
+// IDs are local to each pool. Key by descriptor address so overlapping views
+// and distinct memory-pool wrappers over the same storage share registrations.
+enum { SAMP_DESC_SIZE = 32 };   // NVN_DEVICE_INFO_SAMPLER_DESCRIPTOR_SIZE
+typedef struct { samp_par p; void *view; uint64_t rid; } sreg_t;
+static nvn_hmap g_sreg = {.klen = sizeof(uintptr_t)};
+static struct { uintptr_t base; int n; } g_spool;
+static uintptr_t samp_pool_base(const dpool_t *p) {
+    if (!p || !p->pool || !p->pool->mem || p->off < 0 || p->n <= 0 ||
+        (uint64_t)p->off > p->pool->size || (uint64_t)p->n * SAMP_DESC_SIZE > p->pool->size - (uint64_t)p->off) return 0;
+    return (uintptr_t)p->pool->mem + (uint64_t)p->off;
+}
+static void sreg_drop_view(sreg_t *r) {
+    if (r->view) { defer_obj_unref((__bridge id)r->view); CFRelease(r->view); r->view = NULL; r->rid = 0; }
+}
+static void sreg_drop_pool(const pool_t *pool) {
+    if (!pool || !pool->mem) return;
+    uintptr_t lo = (uintptr_t)pool->mem;
+    pthread_mutex_lock(&g_rmu);
+    uintptr_t *keys = malloc(g_sreg.n * sizeof *keys); size_t n = 0;
+    if (g_sreg.n && !keys) MDIE("sampler registry cleanup allocation failed");
+    for (uint32_t i = 0; i < g_sreg.cap; i++) if (g_sreg.vals[i]) {
+        uintptr_t key; memcpy(&key, g_sreg.keys + (size_t)i * g_sreg.klen, sizeof key);
+        if (key >= lo && key - lo < pool->size) keys[n++] = key;
+    }
+    for (size_t i = 0; i < n; i++) { sreg_t *r = nvn_hm_del(&g_sreg, &keys[i]); sreg_drop_view(r); free(r); }
+    if (g_spool.base >= lo && g_spool.base - lo < pool->size) memset(&g_spool, 0, sizeof g_spool);
+    if (n) g_reg_gen++;
+    free(keys);
+    pthread_mutex_unlock(&g_rmu);
+}
 // Memory pool Finalize: for texture IDs whose registered texture lives on this pool, drop the cached MTLTexture (view or base texture). The cache used to be released only when the ID was registered again,
 // so a linear texture built directly on a pool kept the whole pool buffer alive (6 to 17 finalized 16 MB pool buffers stayed alive in Engage's title demo). If the ID is still used, the next lookup rebuilds it on the slow path
 static void treg_drop_ar(treg_t *r) { if (r->ar) { defer_obj_unref((__bridge id)r->ar); CFRelease(r->ar); r->ar = r->ar_of = NULL; r->ar_rid = 0; } }
@@ -2409,14 +2441,16 @@ void mtl_reg_tex(int tid, const tex_t *t, const view_t *v) {
                  v ? v->set_format : 0, v ? v->format : 0);
     }
 }
-void mtl_reg_samp(int sid, const samp_par *sp) {
-    int id_ = sid; if (id_ < 0) return;
+void mtl_reg_samp(const dpool_t *pool, int sid, const samp_par *sp) {
+    uintptr_t base = samp_pool_base(pool);
+    if (!base || sid < 0 || sid >= pool->n) { RED_ONCE(86, "invalid sampler registration: pool=%p sid=%d", (const void *)pool, sid); return; }
+    uintptr_t key = base + (uintptr_t)sid * SAMP_DESC_SIZE;
     pthread_mutex_lock(&g_rmu);
-    if (id_ >= g_nsreg) { int n = id_ + 256; g_sreg = realloc(g_sreg, n * sizeof *g_sreg); g_sreg_ok = realloc(g_sreg_ok, n); g_sview = realloc(g_sview, n * sizeof *g_sview); g_srid = realloc(g_srid, n * sizeof *g_srid);
-        memset(g_sreg_ok + g_nsreg, 0, n - g_nsreg); memset(g_sview + g_nsreg, 0, (n - g_nsreg) * sizeof *g_sview); memset(g_srid + g_nsreg, 0, (n - g_nsreg) * sizeof *g_srid); g_nsreg = n; }
-    if (g_sview[id_]) { CFRelease(g_sview[id_]); g_sview[id_] = NULL; g_srid[id_] = 0; }
+    sreg_t *r = nvn_hm_get(&g_sreg, &key);
+    if (!r) { r = calloc(1, sizeof *r); if (!r) MDIE("sampler registry allocation failed"); nvn_hm_put(&g_sreg, &key, r); }
+    sreg_drop_view(r);
     g_reg_gen++;
-    g_sreg[id_] = *sp; g_sreg_ok[id_] = 1;
+    r->p = *sp;
     pthread_mutex_unlock(&g_rmu);
 }
 // Handles of deferred binds (BindTexturesDeferred) are read at execution: the record keeps the address of the handles (see hle_nvn.c); every reader of a bind record refreshes it first. Command memory is writable, so it is updated in place
@@ -2551,10 +2585,16 @@ static MTLSamplerAddressMode wrapm(int w) {
         case 6: return MTLSamplerAddressModeMirrorRepeat; }
     return MTLSamplerAddressModeRepeat;
 }
-static id<MTLSamplerState> samp_by_id(int sid) {   // Caller holds g_rmu
-    if (sid < 0 || sid >= g_nsreg || !g_sreg_ok[sid]) { RED_ONCE(12, "采样器号 %d 未登记", sid); return nil; }
-    if (g_sview[sid]) return (__bridge id<MTLSamplerState>)g_sview[sid];
-    samp_par p = g_sreg[sid];
+static sreg_t *samp_entry(int sid) {   // Caller holds g_rmu
+    uintptr_t key = g_spool.base + (uintptr_t)sid * SAMP_DESC_SIZE;
+    sreg_t *r = sid >= 0 && sid < g_spool.n && g_spool.base ? nvn_hm_get(&g_sreg, &key) : NULL;
+    if (!r) RED_ONCE(12, "采样器号 %d 未登记（pool=%#llx n=%d）", sid, (unsigned long long)g_spool.base, g_spool.n);
+    return r;
+}
+static id<MTLSamplerState> samp_state(sreg_t *r) {
+    if (!r) return nil;
+    if (r->view) return (__bridge id<MTLSamplerState>)r->view;
+    samp_par p = r->p;
     MTLSamplerDescriptor *d = [MTLSamplerDescriptor new];
     d.magFilter = p.magf ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
     d.minFilter = (p.minf == 1 || p.minf == 3 || p.minf == 5) ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
@@ -2567,13 +2607,10 @@ static id<MTLSamplerState> samp_by_id(int sid) {   // Caller holds g_rmu
     d.borderColor = p.border[3] > 0.5f ? (p.border[0] > 0.5f ? MTLSamplerBorderColorOpaqueWhite : MTLSamplerBorderColorOpaqueBlack) : MTLSamplerBorderColorTransparentBlack;
     d.supportArgumentBuffers = YES;
     id<MTLSamplerState> s = [g_dev newSamplerStateWithDescriptor:d];
-    if (s) { g_sview[sid] = (void *)CFBridgingRetain(s); g_srid[sid] = s.gpuResourceID._impl; }
+    if (s) { r->view = (void *)CFBridgingRetain(s); r->rid = s.gpuResourceID._impl; }
     return s;
 }
-static inline __attribute__((always_inline)) void *samp_fast(int sid) {
-    if (sid > 0 && sid < g_nsreg && g_sreg_ok[sid] && g_sview[sid]) return g_sview[sid];
-    return (__bridge void *)samp_by_id(sid);
-}
+static id<MTLSamplerState> samp_by_id(int sid) { return samp_state(samp_entry(sid)); }
 
 // ---------- Argument buffer blocks: one block per submission, reclaimed after the GPU completes ----------
 @interface NvArena : NSObject { @public id<MTLBuffer> buf; uint64_t gpu, fence; size_t used; } @end
@@ -3186,14 +3223,16 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             uint64_t handle = b->kind == NVN_RB_SAMPU ? ubo_handle(nvn_stage, reg, b->off) :
                               reg < 128 ? (b->kind == NVN_RB_SAMPT ? S.tex[nvn_stage][reg] : S.samp[nvn_stage][reg]) : 0;
             int sid = (int)(handle >> 20);
-            __unsafe_unretained id<MTLSamplerState> ss = sid ? (__bridge id<MTLSamplerState>)samp_fast(sid) : nil;
-            slots[aid] = sid && sid < g_nsreg && g_srid[sid] ? g_srid[sid] : dummy_samp_rid();
+            sreg_t *sr = sid ? samp_entry(sid) : NULL;
+            __unsafe_unretained id<MTLSamplerState> ss = sr ? samp_state(sr) : nil;
+            slots[aid] = sr && sr->rid ? sr->rid : dummy_samp_rid();
             USE(ss ? ss : dummy_samp(), MTLResourceUsageRead);
-            if (bl && sid > 0) { int ok = sid < g_nsreg && g_sreg_ok[sid]; samp_par sp = ok ? g_sreg[sid] : (samp_par){0};   // g_rmu is already held in this section
+            if (bl && sid > 0) { int ok = sr != NULL; samp_par sp = ok ? sr->p : (samp_par){0};   // g_rmu is already held in this section
                 if (ok) PD("B %llu st%d samp reg%d sid=%d mag=%d min=%d（0 最近点 / 1 双线性；2–5 带 mip）wrap=%d,%d,%d border=%g,%g,%g,%g lod=%g..%g bias=%g aniso=%g cmp=%d/%d reduction=%u %s aid=%d kind=%u off=%u handle=%#llx",
                            g_stat_pass, nvn_stage, reg, sid, (int)sp.magf, (int)sp.minf,
                            (int)sp.ws, (int)sp.wt, (int)sp.wr, sp.border[0], sp.border[1], sp.border[2], sp.border[3], sp.lod_min, sp.lod_max, sp.lod_bias, sp.aniso, (int)sp.cmp_mode, (int)sp.cmp_func, sp.reduction, ss ? "实" : "建不出",
-                           aid, (unsigned)b->kind, (unsigned)b->off, (unsigned long long)handle); }
+                           aid, (unsigned)b->kind, (unsigned)b->off, (unsigned long long)handle);
+                if (ok) PD("B %llu st%d samp_pool=%#llx n=%d sid=%d", g_stat_pass, nvn_stage, (unsigned long long)g_spool.base, g_spool.n, sid); }
         } else if (b->kind == NVN_RB_TEX || b->kind == NVN_RB_TEXU) {
             uint64_t handle = b->kind == NVN_RB_TEXU ? ubo_handle(nvn_stage, reg, b->off) : reg < 128 ? S.tex[nvn_stage][reg] : 0;
             int tid = (int)(handle & 0xfffff);
@@ -5941,7 +5980,17 @@ void mtl_exec(const uint8_t *p) {
             case OP_COPY_T2T: copy_t2t(a); break;
             case OP_CLEAR_TEX: clear_tex(a); break;
             case OP_DISPATCH: dispatch(a); break;
-            case OP_BARRIER: case OP_SET_TEX_POOL: case OP_SET_SAMP_POOL: break;
+            case OP_SET_SAMP_POOL: {
+                const dpool_t *pool = ((const p_set_pool *)a)->pool;
+                uintptr_t base = samp_pool_base(pool); int n = base ? pool->n : 0;
+                pthread_mutex_lock(&g_rmu);
+                if (g_spool.base != base || g_spool.n != n) {
+                    g_spool.base = base; g_spool.n = n; args_dirty_all();
+                }
+                pthread_mutex_unlock(&g_rmu);
+                PD("S sampler_pool=%#llx n=%d", (unsigned long long)base, n);
+                break; }
+            case OP_BARRIER: case OP_SET_TEX_POOL: break;
             default: break;
         }
         p += h.size;
@@ -5972,7 +6021,7 @@ void mtl_res_snapshot(mtl_res_count *out) {
     pthread_mutex_lock(&g_rmu);
     out->view_slots = (uint32_t)g_ntreg;
     for (int i = 0; i < g_ntreg; i++) if (g_treg[i].view) out->view_nonnull++;
-    for (int i = 0; i < g_nsreg; i++) if (g_sview[i]) out->sview_nonnull++;
+    for (uint32_t i = 0; i < g_sreg.cap; i++) if (g_sreg.vals[i] && ((sreg_t *)g_sreg.vals[i])->view) out->sview_nonnull++;
     pthread_mutex_unlock(&g_rmu);
 }
 // Resource counts (read by long-run stability L3): the host calls it per game tick / event (every 250 ticks, loading screen dismissed, exit), not sampled by wall clock / present count.

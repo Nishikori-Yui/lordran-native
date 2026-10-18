@@ -71,6 +71,12 @@ int main(void) { @autoreleasepool {
     CHECK("memory pool initializes", h_nvnMemoryPoolInitialize(&memory_pool, &pool_builder));
     NVNsamplerPool pool = {0};
     CHECK("sampler pool initializes", h_nvnSamplerPoolInitialize(&pool, &memory_pool, 0, 257));
+    NVNcommandBuffer cmd = {0};
+    h_nvnCommandBufferInitialize(&cmd, NULL);
+    h_nvnCommandBufferAddCommandMemory(&cmd, &memory_pool, 12288, 4096);
+    h_nvnCommandBufferBeginRecording(&cmd);
+    h_nvnCommandBufferSetSamplerPool(&cmd, &pool);
+    mtl_exec((const uint8_t *)h_nvnCommandBufferEndRecording(&cmd));
 
     NVNsamplerBuilder builder = {0}; NVNsampler original, average;
     h_nvnSamplerBuilderSetDefaults(&builder);
