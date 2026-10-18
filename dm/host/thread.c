@@ -10,10 +10,9 @@ static pthread_once_t g_keyown_once = PTHREAD_ONCE_INIT;
 static void own_free(void *p) { void **own = p; free(own[0]); free(own[1]); free(own); }
 static void own_key_init(void) { if (pthread_key_create(&g_keyown, own_free)) die("创建线程本地块的释放键失败"); }
 #include "front.h"
-#include "dm_uiscreen.h"
 void guest_thread_init(void) {
     pthread_setspecific(g_keygate, (void *)dm_gate);
-    for (int i = 0; i < 2; i++) if (g_keyres[i]) pthread_setspecific(g_keyres[i], (void *)dm_game_res(i));   // resolution parameter slot: {u32 width, u32 height} packed
+    for (int i = 0; i < 2; i++) if (g_keyres[i]) pthread_setspecific(g_keyres[i], (void *)front_game_res(i));   // resolution parameter slot: {u32 width, u32 height} packed
     if (g_keyaspect || g_keyaspectui) {   // aspect ratio limit parameter slot: max(19/9, output width / height of the two modes), float bit pattern in the low 32 bits
         float a = 19.0f / 9.0f; int wide = 0;
         for (int i = 0; i < 2; i++) { uint64_t r = front_game_res(i); float w = (float)(uint32_t)r, h = (float)(uint32_t)(r >> 32); if (h > 0 && w / h > a) { a = w / h; wide = 1; } }

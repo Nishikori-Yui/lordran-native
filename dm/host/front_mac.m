@@ -8,11 +8,7 @@
 #include "dm.h"
 #include "dm_input.h"
 #include "dm_padmap.h"
-#include "dm_uiscreen.h"
 #include "../gfx/nvn/nvn_mtl.h"
-void mtl_set_ui_rect_fn(void (*fn)(double *y, double *h));
-static void ui_rect_frac(double *fy, double *fh) { int x, y, w, h, rw = 0, rh = 0; dm_ui_rect(&x, &y, &w, &h); if (dm_screen_real(&rw, &rh) && rh > 0) { *fy = (double)y / rh; *fh = (double)h / rh; } }   // Same as front_ios.m: vertical position and height of the UI rectangle (as fractions of the frame height)
-__attribute__((constructor)) static void ui_shift_reg(void) { mtl_set_ui_rect_fn(ui_rect_frac); }   // Must also take effect when running without a window (screenshots / gate checks), so it is not placed where the layer is created
 #include "front.h"
 #include "hle.h"
 #include <signal.h>
@@ -114,7 +110,7 @@ static int key_bit(unsigned short code) {
             case 15: return 3;  // R = use item = Y
             case 5:  return 11; // G = gesture menu = Minus
             case 53: return 10; // Esc = menu = Plus
-            case 12: return dm_uiscreen_ingame() ? 5 : 1; // Q = lock-on in a run, menu cancel outside a run
+            case 12: return 1; // Q = menu cancel
             case 36: return 0;  // Return = confirm as a convenient PC keyboard equivalent
             case 123: return 12; case 126: return 13; case 124: return 14; case 125: return 15;
         }

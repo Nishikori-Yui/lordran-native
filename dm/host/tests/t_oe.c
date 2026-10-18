@@ -8,7 +8,7 @@
 #include <sys/wait.h>
 uint64_t now_ns(void) { return 0; }
 pthread_key_t g_keyres[2];                                   // stub for the resolution parameter slot (loader.c): no key created, so taking 31 does not write the thread slot
-uint64_t dm_game_res(int docked) { (void)docked; return 0; }  // stub for the render resolution (dm_uiscreen.c)
+uint64_t front_game_res(int docked) { (void)docked; return 0; }  // front-end resolution stub
 void dm_audio_suspend(int on) { (void)on; }   // stubs for the bg item of DM_OE_SCRIPT (hle_audio.c / hle_os.c / hle_nvn.c)
 void guest_clock_freeze_for(int reason, int on) { (void)reason; (void)on; }
 void dm_gfx_suspend(int on) { (void)on; }

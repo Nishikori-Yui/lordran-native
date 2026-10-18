@@ -47,13 +47,7 @@ void stubs_report(void) { LOG("stubs=%u", g_nstub); }
 // ---------- Host gate dispatch ----------
 // The rewriter replaces every svc #n / mrs cntpct with a call to dm_gate; here we remember, by gate block return point (absolute address), what it originally was.
 // Lookup: open-addressing hash, one hit (it used to do module_of + a linear compare over 110 entries on every gate call, keyed by in-module offset, which would collide across modules).
-enum { G_SVC, G_CNTPCT, G_CNTVCT, G_OBS };
-// Observation gates (inserted offline from the rewriter's OBS table): number → read-only callback; with no callback attached the gate returns after one pass in and out
-static void (*g_obs_fn[OBS_MAX])(const uint64_t *regs); static int g_obs_have[OBS_MAX];
-void gate_obs_set(int id, void (*fn)(const uint64_t *regs)) { if (id <= 0 || id >= OBS_MAX) die("观测门编号越界 %d", id); g_obs_fn[id] = fn; }
-int gate_obs_present(int id) { return id > 0 && id < OBS_MAX && g_obs_have[id]; }
-static uint8_t g_svc_have[256];   // svc numbers registered in the build output (used to tell whether the host call numbers from 0x80 up, introduced by cuts, are present)
-int gate_svc_present(int num) { return num >= 0 && num < 256 && g_svc_have[num]; }
+enum { G_SVC, G_CNTPCT, G_CNTVCT };
 typedef struct { uint64_t ret; int kind, arg; uint64_t orig; } gate_t;
 #define GATE_BITS 12                     // 4096 slots, gate count ≤ 1024, load factor ≤ 1/4
 static gate_t g_gate[1u << GATE_BITS];
@@ -61,10 +55,8 @@ static int g_ngate;
 static inline unsigned gate_h(uint64_t a) { return (unsigned)(((a >> 2) * 0x9E3779B97F4A7C15ull) >> (64 - GATE_BITS)); }
 
 void gate_register(uint64_t ret_abs, const char *kind, int arg, uint64_t orig) {
-    int k = !strcmp(kind, "svc") ? G_SVC : !strcmp(kind, "cntpct") ? G_CNTPCT : !strcmp(kind, "cntvct") ? G_CNTVCT : !strcmp(kind, "obs") ? G_OBS : -1;
+    int k = !strcmp(kind, "svc") ? G_SVC : !strcmp(kind, "cntpct") ? G_CNTPCT : !strcmp(kind, "cntvct") ? G_CNTVCT : -1;
     if (k < 0) die("未知门类 %s", kind);
-    if (k == G_OBS) { if (arg <= 0 || arg >= OBS_MAX) die("观测门编号越界 %d", arg); g_obs_have[arg] = 1; }
-    if (k == G_SVC && arg >= 0 && arg < 256) g_svc_have[arg] = 1;
     if (++g_ngate > (1 << GATE_BITS) / 4) die("gate overflow");
     unsigned i = gate_h(ret_abs);
     while (g_gate[i].ret) { if (g_gate[i].ret == ret_abs) die("门重复登记 %#llx", ret_abs); i = (i + 1) & ((1u << GATE_BITS) - 1); }
@@ -82,7 +74,6 @@ uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs) {
                 regs[g->arg] = t;
                 return t;
             }
-            case G_OBS: if (g_obs_fn[g->arg]) g_obs_fn[g->arg](regs); return 0;   // Registers are read-only; the x0–x8 that dm_gate writes back are the original values
             default: {   // register the gate frame on SVC entry / exit: it is the context of a paused thread (hle_thread.c)
                 void thr_svc_enter(uint64_t *, uint64_t), thr_svc_leave(void);
                 thr_svc_enter(regs, g->orig); uint64_t r = svc_dispatch(g->arg, regs, g->orig); thr_svc_leave(); return r; }
