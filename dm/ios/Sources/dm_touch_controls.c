@@ -250,7 +250,7 @@ static _Atomic int g_imbue_open;   /* Single-item quest slot panel open (imbue /
 static _Atomic int g_cube_open;   /* Horadric Cube page open: double tap = hold Y (the original game's "move to the other side": inventory → cube / cube → inventory), not "use / equip" */
 static _Atomic int g_vault_open;   /* Stash open on page six 「编年史」(Chronicle): double-tapping an inventory item = store it in the Chronicle vault (goes through use_seq; the host's ui_use_pump determines the page); do not send the original game's "hold Y" -- the game treats that page as the cube page */
 static _Atomic int g_bank_open;   /* Stash open (set by the front end from the host's reading of the game panel tree, not from open/close messages): double tap = hold Y (move to the other side) */
-void dm_tc_set_panel_state(int bits) { atomic_store(&g_bank_open, (bits & 1) != 0); atomic_store(&g_vendor_open, (bits & 2) != 0); atomic_store(&g_dead_modal, (bits & 4) != 0); atomic_store(&g_imbue_open, (bits & 16) != 0); atomic_store(&g_cube_open, (bits & 32) != 0); atomic_store(&g_vault_open, (bits & 64) != 0); }   /* Bits are the same as DM_PS_* in dm_cursor.h; obtained by the host reading the game state */
+void dm_tc_set_panel_state(int bits) { atomic_store(&g_bank_open, (bits & 1) != 0); atomic_store(&g_vendor_open, (bits & 2) != 0); atomic_store(&g_dead_modal, (bits & 4) != 0); atomic_store(&g_imbue_open, (bits & 16) != 0); atomic_store(&g_cube_open, (bits & 32) != 0); atomic_store(&g_vault_open, (bits & 64) != 0); }   /* Bits are the stable panel-state contract published by the host after reading the game state */
 
 static void pointer_drag_begin(dm_tc_state *s, dm_tc_finger *f) {
     f->pointer_dragged = 1;
