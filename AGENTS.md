@@ -7,6 +7,4 @@
 - `README.md` is the player-facing page in English followed by Chinese. Other documentation and code comments are in English. Keep log messages unchanged; red log lines start with `【红】`.
 - After changing anything in the shader translation chain (`dm/gfx/tools/dmsh_*`, `dmsh_xlate/`, `dm/ios/tools/ios_metal.py`, or the Dark Souls shader tables), regenerate `dmsh_chain.h`, rebuild the Mac/iOS shader libraries as applicable, regenerate `c1_full.tsv`, and rebuild the host. The host only accepts libraries with its own chain version.
 - Validate Dark Souls after independent changes. At minimum use `python3 -m py_compile` for changed Python and `make -C dm/host GAME=01004AB00A260000 dmhost` for host changes; run focused tests when their targets build.
-- Commit each independent change when the user has asked for ongoing commits, using the owner's identity and New York timezone:
-  `TZ=America/New_York git -c user.name=Nishikori-Yui -c user.email=165007678+Nishikori-Yui@users.noreply.github.com commit`
 - Do not sign or install IPA builds. Do not close or duplicate a running game window. Delete one-off helper scripts after use and do not commit them.
