@@ -1,6 +1,5 @@
-// NSP extraction: nx_extract <prod.keys> <base NSP> <update NSP or -> <output dir> [base RomFS dir to compare against] [--manifest]
+// NSP extraction: nx_extract <prod.keys> <base NSP> <update NSP or -> <output dir> [base RomFS dir to compare against]
 // Writes <output dir>/ExeFS and <output dir>/RomFS (the merged RomFS when there is an update); with a base RomFS dir, files whose content matches it become APFS clones (no new space).
-// --manifest: the RomFS is not written, only a list <output dir>/romfs_manifest.tsv (path, size, first 32 bytes), for surveying a new game (a large game's RomFS is well over 10 GB).
 // Add-on content: nx_extract <prod.keys> --aoc <DLC NSP> <output dir> writes the RomFS of the DLC's data NCA to <output dir> (the packing script puts it at aoc/<index>/, the host mounts it through DM_AOC_DIR).
 // Title keys come from the common tickets (.tik) inside the NSPs, so only prod.keys is needed; key values are never printed.
 using System;
@@ -23,8 +22,7 @@ static class P {
     [DllImport("libc", SetLastError = true)] static extern int clonefile(string src, string dst, uint flags);
 
     static int Main(string[] a) {
-        bool manifest = Array.IndexOf(a, "--manifest") >= 0; a = Array.FindAll(a, s => s != "--manifest");
-        if (a.Length < 4) { Console.Error.WriteLine("用法 | usage: nx_extract <prod.keys> <base.nsp> <update.nsp|-> <out dir> [base RomFS dir] [--manifest]\n       nx_extract <prod.keys> --aoc <dlc.nsp> <out dir>"); return 2; }
+        if (a.Length < 4) { Console.Error.WriteLine("用法 | usage: nx_extract <prod.keys> <base.nsp> <update.nsp|-> <out dir> [base RomFS dir]\n       nx_extract <prod.keys> --aoc <dlc.nsp> <out dir>"); return 2; }
         KeySet ks = ExternalKeyReader.ReadKeyFile(a[0]);
         if (a[1] == "--aoc") return Aoc(ks, a[2], a[3]);
         var basePkg = OpenNsp(ks, a[1]); var updPkg = a[2] == "-" ? null : OpenNsp(ks, a[2]);
@@ -52,8 +50,7 @@ static class P {
             if (h[0] == 'N' && h[1] == 'S' && h[2] == 'O' && h[3] == '0') Console.WriteLine($"{Path.GetFileName(p)} 构建号 | build id {Convert.ToHexString(h, 0x40, 16).ToLowerInvariant()}");
         }
         IStorage romfs = updProg != null ? baseProg.OpenStorageWithPatch(updProg, NcaSectionType.Data, IntegrityCheckLevel.ErrorOnInvalid) : baseProg.OpenStorage(NcaSectionType.Data, IntegrityCheckLevel.ErrorOnInvalid);
-        if (manifest) Manifest(new RomFsFileSystem(romfs), Path.Combine(outDir, "romfs_manifest.tsv"));
-        else Copy(new RomFsFileSystem(romfs), Path.Combine(outDir, "RomFS"), cmpDir);
+        Copy(new RomFsFileSystem(romfs), Path.Combine(outDir, "RomFS"), cmpDir);
         return 0;
     }
 
@@ -109,7 +106,9 @@ static class P {
         return v;
     }
     // Game name: the NACP starts with 16 language entries of 0x300 bytes each (name 0x200 + publisher 0x100); take the first non-empty one (0 = American English); DisplayVersion is at 0x3060
-    //   NACPs from newer SDKs (such as Mario 1.2.1) compress these 0x3000 bytes: a u16 size + raw deflate, inflating to 32 languages × 0x300. LibHac 0.19 does not know this, so it is decoded here
+    //   Newer SDKs compress these 0x3000 bytes: a u16 size + raw deflate,
+    //   inflating to 32 languages × 0x300. LibHac 0.19 does not know this,
+    //   so it is decoded here.
     static string TitleName(byte[] nacp) {
         byte[] t = nacp; int n = nacp[0] | nacp[1] << 8;
         if (n > 0 && n <= 0x2ffe) try {
@@ -148,23 +147,6 @@ static class P {
             written += e.Size;
         }
         Console.WriteLine($"{dst}：{n} 个文件 {bytes / 1048576.0:F1} MB，其中 {cloned} 个与比对目录相同（克隆），新写 {written / 1048576.0:F1} MB | {n} files {bytes / 1048576.0:F1} MB, {cloned} identical to the compare dir (cloned), {written / 1048576.0:F1} MB newly written");
-    }
-    // List the RomFS only (path, size, first 32 bytes) without writing game files
-    static void Manifest(IFileSystem fs, string path) {
-        long n = 0, bytes = 0; byte[] h = new byte[32];
-        Directory.CreateDirectory(Path.GetDirectoryName(path));
-        using var o = new StreamWriter(path);
-        o.WriteLine("# 路径\t字节\t头 32 字节（十六进制） | path\tbytes\tfirst 32 bytes (hex)");
-        foreach (DirectoryEntryEx e in fs.EnumerateEntries("*", SearchOptions.RecurseSubdirectories)) {
-            if (e.Type == DirectoryEntryType.Directory) continue;
-            using var f = new UniqueRef<IFile>();
-            fs.OpenFile(ref f.Ref, e.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
-            long got = 0; int want = (int)Math.Min(h.Length, e.Size);
-            if (want > 0) f.Get.Read(out got, 0, h.AsSpan(0, want), ReadOption.None).ThrowIfFailure();
-            o.WriteLine($"{e.FullPath}\t{e.Size}\t{Convert.ToHexString(h, 0, (int)got).ToLowerInvariant()}");
-            n++; bytes += e.Size;
-        }
-        Console.WriteLine($"{path}：RomFS {n} 个文件 {bytes / 1048576.0:F1} MB（只列清单）| RomFS {n} files {bytes / 1048576.0:F1} MB (manifest only)");
     }
     static bool Same(IFile f, string path, long size, byte[] buf, byte[] cb) {
         using var c = File.OpenRead(path);

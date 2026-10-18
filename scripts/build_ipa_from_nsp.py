@@ -1,20 +1,27 @@
 #!/usr/bin/env python3
-# Unsigned IPA straight from the NSPs: identify the game (title ID → game profile dm/games/<id>/) → extract (nx_extract) → rewrite the code modules (patch_nso.py) → split out the shaders and check them against the profile's tables (shader_split.py)
-#   → iOS shader libraries (dmsh_build.py) → build_ipa.sh. A game with no matching profile is only surveyed (<NSP folder>/<title ID>_survey/survey.md); no IPA.
+# Unsigned Dark Souls: Remastered IPA straight from the NSPs: identify the
+# title → extract (nx_extract) → rewrite the code modules (patch_nso.py) →
+# split and validate shaders (shader_split.py) → iOS shader libraries
+# (dmsh_build.py) → build_ipa.sh. This repository intentionally has no survey
+# or fallback path for other titles.
 # Two ways to run it: open this file in Spyder and press F5 (it uses the values under "Settings" below; an empty NSP folder or prod.keys is asked for at run time);
 #   or in a terminal: python3 scripts/build_ipa_from_nsp.py <NSP folder> -k <prod.keys> [options] (values given on the command line override "Settings", -h lists every option;
 #   without keyboard input a missing value is not asked for but reported as an error; exit code 0 on success, 1 on error, 130 when interrupted). Command-line options entered in Spyder's run configuration work the same way.
-# Uses only three things: this repository, a folder holding one game's NSPs (the base game plus the updates listed in the profile's shader_versions are required; DLC NSPs, when present, are packed too and unlock the add-on content already in the game), and prod.keys.
+# Uses only three things: this repository, a folder holding the Dark Souls NSPs
+# (the base game plus the updates listed in the profile's shader_versions), and
+# prod.keys. DLC NSPs, when present, are packed too.
 # Every intermediate file is under <id>_build/ in the NSP folder: extract/ (the extracted game files, deleted after the IPA is built by default), aoc/ (each DLC's RomFS by index), tools/, patched_*/, shader/ (shader package and caches, kept so the next build is fast), logs/ (each step's full output), tmp/, ipa/. The finished IPA also goes to the NSP folder by default.
 # The shader translator is the in-repo dm/gfx/tools/dmsh_xlate_bin (the build whose fingerprints match dmsh_chain.lock; a rebuilt dll has different fingerprints and dmsh_build refuses it).
-# The Python running this file needs lz4, capstone and fonttools; also needed: Xcode, xcodegen, .NET SDK 10, zstd, spirv-cross. For Mario the first run takes about 35 minutes (mostly the shader libraries); later runs take about 10 (the shader libraries come from the cache). Key values are never printed.
+# The Python running this file needs lz4, capstone and fonttools; also needed:
+# Xcode, xcodegen, .NET SDK 10, zstd and spirv-cross. Key values are never
+# printed.
 import collections, ctypes, getpass, os, re, shutil, struct, subprocess, sys, tempfile, threading, time, zlib
 from pathlib import Path
 
 # ---- Settings ----
 NSP_DIR = ''                            # folder holding the NSPs (empty = ask at run time)
 PROD_KEYS = ''                          # path of prod.keys (empty = ask at run time)
-PACKAGE = ''                            # version packed into the IPA (empty = the profile's package; Mario 'v327680' i.e. 1.2.1, or 'v0')
+PACKAGE = ''                            # version packed into the IPA (empty = the profile's package)
 OUT_IPA = ''                            # output IPA (empty = <the profile's ipa> in the NSP folder)
 APP_NAME = ''                           # app name on the home screen (empty = the game name in the base NSP)
 BUNDLE_ID = ''                          # the app's bundle ID (empty = org.nxnative.<base game title ID in lowercase>)
@@ -82,7 +89,7 @@ def rmtree(p):
 
 
 def build_nx_extract(repo, work, logs, env):
-    """Build nx_extract into <work>/tools/nx_extract/. It is built in a temporary folder and copied over: with an apostrophe in the output path (e.g. "Bowser's Fury") MSBuild's conditions break,
+    """Build nx_extract into <work>/tools/nx_extract/. It is built in a temporary folder and copied over: with an apostrophe in the output path MSBuild's conditions break,
     LibHac.dll and the executable are not copied, and the build still reports success"""
     nx = work / 'tools/nx_extract/nx_extract'
     with tempfile.TemporaryDirectory(prefix='nx_extract_') as t:
@@ -128,7 +135,7 @@ def scan_nsps(nsp_dir):
     """Group by game: {application title ID: {'base': path, 'updates': [(version, path)], 'dlc': [(title ID, version, path)]}}"""
     fams, unknown = {}, []
     for p in sorted(nsp_dir.glob('*.nsp')):
-        if p.stat().st_size == 0:   # an empty file left by an incomplete download (the Zelda BotW folder holds a 0-byte DLC NSP next to the complete (1).nsp)
+        if p.stat().st_size == 0:   # an empty file left by an incomplete download
             say(f'跳过空文件 | skipping an empty file: {p.name}'); continue
         tid = title_of(p)
         if tid is None: unknown.append(p); continue
@@ -169,112 +176,6 @@ def can_clone(d):   # whether this volume supports APFS clones (nx_extract uses 
         rmtree(a); rmtree(b)
 
 
-# ---- Survey of a new game (when no game profile matches) ----
-MAGICS = [(b'UnityFS\0', 'UnityFS'), (b'UnityWeb', 'UnityWeb'), (b'UnityRaw', 'UnityRaw'), (b'BNSH', 'BNSH'), (b'BAHS', 'BAHS'), (b'SARC', 'SARC'), (b'Yaz0', 'Yaz0'),
-          (bytes.fromhex('28b52ffd'), 'zstd'), (b'FRES', 'bfres'), (b'BNTX', 'BNTX'), (b'BWAV', 'BWAV'), (b'FSAR', 'BFSAR'), (b'CPK ', 'CRI CPK'), (b'CRID', 'CRI USM'),
-          (b'@UTF', 'CRI UTF'), (b'AKPK', 'Wwise pck'), (b'BKHD', 'Wwise bnk'), (b'FSB5', 'FMOD'), (b'\x89PNG', 'PNG'), (b'RIFF', 'RIFF'), (b'OggS', 'Ogg'), (b'PK\x03\x04', 'zip'), (b'NSO0', 'NSO')]
-MARKERS = [(b'nvnBootstrapLoader', 'NVN'), (b'vkCreateInstance', 'Vulkan'), (b'eglGetProcAddress', 'EGL / OpenGL'), (b'il2cpp_', 'Unity IL2CPP'), (b'UnityEngine', 'Unity'),
-           (b'sead::', 'Nintendo sead'), (b'agl::', 'Nintendo agl'), (b'gsys::', 'Nintendo gsys'), (b'Unreal', 'Unreal'), (b'UE4', 'Unreal 4'), (b'Havok', 'Havok'), (b'CRIWARE', 'CRIWARE'), (b'Wwise', 'Wwise')]
-
-
-def nso_image(path):   # decompress an NSO's three segments
-    import lz4.block
-    d = path.read_bytes(); flags = struct.unpack_from('<I', d, 0xc)[0]
-    segs = [struct.unpack_from('<III', d, 0x10 + i * 0x10) for i in range(3)]; csz = struct.unpack_from('<III', d, 0x60)
-    img = bytearray(segs[2][1] + segs[2][2])
-    for i, (fo, mo, sz) in enumerate(segs):
-        raw = d[fo:fo + csz[i]]
-        img[mo:mo + sz] = lz4.block.decompress(raw, uncompressed_size=sz) if flags >> i & 1 else raw
-    return bytes(img), d[0x40:0x50].hex(), [sz for _, _, sz in segs]
-
-
-def survey(nsp_dir, app, fam, keys, repo, py, env):
-    work = nsp_dir / f'{app:016X}_survey'; logs, ex = work / 'logs', work / 'extract'
-    say(f'没有 {app:016X} 的游戏档案：只做粗查，不出 IPA | no game profile for {app:016X}: survey only, no IPA')
-    nx = build_nx_extract(repo, work, logs, env)
-    ups = sorted(fam['updates'], key=lambda u: u[0] or 0)
-    upd = ups[-1][1] if ups else None
-    tmp = work / 'extract.partial'; rmtree(tmp)
-    say(f'解出代码模块与 RomFS 清单（不写游戏文件）| extracting the code modules and a RomFS manifest (no game files written) → {ex}')
-    run([nx, keys, fam['base'], upd or '-', tmp, '--manifest'], logs / 'extract.log')
-    swap_in(tmp, ex)
-    xlog = (logs / 'extract.log').read_text(errors='replace')
-    dv = re.search(r'display version (\S+)', xlog)
-    R = [f'# 粗查 | Survey: {nacp.name(ex / "control.nacp") or "?"} ({app:016X})', '', f'- 显示版本 | display version: {dv.group(1) if dv else "?"}', f'- 基础版 | base: `{fam["base"].name}` ({fam["base"].stat().st_size / 2**30:.2f} GB)']
-    R += [f'- 更新 | update: `{p.name}` (v{v}, {p.stat().st_size / 2**30:.2f} GB){"（粗查用的这一个 | used for this survey）" if p == upd else ""}' for v, p in ups]
-    R += [f'- DLC: `{p.name}` ({p.stat().st_size / 1024:.0f} KB{"，只有授权、无内容 | licence only, no content" if p.stat().st_size < 1 << 20 else ""})' for _, _, p in fam['dlc']]
-
-    # Code modules
-    R += ['', '## 代码模块 | Code modules', '', '| 模块 module | 构建号 build ID | text / ro / data (MB) |', '|---|---|---|']
-    found, sdkver, comps, unity, mods, glslc = {}, set(), set(), set(), [], 0
-    for p in sorted((ex / 'ExeFS').iterdir()):
-        if p.read_bytes()[:4] != b'NSO0': continue
-        img, bid, szs = nso_image(p); mods.append(p)
-        R.append(f'| {p.name} | `{bid}` | ' + ' / '.join(f'{z / 2**20:.1f}' for z in szs) + ' |')
-        sdkver |= {m.decode() for m in re.findall(rb'(?i)NintendoSDK_nnSdk-([0-9_]+)', img)}   # SDK 12 spells it NintendoSdk_, SDK 16 NintendoSDK_
-        comps |= {m.decode() for m in re.findall(rb'SDK MW\+Nintendo\+([\w]+-[0-9_]+)', img)}
-        unity |= {m.decode() for m in re.findall(rb'20[12][0-9]\.[0-9]+\.[0-9]+f[0-9]', img)} if p.name == 'main' else set()
-        if p.name == 'main': glslc = img.count(b'\x91\x68\x86\x19')   # magic of GLSLC compiler outputs (shader_split.py glslc_shaders)
-        for pat, name in MARKERS:
-            if pat in img: found.setdefault(name, []).append(p.name)
-    npdm = ex / 'ExeFS/main.npdm'
-    if npdm.exists():
-        d = npdm.read_bytes(); a = d.find(b'ACI0')
-        if a >= 0: R.append(f'\n- main.npdm 程序号 | program ID: `{struct.unpack_from("<Q", d, a + 0x10)[0]:016X}`')
-    R.append(f'- SDK: {", ".join(sorted(sdkver)) or "?"}（马力欧 | Mario: 16_2_0 / 16_2_12；D2R ≈ 12）')
-    R.append('- SDK 组件 | SDK components: ' + (', '.join(sorted(comps)) or '—'))
-    if unity: R.append('- Unity: ' + ', '.join(sorted(unity)))
-    R.append('- 引擎与接口标记 | engine and API markers: ' + ('; '.join(f'{k} ({", ".join(v)})' for k, v in found.items()) or '—'))
-    extra = [m.name for m in mods if m.name not in ('main', 'sdk', 'rtld')]
-
-    # RomFS manifest
-    tops, exts, mags, nfile, nbytes = collections.Counter(), collections.Counter(), collections.Counter(), 0, 0
-    topb, magb = collections.Counter(), collections.Counter()
-    for line in (ex / 'romfs_manifest.tsv').read_text(errors='replace').splitlines():
-        if line.startswith('#'): continue
-        path, size, head = line.split('\t'); size = int(size); h = bytes.fromhex(head)
-        nfile += 1; nbytes += size
-        parts = path.strip('/').split('/')
-        top = '/'.join(parts[:2]) if len(parts) > 2 else parts[0] if len(parts) > 1 else '(根 | root)'   # two levels: Unity keeps everything under Data/
-        tops[top] += 1; topb[top] += size
-        exts[os.path.splitext(path)[1].lower() or '(无 | none)'] += 1
-        mag = next((n for m, n in MAGICS if h.startswith(m)), None)
-        if mag: mags[mag] += 1; magb[mag] += size
-    R += ['', f'## RomFS: {nfile} 个文件 | files, {nbytes / 2**30:.2f} GB', '', '| 顶层 top level | 文件 files | GB |', '|---|---|---|']
-    R += [f'| {t} | {n} | {topb[t] / 2**30:.2f} |' for t, n in tops.most_common(20)]
-    R += ['', '| 文件头 header magic | 文件 files | GB |', '|---|---|---|'] + [f'| {m} | {n} | {magb[m] / 2**30:.2f} |' for m, n in mags.most_common()]
-    R += ['', '扩展名 | extensions: ' + ', '.join(f'`{e}` {n}' for e, n in exts.most_common(20))]
-
-    # Rewrite-site census and SDK surface
-    R += ['', '## 改写点统计 | Rewrite-site census (insn_census.py)', '', '```']
-    for m in mods:
-        if m.name == 'rtld': continue   # rtld is replaced by the host
-        say(f'统计改写点 | counting rewrite sites: {m.name}')
-        run([py, repo / 'dm/tools/insn_census.py', m], logs / f'census_{m.name}.log', env=env, quiet=True)
-        R += (logs / f'census_{m.name}.log').read_text(errors='replace').rstrip().splitlines()
-    R += ['```', '', '## 导入与宿主钩子 | Imports vs host hooks (nso_syms.py)', '', '```']
-    run([py, repo / 'dm/tools/nso_syms.py', repo / 'dm/host', '-', ex / 'ExeFS'], logs / 'nso_syms.log', env=env, quiet=True)
-    R += (logs / 'nso_syms.log').read_text(errors='replace').rstrip().splitlines() + ['```']
-
-    # What it means for a port
-    notes = []
-    if 'NVN' not in found: notes.append('没找到 NVN：宿主只实现了 NVN | no NVN found: the host implements only NVN')
-    if extra: notes.append(f'除 main / sdk 外还有 {", ".join(extra)}：写进档案的 modules（装载顺序 main、subsdk*、sdk），改写、打包与装载都按它走（银河战士 生存恐惧、十三机兵防卫圈的 subsdk0 是 NintendoSDK_movie） | modules besides main / sdk: {", ".join(extra)}; list them in the profile\'s modules (load order main, subsdk*, sdk), which rewriting, packaging and loading all follow (subsdk0 of Metroid Dread and 13 Sentinels is NintendoSDK_movie)')
-    if mags['UnityFS'] or 'Unity IL2CPP' in found: notes.append('Unity：着色器是 UnityFS 包与 data.unity3d 里的 Shader 对象，shader_split.py 经 unityfs.py 读出（按 Unity 2020.3 的 Switch 格式写成，别的 Unity 版本先核对） | Unity: the shaders are Shader objects in UnityFS bundles and data.unity3d, which shader_split.py reads through unityfs.py (written for Unity 2020.3\'s Switch format; check other Unity versions first)')
-    if glslc: notes.append(f'main 里有 {glslc} 处 GLSLC 编译输出的魔数（0x19866891）：着色器可能编进了 main（十三机兵防卫圈），档案开 shader_main_glslc 由 shader_split.py 读出 | main has {glslc} GLSLC compiler output magics (0x19866891): the shaders may be compiled into main (13 Sentinels); the profile key shader_main_glslc makes shader_split.py read them')
-    if not (mags['BNSH'] or mags['BAHS']) and not mags['UnityFS']: notes.append('顶层没有 BNSH / BAHS：着色器在压缩包、别的容器或 main 里，要先找到 | no BNSH / BAHS at the top level: the shaders are inside compressed or other containers or in main, and must be located first')
-    major = {v.split('_')[0] for v in sdkver}
-    if not major: notes.append('没找到 SDK 版本串 | no SDK version string found')
-    elif major != {'16'}: notes.append(f'SDK {"/".join(sorted(major))}，不是马力欧的 16：NVN 对象尺寸、API 版本与服务布局按 SDK 不同（宿主已从 D2R 的 SDK 12 改成 16 的尺寸），按 docs/agents/03 逐项核对 | SDK {"/".join(sorted(major))}, not Mario\'s 16: NVN object sizes, API version and service layouts differ by SDK (the host was converted from D2R\'s SDK 12 to SDK 16 sizes); check them one by one per docs/agents/03')
-    if any(l.split()[:1] == ['nn::ro'] for l in R): notes.append('导入 nn::ro（运行时装 NRO 模块）：宿主没有 | imports nn::ro (loads NRO modules at run time): not in the host')
-    if fam['dlc']: notes.append('有 DLC：出包时解出打进去，宿主按序号报告已拥有并挂载；查 main 导入的 aoc / fs 追加内容接口宿主都接了没有 | DLC present: it is extracted into the IPA and the host reports the indices as owned and mounts them; check that the host hooks every aoc / fs add-on content call main imports')
-    R += ['', '## 对移植意味着什么 | What it means for a port', ''] + [f'- {n}' for n in notes or ['—']]
-    R += ['', '下一步见 docs/agents（02 粗查、03 起机）。 | Next steps: docs/agents (02 survey, 03 bring-up).']
-    (work / 'survey.md').write_text('\n'.join(R) + '\n')
-    for n in notes: say(n)
-    say(f'粗查报告 | survey report: {work / "survey.md"}')
-
-
 # ---- Steps ----
 def check_prereqs(env, xlate):
     missing = [m for m in ('lz4.block', 'capstone', 'fontTools') if not _importable(m)]
@@ -305,7 +206,7 @@ def extract(nx, keys, ex, name, base, upd, cmp_dir, logs, g):
 
 def extract_aoc(nx, keys, work, app, fam, logs):
     """DLC NSPs in the folder → <id>_build/aoc/<index>/ (the RomFS of each one's data NCA; index = title ID − base − 0x1000). The host reports these indices as owned and mounts them (DM_AOC_DIR).
-    Returns None without DLC. DLC packages are small (121 KB each for Engage, the content itself is in the update), so they are extracted again every time"""
+    Returns None without DLC. DLC packages are extracted again every time."""
     if not fam['dlc']: return None
     tmp = work / 'aoc.partial'; rmtree(tmp)
     best = {}   # when one DLC comes in several copies, take the highest version, and the largest of equal versions
@@ -345,14 +246,15 @@ def split_shaders(py, repo, roms, mains, pkg, env, logs, g):
     say('拆出着色器 | splitting out the shaders')
     names = ('shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv')
     run([py, repo / 'dm/gfx/tools/shader_split.py', ','.join(map(str, roms)), ','.join(map(str, mains)), tmp / 'pkg'] + [tmp / 'tables' / n for n in names], logs / 'shader_split.log', env=env)
-    # Data rows byte-identical to the profile's = the same game files the tables were built from; if not, stop (the profile's tables are left alone). Only data rows are compared: the header of Engage's profile tables was written by an older shader_split
+    # Data rows must match the Dark Souls profile built from the supported
+    # base game and update; leave the profile tables untouched on failure.
     diff = [n for n in names if data_rows((tmp / 'tables' / n).read_bytes()) != data_rows(g.table(n).read_bytes())]
     if diff: raise BuildError(f'拆出的着色器表与游戏档案 {g.id} 的不同 | the split shader tables differ from game profile {g.id}\'s: {", ".join(diff)}（游戏文件不是档案登记的版本？| game files not the versions the profile registers?）')
     swap_in(tmp / 'pkg', pkg); rmtree(tmp)
 
 
 def build_shaders(py, repo, sh, xlate, env, logs, g):
-    say('出 iOS 着色器库（马力欧首次约 30 分钟，之后走缓存约 7 分钟）| building the iOS shader libraries (Mario: about 30 minutes the first time, about 7 with the cache)')
+    say('出 iOS 着色器库 | building the iOS shader libraries')
     ios = sh / 'ios'
     run([py, repo / 'dm/gfx/tools/dmsh_build.py', sh / 'pkg', sh / 'cache'], logs / 'dmsh_build.log', env=dict(env, XLATE=str(xlate), IOSOUT=str(ios)), quiet=True)
     chain = re.search(r'#define DMSH_CHAIN "(.*)"', g.table('dmsh_chain.h').read_text()).group(1)
@@ -373,8 +275,8 @@ def parse_args(argv):
     """Command-line options: when given they override "Settings"; F5 in Spyder passes none, so "Settings" is used as is. -h shows the help"""
     import argparse
     ap = argparse.ArgumentParser(prog='build_ipa_from_nsp.py',
-        description='从 NSP 出未签名 IPA；没有游戏档案的游戏只写粗查报告 | Build an unsigned IPA from a game\'s NSPs; a game with no profile only gets a survey.',
-        epilog='例 | example: python3 scripts/build_ipa_from_nsp.py ~/nsp/"Super Mario Bros Wonder" -k ~/keys/prod.keys')
+        description='从黑暗之魂：重制版 NSP 出未签名 IPA | Build an unsigned Dark Souls: Remastered IPA from NSPs.',
+        epilog='例 | example: python3 scripts/build_ipa_from_nsp.py ~/nsp/DarkSoulsRemastered -k ~/keys/prod.keys')
     ap.add_argument('nsp_dir', nargs='?', help='放一个游戏 NSP 的文件夹（缺省 = 设置 NSP_DIR，再没有就问）| folder holding one game\'s NSPs (default: the NSP_DIR setting, else asked)')
     ap.add_argument('-k', '--keys', help='prod.keys 的路径（缺省 = 设置 PROD_KEYS，再没有就问）| path of prod.keys (default: the PROD_KEYS setting, else asked)')
     ap.add_argument('-p', '--package', help='打进 IPA 的版本，如 v327680 / v0（缺省 = 游戏档案的 package）| version packed into the IPA, e.g. v327680 / v0 (default: the profile\'s package)')
@@ -401,11 +303,8 @@ def main(args=None):
     py = sys.executable
     app, fam = scan_nsps(nsp_dir)
     g = gamemod.by_title(app)
-    if g is None:   # no game profile: survey only
-        missing = [m for m in ('lz4.block', 'capstone') if not _importable(m)]
-        if missing: raise BuildError(f'当前 Python（{sys.executable}）缺模块 | the current Python is missing modules: {", ".join(missing)}')
-        if not shutil.which('dotnet', path=env['PATH']): raise BuildError('找不到 dotnet（.NET SDK 10）| dotnet not found (.NET SDK 10)')
-        return survey(nsp_dir, app, fam, keys, repo, py, env)
+    if g is None:
+        raise BuildError(f'标题 {app:016X} 不是本仓库支持的黑暗之魂：重制版（01004AB00A260000）| title {app:016X} is not the Dark Souls Remastered title supported by this repository (01004AB00A260000)')
     say(f'游戏档案 | game profile: {g.id}')
     builds, need = g.builds(), g.words('shader_versions')
     pkg_ver = args.package or PACKAGE or g.get('package')
