@@ -4,6 +4,7 @@
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
 #import <AVFAudio/AVFAudio.h>
+#import "DmPerfHUD.h"
 #include <errno.h>
 #include "front.h"
 #include "hle.h"
@@ -57,6 +58,17 @@ static CAMetalLayer *g_layer;
     self.pad = dm_gamepad_view(self.view.bounds);
     self.pad.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:self.pad];
+    const char *hud = getenv("DM_HUD");
+    if (!hud || strcmp(hud, "0")) {
+        DmPerfHUD *perf = [DmPerfHUD new]; perf.translatesAutoresizingMaskIntoConstraints = NO;
+        [self.view addSubview:perf];
+        [NSLayoutConstraint activateConstraints:@[
+            [perf.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:64],
+            [perf.centerXAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.centerXAnchor],
+            [perf.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:16],
+            [perf.trailingAnchor constraintLessThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-16]
+        ]];
+    }
 }
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];

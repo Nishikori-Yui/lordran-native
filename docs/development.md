@@ -46,6 +46,18 @@ Everything it writes stays in the NSP folder: intermediate files and logs in `<i
 
 On the device, environment switches go in `Documents/env.txt` (one `KEY=VALUE` per line), and Dark Souls game files are also accepted at `Documents/romfs`.
 
+The iOS performance HUD is enabled by default (`DM_HUD=0` disables it).
+Its main FPS and frame-time values use actual drawable presentation callbacks,
+not the UI timer or display refresh rate. `Game` counts submitted game frames;
+`GPU` is completed GPU work sampled eight game frames late. Both streams use
+a rolling one-second window and report zero FPS after a one-second stall.
+The panel refreshes twice per second and stops its timer while inactive.
+Tap it to collapse the details; the choice persists across launches.
+`RAM` is the process physical footprint and `Metal` is Metal's allocated
+resource size, both in MiB; they overlap and must not be added together.
+The resolution is the game's swapchain texture size. The thermal status is
+the system's nominal/fair/serious/critical classification.
+
 ## Profile scope
 
 This checkout is intentionally dedicated to Dark Souls: Remastered. The only

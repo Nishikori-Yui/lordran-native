@@ -74,6 +74,7 @@ The unsigned IPA appears in the same folder. The first build takes time to extra
 
 A connected game controller hides the touch controls and keeps every button.
 
+- **Performance display (iOS):** the panel near the top shows actual display FPS and frame time. Tap it to collapse or expand game FPS, GPU time, memory, resolution and thermal state. Add `DM_HUD=0` to `Documents/env.txt` and restart to hide it.
 - **Game language** is English by default. For Chinese, add the line `DM_LANG=zh-Hans` to `Documents/env.txt`.
 - **Saves and logs** are in the Files app, under the app's name: `save/` and `log.txt`. When something goes wrong, send `log.txt` (the previous run is `log.prev.txt`).
 - **Short stutters** the first time a new scene appears are normal: the app compiles graphics for it once and remembers them for the next launch.
@@ -169,6 +170,7 @@ python3 scripts/build_ipa_from_nsp.py ~/Games/DarkSoulsRemastered -k ~/keys/prod
 
 连上游戏手柄后，触屏按键会隐藏，手柄上的所有按键都能用。
 
+- **性能显示（iOS）：** 顶部附近的浮层显示实际上屏 FPS 和帧时间。点击可收起或展开游戏 FPS、GPU 耗时、内存、分辨率和温控状态。在 `Documents/env.txt` 加上 `DM_HUD=0`，重启后可隐藏浮层。
 - **游戏语言**默认英文。想用中文，在 `Documents/env.txt` 里加一行 `DM_LANG=zh-Hans`。
 - **存档和日志**在「文件」App 里，App 名字对应的文件夹下：`save/` 和 `log.txt`。出问题时请发 `log.txt`（上一次运行的是 `log.prev.txt`）。
 - **第一次进新场景时短暂卡顿**是正常的：App 会为它编译一次图形，下次启动就记住了。

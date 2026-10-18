@@ -9,6 +9,7 @@ void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
 module_t g_mod[MAX_MOD]; int g_nmod;
 void svc_thread_dump(void) {}
+int dm_guest_as_contains(uintptr_t p) { (void)p; return 0; }   // This test uses host stacks.
 uint64_t now_ns(void) { return bp_now(); }
 #ifdef CROP_LEGACY_HEADER
 #include CROP_LEGACY_HEADER
@@ -88,6 +89,10 @@ int main(void) { @autoreleasepool {
     tex_t tex={.magic=MAGIC('T', 'E', 'X', 0), .serial =10001};tex.d.width=tex.d.height=8;tex.d.depth=tex.d.levels=1;tex.d.format=NVN_FORMAT_RGBA8;tex.d.target=NVN_TEXTURE_TARGET_2D;serial_put(tex.serial,src);
     win_t win={.ntex=1};win.tex[0]=(NVNtexture *)&tex;set((NVNwindow *)&win,4,4,4,4);
     mtl_present_test_stall(100000000);present(NULL,(NVNwindow *)&win,0);uint64_t tk=win.ticket[0];set((NVNwindow *)&win,0,0,8,8);
+    nvn_perf_snapshot perf; nvn_perf_read(now_ns(), &perf);
+    EXPECT("HUD reports the queued swapchain width",8,perf.width);
+    EXPECT("HUD reports the queued swapchain height",8,perf.height);
+    EXPECT("A headless render has no actual display frames",0,perf.presented_frames);
 #ifdef CROP_LEGACY_HEADER
     EXPECT("旧队列结构没有四参数副本空间（结构检查）",1,sizeof(pq_item)>=sizeof(tex_t)+sizeof(double)+sizeof(uint64_t)+sizeof br);
 #else
