@@ -329,18 +329,6 @@ HLE_FORCE("_ZN2nn2fs8MountRomEPKcPvm", "fsp-srv；rom → 宿主 RomFS 目录", 
     }
     return r;
 }
-// Add-on content (DLC) RomFS: DM_AOC_DIR/<index>/, extracted from the player's DLC NSPs by the packing script; mounted read-only, using the directory index like rom.
-// The owned index list is reported by the aoc calls in hle_misc.c from the same directory; the game only mounts indices it was given, and a missing directory answers "target not found" (fs 2-1002, as on hardware without that DLC)
-#define RES_TARGET_NOT_FOUND 0x7D402u   // fs module 2, description 1002
-HLE_FORCE("_ZN2nn2fs31QueryMountAddOnContentCacheSizeEPmi", "fsp-srv；追加内容直读宿主目录，缓存只给最小值", Result, h_fs_QueryAocCache, size_t *out, int index) { (void)index; *out = 0x1000; return RES_OK; }
-HLE_FORCE("_ZN2nn2fs17MountAddOnContentEPKciPvm", "fsp-srv；追加内容 → DM_AOC_DIR/<序号>（只读）", Result, h_fs_MountAoc, const char *name, int index, void *cache, size_t sz) {
-    (void)cache; (void)sz; const char *base = getenv("DM_AOC_DIR"); char dir[1024]; struct stat st;
-    if (!base || !*base || snprintf(dir, sizeof dir, "%s/%d", base, index) >= (int)sizeof dir || stat(dir, &st) || !S_ISDIR(st.st_mode)) {
-        LOG("fs 挂载追加内容 %s: 序号 %d 不存在（DM_AOC_DIR=%s）", name, index, base ? base : "未设");
-        return RES_TARGET_NOT_FOUND;
-    }
-    return mount(name, dir, 1);   // mount_ex logs it
-}
 // IsMounted: the original SDK checks its own mount table, which stays empty because the host takes over mounting. Engage (IL2CPP) uses it to check whether "rom:" is mounted before opening a file; a "no" fails with an invalid-parameter error (0x57) and global-metadata.dat cannot be opened
 HLE_FORCE("_ZN2nn2fs9IsMountedEPKc", "fsp-srv；查宿主挂载表", int, h_fs_IsMounted, const char *name) {   // bool in w0: 1 / 0
     PATH_LOCK();

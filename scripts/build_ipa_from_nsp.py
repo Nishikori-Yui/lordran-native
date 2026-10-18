@@ -9,8 +9,8 @@
 #   without keyboard input a missing value is not asked for but reported as an error; exit code 0 on success, 1 on error, 130 when interrupted). Command-line options entered in Spyder's run configuration work the same way.
 # Uses only three things: this repository, a folder holding the Dark Souls NSPs
 # (the base game plus the updates listed in the profile's shader_versions), and
-# prod.keys. DLC NSPs, when present, are packed too.
-# Every intermediate file is under <id>_build/ in the NSP folder: extract/ (the extracted game files, deleted after the IPA is built by default), aoc/ (each DLC's RomFS by index), tools/, patched_*/, shader/ (shader package and caches, kept so the next build is fast), logs/ (each step's full output), tmp/, ipa/. The finished IPA also goes to the NSP folder by default.
+# prod.keys.
+# Every intermediate file is under <id>_build/ in the NSP folder: extract/ (the extracted game files, deleted after the IPA is built by default), tools/, patched_*/, shader/ (shader package and caches, kept so the next build is fast), logs/ (each step's full output), tmp/, ipa/. The finished IPA also goes to the NSP folder by default.
 # The shader translator is the in-repo dm/gfx/tools/dmsh_xlate_bin (the build whose fingerprints match dmsh_chain.lock; a rebuilt dll has different fingerprints and dmsh_build refuses it).
 # The Python running this file needs lz4, capstone and fonttools; also needed:
 # Xcode, xcodegen, .NET SDK 10, zstd and spirv-cross. Key values are never
@@ -132,19 +132,20 @@ def version_of(path):
 
 
 def scan_nsps(nsp_dir):
-    """Group by game: {application title ID: {'base': path, 'updates': [(version, path)], 'dlc': [(title ID, version, path)]}}"""
+    """Group by game: {application title ID: {'base': path, 'updates': [(version, path)]}}"""
     fams, unknown = {}, []
     for p in sorted(nsp_dir.glob('*.nsp')):
         if p.stat().st_size == 0:   # an empty file left by an incomplete download
             say(f'跳过空文件 | skipping an empty file: {p.name}'); continue
         tid = title_of(p)
         if tid is None: unknown.append(p); continue
-        low = tid & 0xFFF   # base …000, update …800, DLC = base + 0x1000 + index
-        app = tid if low == 0 else tid & ~0xFFF if low == 0x800 else (tid & ~0xFFF) - 0x1000
-        f = fams.setdefault(app, {'base': None, 'updates': [], 'dlc': []})
+        low = tid & 0xFFF   # base ...000, update ...800
+        if low not in (0, 0x800):
+            say(f'跳过追加内容 NSP | skipping add-on content NSP: {p.name}'); continue
+        app = tid & ~0xFFF
+        f = fams.setdefault(app, {'base': None, 'updates': []})
         if low == 0: f['base'] = p
-        elif low == 0x800: f['updates'].append((version_of(p), p))
-        else: f['dlc'].append((tid, version_of(p), p))
+        else: f['updates'].append((version_of(p), p))
     if len(fams) == 1 and len(unknown) == 1 and next(iter(fams.values()))['base'] is None:   # a base game converted from a cartridge may have neither tags nor a ticket; build IDs are checked afterwards
         next(iter(fams.values()))['base'] = unknown[0]
     if not fams: raise BuildError(f'{nsp_dir} 里没有认得出标题号的 NSP | no NSP with a readable title ID in {nsp_dir}')
@@ -202,23 +203,6 @@ def extract(nx, keys, ex, name, base, upd, cmp_dir, logs, g):
         check_build(tmp, name, g); swap_in(tmp, dst)
     check_build(dst, name, g)
     return dst
-
-
-def extract_aoc(nx, keys, work, app, fam, logs):
-    """DLC NSPs in the folder → <id>_build/aoc/<index>/ (the RomFS of each one's data NCA; index = title ID − base − 0x1000). The host reports these indices as owned and mounts them (DM_AOC_DIR).
-    Returns None without DLC. DLC packages are extracted again every time."""
-    if not fam['dlc']: return None
-    tmp = work / 'aoc.partial'; rmtree(tmp)
-    best = {}   # when one DLC comes in several copies, take the highest version, and the largest of equal versions
-    for tid, ver, p in fam['dlc']:
-        k = (ver or 0, p.stat().st_size)
-        if tid not in best or k > best[tid][0]: best[tid] = (k, p)
-    for tid, (_, p) in sorted(best.items()):
-        idx = tid - app - 0x1000
-        say(f'DLC 序号 {idx} | DLC index {idx}: {p.name}')
-        run([nx, keys, '--aoc', p, tmp / str(idx)], logs / f'aoc_{idx}.log')
-    swap_in(tmp, work / 'aoc')
-    return work / 'aoc'
 
 
 def check_build(d, name, g):   # every module's build ID must be the one registered in the profile's build row
@@ -332,7 +316,6 @@ def main(args=None):
         dirs[ver] = extract(nx, keys, ex, ver, b, u, clone, logs, g)
         if u is None and clone is None and can_clone(ex): clone = dirs[ver] / 'RomFS'
     game = dirs[pkg_ver]
-    aoc = extract_aoc(nx, keys, work, app, fam, logs)
     base = next((dirs[v] for v in versions if picks[v][1] is None), dirs[versions[0]])   # the folder the base game was extracted to alone
     # the app name and bundle ID both come from the base NSP: the game name in its control data, and a bundle ID from its title ID; a setting / the command line overrides them
     app_name = args.app_name or APP_NAME or nacp.name(base / 'control.nacp')
@@ -348,7 +331,7 @@ def main(args=None):
 
     if free_gb(out_ipa.parent) < 5: raise BuildError(f'{out_ipa.parent} 所在的卷剩余不足 5 GB | less than 5 GB free on the volume of {out_ipa.parent}')
     say(f'出 IPA | building the IPA → {out_ipa}')
-    ipa_env = dict(env, GAME=g.id, W=str(work / 'ipa'), PATCHED=str(patched), ROMFS=str(game / 'RomFS'), MSL_IOS=str(ios), FONT_PY=py, DM_DISPLAY_NAME=app_name, DM_BUNDLE_ID=bundle_id, AOC=str(aoc or ''))
+    ipa_env = dict(env, GAME=g.id, W=str(work / 'ipa'), PATCHED=str(patched), ROMFS=str(game / 'RomFS'), MSL_IOS=str(ios), FONT_PY=py, DM_DISPLAY_NAME=app_name, DM_BUNDLE_ID=bundle_id)
     # app icon: the game icon nx_extract saved from the control data (English, icon.jpg); the packed version's first, then the base game's
     icon = next((d / 'icon.jpg' for d in (game, base) if (d / 'icon.jpg').exists()), None)
     if icon: ipa_env['DM_ICON'] = str(icon); say(f'App 图标 | app icon: {icon}')
