@@ -6425,17 +6425,20 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
 }
 @end
 
-static CAMetalDisplayLink *g_link; static CFRunLoopRef g_link_rl; static int g_link_started;
+static CAMetalDisplayLink *g_link; static NvMetalDisplayLinkDelegate *g_link_delegate; static CFRunLoopRef g_link_rl; static int g_link_started;
 static int g_link_owns_layer, g_classic_busy;   // Under g_pq_mu: nextDrawable throws while the layer has the display link object attached, so the present thread that takes its own drawable and the display link object are mutually exclusive
 static int link_on(void) { return g_dm_present_link && g_link != nil; }
 static CAFrameRateRange link_range(int mode) { return mode == 3 ? CAFrameRateRangeMake(30, 30, 30) : mode == 2 ? CAFrameRateRangeMake(60, 120, 120) : CAFrameRateRangeMake(60, 60, 60); }
 static int g_link_mode = 1;   // Current mode of the display link object: 1 / 2 same as g_dm_present_link, 3 = power-saving mode 30 Hz
 static CAMetalDisplayLink *link_make(CAMetalLayer *layer) {
-    NvMetalDisplayLinkDelegate *delegate = [NvMetalDisplayLinkDelegate new];
+    // CAMetalDisplayLink.delegate is weak. Keep the callback target alive for
+    // the lifetime of the link; a local delegate would disappear before the
+    // first display tick under ARC.
+    g_link_delegate = [NvMetalDisplayLinkDelegate new];
     CAMetalDisplayLink *link = [[CAMetalDisplayLink alloc] initWithMetalLayer:layer];
     link.preferredFrameRateRange = link_range(g_link_mode);
     link.preferredFrameLatency = g_present_latency;
-    link.delegate = delegate;
+    link.delegate = g_link_delegate;
     [link addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
     return link;
 }
