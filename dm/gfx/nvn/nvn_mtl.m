@@ -426,7 +426,7 @@ typedef struct { int kind; volatile uint32_t *val; uint32_t mode, v; uint64_t ad
 // and a report hands the slot table together with its buffer (retained) to the completion callback to sum and write back; after a report a new slot is used, so later draws are not counted into the reported value.
 // (Previously always wrote 0: occlusion query = 'fully occluded', campfires / light sources got culled - the character select screen calls ResetCounter 21 times per frame)
 typedef struct { void *buf; uint32_t slot; } vis_slot;
-typedef struct { int n; vis_slot s[]; } vis_list;
+typedef struct { uint64_t base; int n; vis_slot s[]; } vis_list;
 #define VIS_SLOTS 8192
 typedef struct { __strong id<MTLBuffer> buf; uint64_t fence; } vis_buf;
 static vis_buf g_vis_ring[4]; static int g_vis_ring_n, g_vis_ring_i = -1;
@@ -434,10 +434,26 @@ static id<MTLBuffer> g_vis; static uint32_t g_vis_n;   // This submission's visi
 static int vis_in_ring(id<MTLBuffer> b) { for (int i = 0; i < g_vis_ring_n; i++) if (g_vis_ring[i].buf == b) return 1; return 0; }
 static int g_vis_on, g_vis_counting, g_vis_cur = -1; static uint64_t g_vis_cur_pass;
 static vis_slot *g_vs; static int g_nvs, g_vscap;      // Slots since the last reset
+static uint64_t g_vis_base;   // Completed samples folded out of buffers before their slots are reused
 static uint64_t g_cnt_report[32], g_cnt_reset[32];       // Report / reset counts per counter type (diagnostics)
-static void vis_clear(void) { for (int i = 0; i < g_nvs; i++) CFRelease(g_vs[i].buf); g_nvs = 0; g_vis_cur = -1; }
+static void vis_clear(void) { for (int i = 0; i < g_nvs; i++) CFRelease(g_vs[i].buf); g_nvs = 0; g_vis_cur = -1; g_vis_base = 0; }
+// The ring fence has completed, including its report callbacks. A query may
+// still span submissions: preserve its old samples before reusing this buffer.
+static void vis_recycle(id<MTLBuffer> buffer) {
+    int keep = 0, folded = 0;
+    for (int i = 0; i < g_nvs; i++) {
+        vis_slot slot = g_vs[i];
+        if (slot.buf == (__bridge void *)buffer) {
+            g_vis_base += ((const uint64_t *)buffer.contents)[slot.slot];
+            CFRelease(slot.buf);
+            folded++;
+        } else g_vs[keep++] = slot;
+    }
+    g_nvs = keep;
+    if (folded) { static int once; if (!once++) MLOG("Occlusion query spans submissions: preserved %d completed slots (%llu samples) before visibility-buffer reuse", folded, (unsigned long long)g_vis_base); }
+}
 static vis_list *vis_snapshot(void) {
-    vis_list *l = malloc(sizeof *l + g_nvs * sizeof(vis_slot)); l->n = g_nvs;
+    vis_list *l = malloc(sizeof *l + g_nvs * sizeof(vis_slot)); l->base = g_vis_base; l->n = g_nvs;
     for (int i = 0; i < g_nvs; i++) { l->s[i] = g_vs[i]; CFRetain(g_vs[i].buf); }
     return l;
 }
@@ -515,6 +531,7 @@ void mtl_sub_begin(void) {
     g_vis_ring_i = pick; g_vis_ring[pick].fence = UINT64_MAX;
     if (!g_vis_ring[pick].buf) { g_vis_ring[pick].buf = [g_dev newBufferWithLength:VIS_SLOTS * 8 options:MTLResourceStorageModeShared]; res_add(g_vis_ring[pick].buf); }
     g_vis = g_vis_ring[pick].buf;
+    vis_recycle(g_vis);
     void pg_sub_begin_ext(uint64_t fence); pg_sub_begin_ext(g_fence + 1);
     void arena_begin(void); arena_begin();
 }
@@ -770,7 +787,7 @@ uint64_t mtl_sub_commit(void) {
         for (int i = 0; i < n; i++) {
             if (ops[i].kind == 1) { if (ops[i].mode == 1) *ops[i].val += ops[i].v; else *ops[i].val = ops[i].v; }
             else if (ops[i].kind == 3) {   // Samples passed: the sum of all slots since the reset
-                vis_list *l = ops[i].vis; uint64_t sum = 0;
+                vis_list *l = ops[i].vis; uint64_t sum = l->base;
                 for (int k = 0; k < l->n; k++) { sum += ((const uint64_t *)((__bridge id<MTLBuffer>)l->s[k].buf).contents)[l->s[k].slot]; CFRelease(l->s[k].buf); }
                 free(l); uint64_t rec[2] = {sum, gpu_ticks()}; memcpy((void *)ops[i].addr, rec, sizeof rec);
             }

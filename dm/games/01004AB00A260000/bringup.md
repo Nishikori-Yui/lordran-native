@@ -312,3 +312,32 @@ without consulting reflection and relying on line order. This diagnostic
 appends fields to preserve the existing log prefix. The Mac host builds,
 and all five budget-export parser regression checks pass. This does not
 alter the bindings or shader chain.
+
+## Occlusion counter lifetime (2026-10-18)
+
+The visibility buffer ring reused slots from a completed submission while
+an unreset NVN samples-passed query still referenced them. Retaining the
+Metal buffer did not preserve its contents. A GPU regression reproduces
+the error: 64 samples in one submission followed by 32 in another reported
+64 instead of 96, because both query entries read the reused 32-sample slot.
+
+Before a completed ring buffer is reused, its outstanding query samples
+are now folded into a CPU subtotal. Reports snapshot that subtotal with
+the remaining GPU slots, and ResetCounter clears both. The existing fence
+waits still determine when buffer contents may be read; this adds no new
+GPU wait.
+
+`tests/t_visibility.m` passes 49 checks with Metal API validation enabled:
+multiple passes and reports, a reset within a pass, unequal sample counts
+across submissions, an empty scissor, ring reuse, and four deliberately
+blocked in-flight submissions with independent report snapshots. NVN
+integration passes 67 checks, sampler pools pass 58 checks, and the Mac host
+builds. Logs are `analysis/gfx-20261018/visibility-*.log`.
+
+This repairs an incorrect visibility result that can affect game-side
+culling; it does not establish that every reported scene or water flicker
+has the same cause. The twelve reflection captures in
+`water-reflection-113827` keep the same four texture handles and serials.
+Their changing uniforms alone do not prove a timing defect.
+Conditional render commands still use the always-draw fallback, and the
+cube/2D mismatch remains a separate unresolved issue.
