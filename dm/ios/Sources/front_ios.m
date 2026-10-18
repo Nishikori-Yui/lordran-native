@@ -5,6 +5,7 @@
 #import <Metal/Metal.h>
 #import <AVFAudio/AVFAudio.h>
 #import "DmPerfHUD.h"
+#import "DmDiagnostics.h"
 #include <errno.h>
 #include "front.h"
 #include "hle.h"
@@ -14,6 +15,7 @@ UIView *dm_gamepad_view(CGRect frame);
 void dm_gamepad_reset(void);
 void front_ios_boot(void);
 int front_ios_boot_ok(void);
+int front_ios_recovery_needed(void);
 
 static CAMetalLayer *g_layer;
 
@@ -40,34 +42,84 @@ static CAMetalLayer *g_layer;
 @interface DmRootVC : UIViewController
 @property (nonatomic, strong) DmGameView *game;
 @property (nonatomic, strong) UIView *pad;
+@property (nonatomic, strong) UIView *recovery;
+@property (nonatomic, strong) UIButton *diagnostics;
+@property (nonatomic, strong) UIStackView *diagnosticBar;
+@property (nonatomic, strong) NSLayoutConstraint *diagnosticTop;
 @end
 @implementation DmRootVC
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.blackColor;
+    self.diagnostics = [UIButton buttonWithType:UIButtonTypeSystem];
+    UIButtonConfiguration *config = UIButtonConfiguration.tintedButtonConfiguration;
+    config.title = @"Export / 导出";
+    config.image = [UIImage systemImageNamed:@"square.and.arrow.up"];
+    config.imagePadding = 8;
+    self.diagnostics.configuration = config;
+    self.diagnostics.accessibilityLabel = @"Export diagnostics / 导出诊断";
+    self.diagnostics.accessibilityHint = @"Share app logs and device information / 分享运行日志和设备信息";
+    [self.diagnostics addTarget:self action:@selector(shareDiagnostics) forControlEvents:UIControlEventTouchUpInside];
+    self.diagnosticBar = [[UIStackView alloc] initWithArrangedSubviews:@[self.diagnostics]];
+    self.diagnosticBar.axis = UILayoutConstraintAxisHorizontal;
+    self.diagnosticBar.alignment = UIStackViewAlignmentTop;
+    self.diagnosticBar.spacing = 8;
+    self.diagnosticBar.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:self.diagnosticBar];
+    self.diagnosticTop = [self.diagnosticBar.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:8];
+    [NSLayoutConstraint activateConstraints:@[
+        self.diagnosticTop,
+        [self.diagnosticBar.centerXAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.centerXAnchor],
+        [self.diagnosticBar.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:16],
+        [self.diagnosticBar.trailingAnchor constraintLessThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-16],
+        [self.diagnostics.heightAnchor constraintGreaterThanOrEqualToConstant:44]
+    ]];
+    if (front_ios_recovery_needed()) {
+        UILabel *message = [UILabel new];
+        message.text = @"The previous session did not finish normally.\nExport diagnostics before trying again.\n\n上次运行未正常结束，可先导出诊断，再尝试启动。";
+        message.numberOfLines = 0; message.textColor = UIColor.whiteColor; message.textAlignment = NSTextAlignmentCenter;
+        message.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+        message.adjustsFontForContentSizeCategory = YES;
+        UIButton *start = [UIButton buttonWithType:UIButtonTypeSystem];
+        start.configuration = UIButtonConfiguration.filledButtonConfiguration;
+        [start setTitle:@"Start game / 启动游戏" forState:UIControlStateNormal];
+        [start addTarget:self action:@selector(resumeFromRecovery) forControlEvents:UIControlEventTouchUpInside];
+        UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[message, start]];
+        stack.axis = UILayoutConstraintAxisVertical; stack.spacing = 24; stack.translatesAutoresizingMaskIntoConstraints = NO;
+        [self.view addSubview:stack]; self.recovery = stack;
+        [NSLayoutConstraint activateConstraints:@[
+            [stack.centerXAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.centerXAnchor],
+            [stack.centerYAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.centerYAnchor],
+            [stack.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:24],
+            [stack.trailingAnchor constraintLessThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-24],
+            [stack.topAnchor constraintGreaterThanOrEqualToAnchor:self.diagnosticBar.bottomAnchor constant:16]
+        ]];
+    } else [self loadGameViews];
+}
+- (void)shareDiagnostics { DmDiagnosticsShare(self, self.diagnostics); }
+- (void)resumeFromRecovery {
+    [self.recovery removeFromSuperview]; self.recovery = nil;
+    [self loadGameViews]; [self.view setNeedsLayout]; [self.view layoutIfNeeded];
+    front_ios_boot();
+}
+- (void)loadGameViews {
     if (!front_ios_boot_ok()) {   // No game files: show a hint and do not start the host
         UILabel *lb = [[UILabel alloc] initWithFrame:CGRectInset(self.view.bounds, 40, 40)];
         lb.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         lb.numberOfLines = 0; lb.textAlignment = NSTextAlignmentCenter; lb.textColor = UIColor.whiteColor;
         lb.text = @"Game files not found.\nPut the RomFS folder into this App's Documents as \"romfs\" (Files app), then restart.\n\n没找到游戏文件：把 RomFS 文件夹以 romfs 为名放进本 App 的「文稿」后重开。";
-        [self.view addSubview:lb]; return;
+        [self.view insertSubview:lb belowSubview:self.diagnosticBar]; return;
     }
     self.game = [[DmGameView alloc] initWithFrame:self.view.bounds];
-    [self.view addSubview:self.game];
+    [self.view insertSubview:self.game belowSubview:self.diagnosticBar];
     g_layer = (CAMetalLayer *)self.game.layer;
     self.pad = dm_gamepad_view(self.view.bounds);
     self.pad.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [self.view addSubview:self.pad];
+    [self.view insertSubview:self.pad belowSubview:self.diagnosticBar];
+    self.diagnosticTop.constant = 64;   // Keep the export button clear of the shoulder and menu controls.
     const char *hud = getenv("DM_HUD");
     if (!hud || strcmp(hud, "0")) {
-        DmPerfHUD *perf = [DmPerfHUD new]; perf.translatesAutoresizingMaskIntoConstraints = NO;
-        [self.view addSubview:perf];
-        [NSLayoutConstraint activateConstraints:@[
-            [perf.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:64],
-            [perf.centerXAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.centerXAnchor],
-            [perf.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:16],
-            [perf.trailingAnchor constraintLessThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-16]
-        ]];
+        [self.diagnosticBar insertArrangedSubview:[DmPerfHUD new] atIndex:0];
     }
 }
 - (void)viewDidLayoutSubviews {
@@ -77,7 +129,7 @@ static CAMetalLayer *g_layer;
     if (w / h > 16.0 / 9.0) w = h * 16.0 / 9.0; else h = w * 9.0 / 16.0;
     self.game.frame = CGRectMake(floor((b.size.width - w) / 2), floor((b.size.height - h) / 2), w, h);
 }
-- (void)viewDidAppear:(BOOL)a { [super viewDidAppear:a]; front_ios_boot(); }
+- (void)viewDidAppear:(BOOL)a { [super viewDidAppear:a]; if (!self.recovery) front_ios_boot(); }
 - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
 - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }   // Edge gestures need two swipes, to avoid accidental exits
 - (BOOL)prefersStatusBarHidden { return YES; }

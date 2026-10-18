@@ -77,6 +77,7 @@ A connected game controller hides the touch controls and keeps every button.
 - **Performance display (iOS):** the panel near the top shows actual display FPS and frame time. Tap it to collapse or expand game FPS, GPU time, memory, resolution and thermal state. Add `DM_HUD=0` to `Documents/env.txt` and restart to hide it.
 - **Game language** is English by default. For Chinese, add the line `DM_LANG=zh-Hans` to `Documents/env.txt`.
 - **Saves and logs** are in the Files app, under the app's name: `save/` and `log.txt`. When something goes wrong, send `log.txt` (the previous run is `log.prev.txt`).
+- **Export diagnostics (iOS):** tap **Export / 导出** beside the performance panel, then use the share sheet to save or send `DarkSouls-diagnostics.txt`. It contains the current and previous app logs, device/GPU information and a performance snapshot; each log is limited to its last 8 MiB. After an interrupted foreground session, the next launch offers export before starting the game again. The export button remains available when the performance panel is hidden. The report is also in `diagnostics/` in the Files app. It does not collect saves, game files or system crash reports.
 - **Short stutters** the first time a new scene appears are normal: the app compiles graphics for it once and remembers them for the next launch.
 - **Reinstalling:** some sideloading tools give a reinstalled app a new data folder. Copy `save/` and `pso_user.tsv` over from the old one to keep your progress.
 - **Settings without rebuilding:** put lines like `DM_OPMODE=0` (handheld mode: lower resolution, higher frame rate) in `Documents/env.txt`.
@@ -173,6 +174,7 @@ python3 scripts/build_ipa_from_nsp.py ~/Games/DarkSoulsRemastered -k ~/keys/prod
 - **性能显示（iOS）：** 顶部附近的浮层显示实际上屏 FPS 和帧时间。点击可收起或展开游戏 FPS、GPU 耗时、内存、分辨率和温控状态。在 `Documents/env.txt` 加上 `DM_HUD=0`，重启后可隐藏浮层。
 - **游戏语言**默认英文。想用中文，在 `Documents/env.txt` 里加一行 `DM_LANG=zh-Hans`。
 - **存档和日志**在「文件」App 里，App 名字对应的文件夹下：`save/` 和 `log.txt`。出问题时请发 `log.txt`（上一次运行的是 `log.prev.txt`）。
+- **导出诊断（iOS）：** 点击性能浮层旁的 **Export / 导出**，通过系统分享面板保存或发送 `DarkSouls-diagnostics.txt`。报告包含本次与上次运行日志、设备与 GPU 信息、性能快照，每份日志最多保留末尾 8 MiB。前台运行异常中断后，下次打开会先提供导出入口，再由你选择是否启动游戏；隐藏性能浮层后仍可导出。报告也能在「文件」App 的 `diagnostics/` 文件夹中找到。不收集存档、游戏文件或系统崩溃报告。
 - **第一次进新场景时短暂卡顿**是正常的：App 会为它编译一次图形，下次启动就记住了。
 - **重装：** 有些侧载工具重装后会给 App 一个新的数据文件夹。把旧文件夹里的 `save/` 和 `pso_user.tsv` 拷过去，进度就不会丢。
 - **不重新打包也能改设置：** 在 `Documents/env.txt` 里写一行一个设置，例如 `DM_OPMODE=0`（掌机模式：分辨率更低、帧率更高）。
