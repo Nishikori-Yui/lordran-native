@@ -1,52 +1,52 @@
 ---
-name: Bug report
-about: Report a reproducible runtime, build, graphics, audio, input, or crash problem.
+name: 问题报告
+about: 报告可复现的运行、构建、图形、音频、输入或闪退问题。
 title: "bug: "
 labels: [bug]
 assignees: []
 ---
 
-## Summary
+## 问题概述
 
 <!-- Describe the problem in one or two sentences. -->
 
-## Environment
+## 运行环境
 
-- Device / Mac:
-- OS version:
-- Lordran Native version, commit, or IPA build:
-- Game version / update:
-- Installation method:
-- Controller model, if relevant:
+- 设备 / Mac：
+- 系统版本：
+- Lordran Native 版本、commit 或 IPA 构建版本：
+- 游戏版本 / 更新版本：
+- 安装方式：
+- 手柄型号（如适用）：
 
-## Steps to reproduce
+## 复现步骤
 
 1.
 2.
 3.
 
-## Expected behavior
+## 预期行为
 
-## Actual behavior
+## 实际行为
 
-## Diagnostic information
+## 诊断信息
 
 <!-- Attach an exported diagnostic report or paste a short relevant excerpt. -->
 
-- Reproduction frequency:
-- Last known good version:
-- Does restarting the app change the result?
+- 复现频率：
+- 最后一个正常工作的版本：
+- 重启 App 后是否仍然出现：
 
 ```text
-Paste the relevant log excerpt here.
+请粘贴相关日志片段。
 ```
 
-## Additional context
+## 其他信息
 
 <!-- Do not attach NSP files, keys, or private game data. -->
 
-## Checklist
+## 检查清单
 
-- [ ] I tested the latest available build or identified the exact commit/IPA tested.
-- [ ] I removed private keys, NSP files, saves, and unrelated personal data.
-- [ ] I included reproduction steps and relevant diagnostics.
+- [ ] 我测试了最新构建，或注明了实际测试的 commit / IPA。
+- [ ] 我已删除私钥、NSP、存档和无关的个人数据。
+- [ ] 我提供了复现步骤和相关诊断信息。
