@@ -9,6 +9,7 @@
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
 #include "hle.h"
+#include "../ios/vphone/remap.h"
 
 module_t g_mod[MAX_MOD];
 int g_nmod;
@@ -312,6 +313,8 @@ static void remap_at(module_t *m, vm_address_t to, const void *from, unsigned lo
     kern_return_t kr = vm_remap(mach_task_self(), &a, size, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(), (vm_address_t)from, copy, &cur, &max, VM_INHERIT_NONE);
     if (kr != KERN_SUCCESS || a != to) die("%s vm_remap %p → %#lx（%#lx 字节）失败：%d", m->name, from, (unsigned long)to, size, kr);
     if ((cur & need) != need) die("%s vm_remap 后权限 %#x，缺 %#x", m->name, cur, need);
+    if (!dm_vphone_remap_compatible(m->name, to, from, size, copy, need, cur, max))
+        die("%s: actual remap protection lacks %#x", m->name, need);
 }
 #ifdef DM_SHELL
 // Shell (the App built by ios/tools/shell_build.sh, containing no game content at all): the module images are not in the main executable but in the
