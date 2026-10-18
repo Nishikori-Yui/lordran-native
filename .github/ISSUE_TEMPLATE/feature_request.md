@@ -1,29 +1,29 @@
 ---
-name: Feature request
-about: Propose a focused improvement to the port or its tooling.
+name: 功能建议
+about: 提议对移植版本或相关工具进行一项明确的改进。
 title: "feat: "
 labels: [enhancement]
 assignees: []
 ---
 
-## Problem
+## 要解决的问题
 
-## Proposed solution
+## 建议方案
 
 <!-- Describe the desired behavior, not only the implementation. -->
 
-## Scope
+## 影响范围
 
-- Target area: <!-- iOS / Mac / host / graphics / audio / input / tooling / docs -->
-- Affected users:
-- Compatibility considerations:
+- 目标区域：<!-- iOS / Mac / host / 图形 / 音频 / 输入 / 工具 / 文档 -->
+- 受影响的用户：
+- 兼容性注意事项：
 
-## Alternatives considered
+## 备选方案
 
-## Acceptance criteria
+## 验收标准
 
 - [ ]
 - [ ]
 - [ ]
 
-## Additional context
+## 其他信息
