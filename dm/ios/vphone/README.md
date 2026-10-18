@@ -31,3 +31,22 @@ These checks exercise permission rejection, range boundaries, preservation
 of adjacent pages, opt-in behavior, and actual execution after the RW-to-RX
 copy. An installed iOS guest run is still required to validate that guest's
 signing and execution policy.
+
+## Standalone Metal capability probe
+
+Build a small, unsigned probe without rebuilding or bundling the game:
+
+```sh
+bash dm/ios/vphone/build_metal_probe.sh game/01004AB00A260000-work/build/vphone-metal-probe
+```
+
+The probe has bundle ID `org.nxnative.vphone-metal-probe`. Install it only into
+an authorized virtual test guest. Its UI and `Documents/metal-probe.txt` report
+the device class and GPU families, argument-buffer tier, a completed basic
+render with pixel readback, residency-set creation at two capacities, and
+creation of the Metal 4 queue, allocator, argument table and command buffer.
+The basic render waits at most ten seconds for completion.
+
+The current host requires Metal 4. A working basic render is not sufficient
+when these Metal 4 objects are unavailable. The probe does not substitute a
+renderer or bypass missing driver capabilities.
