@@ -41,8 +41,6 @@ static int entry_count(void) {
     h_fs_ReadDirectory(&n, e, h, 32); h_fs_CloseDirectory(h); return (int)n;
 }
 static void *create_race(void *p) { return (void *)(uintptr_t)h_fs_CreateFile(p, 0); }
-module_t g_mod[MAX_MOD]; int g_nmod;   // Module table (MountSave picks save fixes by main build ID): this unit test loads no modules
-int dm_custom_lang_explicit(void) { return -1; }   // Language switch (dm_custom.c): not involved in this unit test, treated as the player never having tapped it
 int main(void) {
     char root[1024], save[1024], p[1100];
     const char *tmp = getenv("TMPDIR");

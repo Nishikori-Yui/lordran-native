@@ -14,7 +14,6 @@
 typedef struct { uint32_t st_name; uint8_t st_info, st_other; uint16_t st_shndx; uint64_t st_value, st_size; } Elf64_Sym;
 typedef struct { int64_t d_tag; union { uint64_t d_val, d_ptr; } d_un; } Elf64_Dyn;
 typedef struct { uint64_t r_offset, r_info; int64_t r_addend; } Elf64_Rela;
-typedef struct { uint8_t *d; size_t n; } dm_blob;   // One save file of the original game read whole into memory (dm_pages.c dm_save_blobs)
 #define ELF64_R_SYM(i) ((i) >> 32)
 #define ELF64_R_TYPE(i) ((i) & 0xffffffff)
 enum { DT_INIT = 12, DT_RELA = 7, DT_RELASZ = 8, DT_JMPREL = 23, DT_PLTRELSZ = 2, DT_SYMTAB = 6, DT_STRTAB = 5,

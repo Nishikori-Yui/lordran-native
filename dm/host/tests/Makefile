@@ -30,8 +30,8 @@ $(B)/t_touch: t_touch.c ../hle_touch.c ../front.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_touch.c ../hle_touch.c
 $(B)/t_thread_leak: t_thread_leak.c ../thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_thread_leak.c
-$(B)/t_fs: t_fs.c t_fs_stub.c t_bigstack_stub.c ../hle_fs.c ../hle.h ../dm.h ../dm_i18n.c | $(B)
-	clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_fs.c t_fs_stub.c t_bigstack_stub.c ../dm_i18n.c
+$(B)/t_fs: t_fs.c t_fs_stub.c t_bigstack_stub.c ../hle_fs.c ../hle.h ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_fs.c t_fs_stub.c t_bigstack_stub.c
 $(B)/t_audio: t_audio.c ../hle_audio.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_audio.c -framework AudioToolbox
 $(B)/t_audio_spsc: t_audio_spsc.c ../hle_audio.c ../hle.h ../dm.h | $(B)
@@ -54,8 +54,8 @@ $(B)/t_condvar: t_condvar.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 $(B)/t_condvar_old: t_condvar.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_CV_OLD_ORDER -I.. $(GINC) -o $@ t_condvar.c t_condvar_stub.c ../hle_thread.c
 
-$(B)/t_fs_case: t_fs_case.c t_bigstack_stub.c ../hle_fs.c ../hle.h ../dm.h ../dm_i18n.c | $(B)
-	clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_fs_case.c t_bigstack_stub.c ../dm_i18n.c
+$(B)/t_fs_case: t_fs_case.c t_bigstack_stub.c ../hle_fs.c ../hle.h ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_fs_case.c t_bigstack_stub.c
 
 $(B)/t_oe: t_oe.c ../hle_oe.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_oe.c

@@ -16,7 +16,6 @@ void tact_prefetch_stop(void) {}
 void granny_prof_dump(void) {}
 void uimsg_subscribe(void (*fn)(const char *cat, const char *act, const char *arg)) { (void)fn; }
 void dm_ui_text_entered(const char *text) { (void)text; }
-int dm_custom_lang_explicit(void) { return 0; }
 int dm_ingame_now(void) { return 0; }
 void dm_uiscreen_res_reread(void) {}
 // Game resolution: whatever the front end gives (Mac window / iOS screen), without D2R's UI-screen rewriting
