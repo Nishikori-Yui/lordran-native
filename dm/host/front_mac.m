@@ -2,10 +2,12 @@
 // Without DM_WINDOW: the guest runs directly on the current thread, behaving the same as with no front end (windowless tests use this).
 // Key map (Nintendo layout): WASD left stick, arrow keys D-pad, J=A K=B U=X I=Y, Q=L E=R, Z=ZL C=ZR, F=press left stick G=press right stick, Return=+ Tab=−.
 #import <Cocoa/Cocoa.h>
+#import <GameController/GameController.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
 #include "dm.h"
 #include "dm_input.h"
+#include "dm_padmap.h"
 #include "dm_uiscreen.h"
 #include "../gfx/nvn/nvn_mtl.h"
 void mtl_set_ui_rect_fn(void (*fn)(double *y, double *h));
@@ -22,6 +24,7 @@ static int g_walk, g_shift;
 static int g_mouse_left, g_mouse_right, g_mouse_middle;
 static int32_t g_mouse_rx, g_mouse_ry;
 static uint64_t g_mouse_motion_seq;
+static GCController *g_pad_controller;
 
 void *front_metal_layer(void) { return (__bridge void *)g_layer; }
 static int ds_layout(void) { return !strcmp(DM_GAME_MAC_LAYOUT, "dark_souls_pc"); }
@@ -34,6 +37,59 @@ uint64_t front_game_res(int docked) {
 
 static int32_t clamp_axis(long v) {
     return v < -DM_STICK_MAX ? -DM_STICK_MAX : v > DM_STICK_MAX ? DM_STICK_MAX : (int32_t)v;
+}
+static int32_t pad_axis(float v) {
+    return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * DM_STICK_MAX);
+}
+static void pad_clear(void) {
+    dm_pad_set(0, 0, 0, 0, 0);
+}
+static void pad_read(GCExtendedGamepad *g) {
+    uint64_t buttons = dm_padmap_face(DM_PADKIND_NINTENDO,
+                                      g.buttonA.isPressed, g.buttonB.isPressed,
+                                      g.buttonX.isPressed, g.buttonY.isPressed);
+    if (g.leftShoulder.isPressed) buttons |= DM_BTN_L;
+    if (g.rightShoulder.isPressed) buttons |= DM_BTN_R;
+    if (g.leftTrigger.isPressed) buttons |= DM_BTN_ZL;
+    if (g.rightTrigger.isPressed) buttons |= DM_BTN_ZR;
+    if (g.buttonMenu.isPressed) buttons |= DM_BTN_PLUS;
+    if (g.buttonOptions && g.buttonOptions.isPressed) buttons |= DM_BTN_MINUS;
+    if (g.leftThumbstickButton && g.leftThumbstickButton.isPressed) buttons |= DM_BTN_LS;
+    if (g.rightThumbstickButton && g.rightThumbstickButton.isPressed) buttons |= DM_BTN_RS;
+    if (g.dpad.left.isPressed) buttons |= DM_BTN_LEFT;
+    if (g.dpad.up.isPressed) buttons |= DM_BTN_UP;
+    if (g.dpad.right.isPressed) buttons |= DM_BTN_RIGHT;
+    if (g.dpad.down.isPressed) buttons |= DM_BTN_DOWN;
+    dm_pad_set(buttons,
+               pad_axis(g.leftThumbstick.xAxis.value),
+               pad_axis(g.leftThumbstick.yAxis.value),
+               pad_axis(g.rightThumbstick.xAxis.value),
+               pad_axis(g.rightThumbstick.yAxis.value));
+}
+static void pad_refresh(void) {
+    GCController *selected = nil;
+    GCController *current = GCController.current;
+    for (GCController *c in GCController.controllers) {
+        if (!c.extendedGamepad) continue;
+        if (!selected) selected = c;
+        if (c == current) { selected = c; break; }
+    }
+    if (selected != g_pad_controller) {
+        g_pad_controller.extendedGamepad.valueChangedHandler = nil;
+        g_pad_controller = selected;
+        if (selected) {
+            selected.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *element) {
+                (void)element;
+                if (g == g_pad_controller.extendedGamepad) pad_read(g);
+            };
+            const char *vendor = selected.vendorName.UTF8String ?: "unknown";
+            const char *category = selected.productCategory.UTF8String ?: "unknown";
+            LOG("Mac controller connected: %s / %s", category, vendor);
+        } else {
+            LOG("Mac controller disconnected");
+        }
+    }
+    if (selected) pad_read(selected.extendedGamepad); else pad_clear();
 }
 static int game_key_event(NSEvent *e, NSWindow *win) {
     return e.window == win || (e.window == nil && NSApp.keyWindow == win);
@@ -161,6 +217,15 @@ void front_run(void (*guest)(void)) {
         [win makeKeyAndOrderFront:nil];
         win.initialFirstResponder = v;
         [win makeFirstResponder:v];
+        NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
+        [nc addObserverForName:GCControllerDidConnectNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
+            (void)n; pad_refresh();
+        }];
+        [nc addObserverForName:GCControllerDidDisconnectNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
+            (void)n; pad_refresh();
+        }];
+        pad_refresh();
+        if (!GCController.controllers.count) [GCController startWirelessControllerDiscoveryWithCompletionHandler:nil];
         [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown | NSEventMaskKeyUp handler:^NSEvent *(NSEvent *e) {
             if (!game_key_event(e, win)) return e;   // Keep native text dialogs and other application windows independent
             if (!e.isARepeat) on_key(e, e.type == NSEventTypeKeyDown);
@@ -201,7 +266,6 @@ void front_run(void (*guest)(void)) {
         [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowWillCloseNotification object:win queue:nil
                                                       usingBlock:^(NSNotification *n) { (void)n; exit(0); }];
         // Lifecycle (hle.h / dm.h): focus lost → 2, focus regained → 1; minimized → 3 + audio paused + GPU suspended, restored → resume (followed by focus regained → 1)
-        NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
         [nc addObserverForName:NSWindowDidResignKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) {
             (void)n;
             // A native text dialog can consume the key-up that opened it.
@@ -209,7 +273,7 @@ void front_run(void (*guest)(void)) {
             g_w = g_a = g_s = g_d = g_walk = g_shift = 0;
             g_mouse_left = g_mouse_right = g_mouse_middle = 0;
             g_mouse_rx = g_mouse_ry = 0; ++g_mouse_motion_seq;
-            push(); dm_touch_set(NULL, 0);
+            push(); pad_clear(); dm_touch_set(NULL, 0);
             LOG("Mac 游戏窗口失去键盘焦点");
             if (!win.miniaturized) dm_focus_set(2);
         }];
@@ -217,6 +281,7 @@ void front_run(void (*guest)(void)) {
             (void)n;
             [win makeFirstResponder:v];
             push();
+            pad_refresh();
             LOG("Mac 游戏窗口重新获得键盘焦点");
             mtl_link_resume();
             dm_focus_set(1);
