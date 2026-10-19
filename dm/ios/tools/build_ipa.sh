@@ -14,6 +14,7 @@ export GAME; GD=$DM/games/$GAME   # the make that gen_build.py runs uses the sam
 gp() { python3 "$DM/games/game.py" "$GAME" "$1" || die "game profile $GD: $1"; }   # read a key of the game profile
 [ -f "$GD/game.tsv" ] || die "no game profile $GD/game.tsv"
 [ -n "${W:-}" ] || die "W is not set: W=<NSP folder>/$GAME-work (the game's work folder) $0"
+python3 "$DM/../scripts/shell_common.py" "$GAME" || die "c1 guard table does not match the host shader chain"
 PKG=$(gp package)
 PATCHED=${PATCHED:-$W/build/patched_$PKG}; ROMFS=${ROMFS:-$W/data/$PKG/RomFS}
 BUILD_FLAGS=(ONLY_ACTIVE_ARCH=NO)

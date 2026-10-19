@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from shell_common import check_manifest, chain_id, shader_keys
+from shell_common import check_c1_table, check_manifest, chain_id, shader_keys
 from portable_shaders import verify_spirv_cross
 
 
@@ -76,6 +76,7 @@ def main():
         parser.error("NSP folder, keys, shell, and output IPA must remain under this repository's game/ directory")
     info, shell_manifest, shell_files = safe_shell(shell)
     check_manifest(shell_manifest, repo, profile)
+    check_c1_table(profile, shell_files["dm/c1_full.tsv"])
     if info.get("CFBundleSupportedPlatforms") != ["iPhoneOS"]:
         raise ValueError("The input shell is not an iPhoneOS build")
     # Reject an incomplete toolchain before scanning or extracting private inputs.

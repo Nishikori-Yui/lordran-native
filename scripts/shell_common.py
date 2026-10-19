@@ -55,6 +55,20 @@ def chain_id(game):
                      game.table("dmsh_chain.h").read_text(encoding="utf-8"))[1]
 
 
+def check_c1_table(game, contents=None):
+    expected = chain_id(game)
+    if contents is None:
+        try:
+            contents = game.table("c1_full.tsv").read_bytes()
+        except FileNotFoundError as error:
+            raise ValueError("Missing c1_full.tsv; regenerate it from the current shader chain") from error
+    lines = contents.decode("utf-8").splitlines()
+    header = re.match(r"# chain b-([0-9a-f]{12})(?:\s|$)", lines[0]) if lines else None
+    if not header or header[1] != expected:
+        raise ValueError(f"c1_full.tsv must name shader chain b-{expected}; "
+                         "regenerate it with dm/gfx/tools/c1_guard.py from matching MSL")
+
+
 def shader_keys(game):
     return sorted({line.split("\t")[3] for line in
                    game.table("shader_map.tsv").read_text(encoding="utf-8").splitlines()
@@ -62,14 +76,32 @@ def shader_keys(game):
 
 
 def make_manifest(repo, game):
+    check_c1_table(game)
     return dict(schema=SCHEMA, game=game.id, source=source_id(repo, game),
                 chain=chain_id(game), shader_keys=shader_keys(game))
 
 
 def check_manifest(manifest, repo, game):
+    check_c1_table(game)
     expected = dict(schema=SCHEMA, game=game.id, source=source_id(repo, game), chain=chain_id(game))
     for key, value in expected.items():
         if manifest.get(key) != value:
             raise ValueError(f"Shell {key} mismatch; use the shell and source from the same release")
     if manifest.get("shader_keys") != shader_keys(game):
         raise ValueError("Shell shader inventory does not match the game profile")
+
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(description="Check c1 guard metadata before packaging.")
+    parser.add_argument("game", help="Target game profile ID")
+    args = parser.parse_args()
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dm/games"))
+    import game
+
+    try:
+        check_c1_table(game.load(args.game))
+    except (ValueError, OSError) as error:
+        parser.exit(1, f"Shader table validation failed: {error}\n")

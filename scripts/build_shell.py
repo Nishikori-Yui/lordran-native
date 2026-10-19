@@ -10,7 +10,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-from shell_common import make_manifest
+from shell_common import check_c1_table, make_manifest
 
 
 def main():
@@ -86,6 +86,7 @@ def main():
     info = plistlib.loads((app / "Info.plist").read_bytes())
     if info.get("CFBundleSupportedPlatforms") != ["iPhoneOS"]:
         raise ValueError("Shell executable was not built for iPhoneOS")
+    check_c1_table(profile, (app / "dm/c1_full.tsv").read_bytes())
     # A strict resource allowlist prevents generated or private content from
     # leaking into a redistributable shell.
     allowed = {"Info.plist", "PkgInfo", "DmIOS", "Assets.car",
