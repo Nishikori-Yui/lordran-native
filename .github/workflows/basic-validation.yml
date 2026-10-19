@@ -1,0 +1,51 @@
+name: Basic validation
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # These are GitHub-hosted runners. No private game files or self-hosted
+        # runner state is needed for this job.
+        os:
+          - macos-15
+          - windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Python tests
+        run: python -m unittest discover -s scripts/tests -v
+
+      - name: Compile tracked Python sources
+        run: >-
+          python -c "import py_compile, subprocess;
+          [py_compile.compile(path, doraise=True) for path in
+          subprocess.check_output(['git', 'ls-files', '-z', '*.py']).decode().split('\0')
+          if path]"
+
+      - name: Validate packaging command help
+        run: python scripts/build_ipa_from_shell.py -h
+
+      - name: Validate target profile metadata
+        run: python scripts/shell_common.py 01004AB00A260000
+
+      - name: Check POSIX build script syntax
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash -n dm/ios/tools/build_ipa.sh
