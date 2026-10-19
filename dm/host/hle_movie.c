@@ -1,10 +1,12 @@
-// The SDK's movie library (subsdk0 = NintendoSDK_movie, Engage): Extractor demuxes, Decoder uses NVIDIA's hardware decoder (NVOMX → NvRmChannelOpen opens the nvdrv device).
+// The SDK movie library demuxes the original containers; the host replaces its NVIDIA hardware decoders.
 // The host has no nvdrv: the SDK aborts when the decoder thread opens the device. Extractor::SetDataSource returns 0x1000 (the same code the SDK returns when it has no implementation object); Engage's Unity demuxes WebM itself and does not use it.
 // The host takes over Decoder (below; VP9 is decoded with libvpx, Vorbis audio with stb_vorbis): Engage's movies are 103 VP9 WebM files under RomFS/Data/StreamingAssets/Movie (2.7 GB, no audio track), and the game does not go on until the opening movie S01F has played.
 #include "hle.h"
 #include <arm_neon.h>
+#include <AudioToolbox/AudioToolbox.h>
 #include <pthread.h>
 #include <unistd.h>
+#include "dm_movie_avc.h"
 #include "vpx/vpx_decoder.h"
 #include "vpx/vp8dx.h"
 // Vorbis (movie audio tracks, Link's Awakening): stb_vorbis, built into this file (dm/third_party/stb_vorbis); only its push-data API, floats out
@@ -48,6 +50,8 @@ HLE_FORCE("_ZN5movie9Extractor13SetDataSourceEPKc", "影片拆封装：宿主还
 #define MD_FMT_ABGR 3            // 4-byte RGBA (memory order R G B A), only with the native texture mode
 #define MD_MODE_TEX 2            // native texture mode: the decoder writes frames into the client's NVN texture
 #define MD_TYPE_VP9 3
+#define MD_TYPE_AVC 1
+#define MD_TYPE_AAC 4
 #define MD_TYPE_VORBIS 5         // audio: the SDK's Decoder accepts AAC (4) and Vorbis (5) in CPU mode, output format 1 only (interleaved PCM16)
 #define MD_FMT_PCM16 1
 #define MD_PCM_CAP (8192 * 8 * 2)   // bytes per audio output: a Vorbis packet gives at most 4096 samples per channel (blocksize 8192), 8 channels at most
@@ -57,16 +61,18 @@ typedef struct {
     int type, fmt, mode;
     void *ev[4];                                 // a copy of DecoderEvents: {input, output, format, error} EventType*. The client's struct need not stay alive (by Metroid Dread's second movie it had been overwritten and Start crashed signalling), so it is copied at registration
     int w, h, fmt_sent, started;
-    uint8_t *in[MD_NIN]; int infree[MD_NIN], ninfree;                     // queue of free input indices
+    uint8_t *in[MD_NIN]; int infree[MD_NIN], ninfree, instate[MD_NIN];    // 0 free, 1 acquired, 2 queued
     struct { int used, pic; int64_t pts; uint32_t flags; uint8_t *frm; size_t cap, bytes; } out[MD_NOUT];   // pic: frm holds a decoded picture (audio: bytes of PCM); cap: bytes in frm
     int outq[MD_NOUT], noutq;                                             // queue of ready output indices
     struct { int in, off, size; int64_t pts; uint32_t flags; } pend[MD_NIN]; int npend;   // input packets waiting to be decoded (in arrival order)
     // Decoding: dmu lets only one guest thread take and decode packets at a time (packets enter libvpx in order); wmu / wcv hand one job to the host thread and wait for it
     pthread_mutex_t dmu, wmu; pthread_cond_t wcv; pthread_t wk;
-    int job; const uint8_t *jp; int jn, jslot, jgot;
+    int job; const uint8_t *jp; int jn, jslot, jgot, jerr, last_error;
     vpx_codec_ctx_t vpx; int vpx_on, red_dec, red_img;
+    dm_avc *avc; int avc_eos, avc_eos_sent;
+    int64_t jpts; uint32_t jflags;
     // Vorbis: the identification and setup headers from Configure's MediaData ("csd-0", "csd-1", as with Android's MediaCodec), the decoder (opened at the first packet), channels / rate, Ogg page sequence
-    uint8_t *vhdr[2]; int vhdr_n[2]; stb_vorbis *vb; int ch, rate; uint32_t ogg_seq; int64_t ogg_gran; int red_vb;
+    uint8_t *vhdr[2]; int vhdr_n[2]; stb_vorbis *vb; AudioConverterRef aac; int ch, rate, aac_no_cookie_logged; uint32_t ogg_seq; int64_t ogg_gran; int red_vb, red_aac;
     uint64_t dec_n, dec_ns, dec_max;            // decode timing (on the host thread, per packet)
     unsigned long ncall[24];
 } mdec_t;
@@ -165,7 +171,7 @@ static void md_dims(const mdec_t *d, int *w, int *h, int *stride, int *slice) {
 }
 
 // ---------- Host decoding thread ----------
-enum { MDJ_NONE, MDJ_DECODE, MDJ_CLOSE, MDJ_QUIT };
+enum { MDJ_NONE, MDJ_DECODE, MDJ_RECEIVE, MDJ_CLOSE, MDJ_QUIT };
 static int md_threads(void) { long n = sysconf(_SC_NPROCESSORS_ONLN); return n >= 8 ? 4 : 2; }
 // I420 → NV12 (stride = width, plane height = height); a smaller picture is padded with black, a larger one cropped
 static void md_nv12(const vpx_image_t *im, uint8_t *dst, int w, int h) {
@@ -180,6 +186,39 @@ static void md_nv12(const vpx_image_t *im, uint8_t *dst, int w, int h) {
         for (; x + 16 <= cw2; x += 16) { uint8x16x2_t t = { { vld1q_u8(u + x), vld1q_u8(v + x) } }; vst2q_u8(o + 2 * x, t); }
         for (; x < cw2 && 2 * x + 1 < w; x++) { o[2 * x] = u[x]; o[2 * x + 1] = v[x]; }
     }
+}
+static int md_avc_job(mdec_t *d, int receive_only) {
+    int err = 0;
+    if (!d->avc) {
+        d->avc = dm_avc_create();
+        if (!d->avc) { d->jerr = -108; return 0; }
+        for (int i = 0; i < 2 && !err; i++)
+            if (d->vhdr[i]) err = dm_avc_configure(d->avc, d->vhdr[i], (size_t)d->vhdr_n[i]);
+    }
+    if (!receive_only && !err) {
+        if (d->jn) err = d->jflags & 2 ? dm_avc_configure(d->avc, d->jp, (size_t)d->jn) :
+                                       dm_avc_submit(d->avc, d->jp, (size_t)d->jn, d->jpts);
+        if (d->jflags & 4) { d->avc_eos = 1; if (!err) err = dm_avc_end(d->avc); }
+    }
+    if (err) {
+        d->jerr = err;
+        if (!d->red_dec++) LOG_ERROR("AVC decode failed: status=%d bytes=%d timestamp_us=%lld flags=%#x", err, d->jn, (long long)d->jpts, d->jflags);
+        return 0;
+    }
+    int64_t pts = 0;
+    CVPixelBufferRef image = dm_avc_pop(d->avc, &pts);
+    if (!image) return 0;
+    size_t need = (size_t)d->w * d->h * (d->fmt == MD_FMT_ABGR ? 4 : 3) / (d->fmt == MD_FMT_ABGR ? 1 : 2);
+    if (d->out[d->jslot].cap < need) {
+        uint8_t *frame = realloc(d->out[d->jslot].frm, need);
+        if (!frame) { CVPixelBufferRelease(image); d->jerr = -108; return 0; }
+        d->out[d->jslot].frm = frame; d->out[d->jslot].cap = need;
+    }
+    err = dm_avc_copy(image, d->out[d->jslot].frm, d->w, d->h, d->fmt == MD_FMT_ABGR);
+    CVPixelBufferRelease(image);
+    if (err) { d->jerr = err; if (!d->red_img++) LOG_ERROR("AVC frame conversion failed: status=%d width=%d height=%d", err, d->w, d->h); return 0; }
+    d->out[d->jslot].pts = pts;
+    return 1;
 }
 // I420 → RGBA (native texture mode): by the colour space and range the picture declares (VP9 colour config; when undeclared BT.709 from 720 lines up, else BT.601), 16-bit fixed point; a smaller picture is padded with black, a larger one cropped
 static void md_rgba(const vpx_image_t *im, uint8_t *dst, int w, int h) {
@@ -274,7 +313,90 @@ static int md_vorbis(mdec_t *d, const uint8_t *p, int n, int slot) {
     d->out[slot].bytes = need;
     return 1;
 }
-static void md_close(mdec_t *d) { if (d->vpx_on) { vpx_codec_destroy(&d->vpx); d->vpx_on = 0; } if (d->vb) { stb_vorbis_close(d->vb); d->vb = NULL; } }
+typedef struct {
+    const uint8_t *data;
+    UInt32 size;
+    UInt32 channels;
+    AudioStreamPacketDescription packet;
+    int supplied, starved;
+} md_aac_input;
+static OSStatus md_aac_input_proc(AudioConverterRef converter, UInt32 *packets, AudioBufferList *buffers,
+                                  AudioStreamPacketDescription **descriptions, void *context) {
+    (void)converter;
+    md_aac_input *input = context;
+    if (input->supplied) { *packets = 0; input->starved = 1; return kAudioConverterErr_UnspecifiedError; }
+    input->supplied = 1;
+    buffers->mNumberBuffers = 1;
+    buffers->mBuffers[0].mNumberChannels = input->channels;
+    buffers->mBuffers[0].mDataByteSize = input->size;
+    buffers->mBuffers[0].mData = (void *)input->data;
+    *packets = 1;
+    if (descriptions) {
+        input->packet.mStartOffset = 0;
+        input->packet.mDataByteSize = input->size;
+        input->packet.mVariableFramesInPacket = 0;
+        *descriptions = &input->packet;
+    }
+    return noErr;
+}
+static int md_aac_open(mdec_t *d) {
+    if (d->aac) return 1;
+    if (d->ch < 1 || d->ch > 8 || d->rate <= 0) {
+        if (!d->red_aac++) LOG_ERROR("AAC configuration is incomplete: cookie_bytes=%d channels=%d sample_rate_hz=%d", d->vhdr_n[0], d->ch, d->rate);
+        return 0;
+    }
+    if ((!d->vhdr[0] || d->vhdr_n[0] <= 0) && !d->aac_no_cookie_logged++)
+        LOG_WARN("AAC codec-specific data missing; using AudioConverter defaults with channels=%d sample_rate_hz=%d", d->ch, d->rate);
+    AudioStreamBasicDescription input = {0}, output = {0};
+    input.mSampleRate = d->rate; input.mFormatID = kAudioFormatMPEG4AAC;
+    input.mChannelsPerFrame = (UInt32)d->ch; input.mFramesPerPacket = 1024;
+    output.mSampleRate = d->rate; output.mFormatID = kAudioFormatLinearPCM;
+    output.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
+    output.mChannelsPerFrame = (UInt32)d->ch; output.mBitsPerChannel = 16;
+    output.mFramesPerPacket = 1; output.mBytesPerFrame = (UInt32)d->ch * 2;
+    output.mBytesPerPacket = output.mBytesPerFrame;
+    OSStatus status = AudioConverterNew(&input, &output, &d->aac);
+    if (!status && d->vhdr[0] && d->vhdr_n[0] > 0)
+        status = AudioConverterSetProperty(d->aac, kAudioConverterDecompressionMagicCookie,
+                                           (UInt32)d->vhdr_n[0], d->vhdr[0]);
+    if (status) {
+        if (d->aac) { AudioConverterDispose(d->aac); d->aac = NULL; }
+        if (!d->red_aac++) LOG_ERROR("Failed to initialize AAC decoder: status=%d cookie_bytes=%d channels=%d sample_rate_hz=%d", (int)status, d->vhdr_n[0], d->ch, d->rate);
+        return 0;
+    }
+    LOG("AAC decoder ready: channels=%d sample_rate_hz=%d cookie_bytes=%d", d->ch, d->rate, d->vhdr_n[0]);
+    return 1;
+}
+static int md_aac(mdec_t *d, const uint8_t *data, int size, int slot) {
+    if (!md_aac_open(d)) { d->jerr = -50; return 0; }
+    if (!data || size <= 0 || size > (1 << 20)) { d->jerr = -50; return 0; }
+    size_t capacity = (size_t)4096 * (size_t)d->ch * sizeof(int16_t);
+    if (d->out[slot].cap < capacity) {
+        uint8_t *pcm = realloc(d->out[slot].frm, capacity);
+        if (!pcm) { d->jerr = -108; return 0; }
+        d->out[slot].frm = pcm; d->out[slot].cap = capacity;
+    }
+    md_aac_input input = {.data = data, .size = (UInt32)size, .channels = (UInt32)d->ch};
+    AudioBufferList output = {.mNumberBuffers = 1};
+    output.mBuffers[0].mNumberChannels = (UInt32)d->ch;
+    output.mBuffers[0].mDataByteSize = (UInt32)capacity;
+    output.mBuffers[0].mData = d->out[slot].frm;
+    UInt32 packets = 4096;
+    OSStatus status = AudioConverterFillComplexBuffer(d->aac, md_aac_input_proc, &input, &packets, &output, NULL);
+    if (status && !(input.starved && status == kAudioConverterErr_UnspecifiedError)) {
+        d->jerr = (int)status;
+        if (!d->red_aac++) LOG_ERROR("AAC packet decode failed: status=%d bytes=%d", (int)status, size);
+        return 0;
+    }
+    d->out[slot].bytes = output.mBuffers[0].mDataByteSize;
+    return d->out[slot].bytes > 0;
+}
+static void md_close(mdec_t *d) {
+    dm_avc_destroy(d->avc); d->avc = NULL; d->avc_eos = d->avc_eos_sent = 0;
+    if (d->vpx_on) { vpx_codec_destroy(&d->vpx); d->vpx_on = 0; }
+    if (d->vb) { stb_vorbis_close(d->vb); d->vb = NULL; }
+    if (d->aac) { AudioConverterDispose(d->aac); d->aac = NULL; }
+}
 static void *md_worker(void *arg) {
     mdec_t *d = arg;
     pthread_setname_np("dm movie decoder");
@@ -283,9 +405,12 @@ static void *md_worker(void *arg) {
         while (d->job == MDJ_NONE) pthread_cond_wait(&d->wcv, &d->wmu);
         int job = d->job;
         pthread_mutex_unlock(&d->wmu);
-        if (job == MDJ_DECODE) {
+        if (job == MDJ_DECODE || job == MDJ_RECEIVE) {
+            d->jerr = 0;
             uint64_t t0 = now_ns();
-            d->jgot = d->type == MD_TYPE_VORBIS ? md_vorbis(d, d->jp, d->jn, d->jslot) : md_vp9(d, d->jp, d->jn, d->jslot);
+            d->jgot = d->type == MD_TYPE_VORBIS ? md_vorbis(d, d->jp, d->jn, d->jslot) :
+                      d->type == MD_TYPE_AAC ? md_aac(d, d->jp, d->jn, d->jslot) :
+                      d->type == MD_TYPE_AVC ? md_avc_job(d, job == MDJ_RECEIVE) : md_vp9(d, d->jp, d->jn, d->jslot);
             uint64_t dt = now_ns() - t0; d->dec_n++; d->dec_ns += dt; if (dt > d->dec_max) d->dec_max = dt;
         }
         else md_close(d);
@@ -309,22 +434,38 @@ static void md_pump(mdec_t *d) {
     for (;;) {
         pthread_mutex_lock(&d->mu);
         int slot = -1;
-        if (d->npend) for (int k = 0; k < MD_NOUT; k++) if (!d->out[k].used) { slot = k; break; }
+        int pending = d->npend != 0;
+        int avc = d->type == MD_TYPE_AVC;
+        if (pending || (avc && dm_avc_ready(d->avc)))
+            for (int k = 0; k < MD_NOUT; k++) if (!d->out[k].used) { slot = k; break; }
         if (slot < 0) { pthread_mutex_unlock(&d->mu); break; }
-        __typeof__(d->pend[0]) pk = d->pend[0];
-        memmove(d->pend, d->pend + 1, --d->npend * sizeof *d->pend);
+        __typeof__(d->pend[0]) pk = {0};
+        if (pending) { pk = d->pend[0]; memmove(d->pend, d->pend + 1, --d->npend * sizeof *d->pend); }
         d->out[slot].used = 1;
         pthread_mutex_unlock(&d->mu);
-        int got = 0;
-        if (pk.size > 0 && (d->type == MD_TYPE_VP9 || d->type == MD_TYPE_VORBIS)) { d->jp = d->in[pk.in] + pk.off; d->jn = pk.size; d->jslot = slot; md_job(d, MDJ_DECODE); got = d->jgot; }
-        int eos = (pk.flags & 4) != 0;   // MediaCodec BUFFER_FLAG_END_OF_STREAM
+        int got = 0, error = 0;
+        if (avc || (pending && pk.size > 0 && (d->type == MD_TYPE_VP9 || d->type == MD_TYPE_VORBIS || d->type == MD_TYPE_AAC))) {
+            d->jp = pending ? d->in[pk.in] + pk.off : NULL;
+            d->jn = pending ? pk.size : 0; d->jslot = slot; d->jpts = pk.pts; d->jflags = pk.flags;
+            md_job(d, pending ? MDJ_DECODE : MDJ_RECEIVE); got = d->jgot; error = d->jerr;
+        }
+        int eos = (pk.flags & 4) != 0;
         pthread_mutex_lock(&d->mu);
-        d->infree[d->ninfree++] = pk.in;
-        int ready = got || eos || (d->type != MD_TYPE_VP9 && d->type != MD_TYPE_VORBIS);   // an end-of-stream packet without a picture still yields an output to carry the flag back; AVC / VP8 have no decoder and give black frames
-        if (ready) { d->out[slot].pic = got; d->out[slot].pts = pk.pts; d->out[slot].flags = pk.flags; d->outq[d->noutq++] = slot; }
+        if (pending) { d->infree[d->ninfree++] = pk.in; d->instate[pk.in] = 0; }
+        if (error) d->last_error = 0x1000;
+        int ready = got || (!avc && (eos || (d->type != MD_TYPE_VP9 && d->type != MD_TYPE_VORBIS && d->type != MD_TYPE_AAC)));
+        uint32_t flags = pk.flags;
+        if (avc) {
+            flags = 0;
+            if (!error && d->avc_eos && !d->avc_eos_sent && !dm_avc_ready(d->avc)) {
+                flags = 4; ready = 1; d->avc_eos_sent = 1;
+            }
+        } else d->out[slot].pts = pk.pts;
+        if (ready) { d->out[slot].pic = got; d->out[slot].flags = flags; d->outq[d->noutq++] = slot; }
         else d->out[slot].used = 0;
         pthread_mutex_unlock(&d->mu);
-        md_event(d, 0);
+        if (pending) md_event(d, 0);
+        if (error) md_event(d, 3);
         if (ready) md_event(d, 1);
     }
     pthread_mutex_unlock(&d->dmu);
@@ -335,12 +476,10 @@ HLE_FORCE("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11De
     static void *vt; if (!vt) { uint8_t *t = guest_sym("_ZTVN5movie7DecoderE"); if (!t) die("movie::Decoder vtable not found"); vt = t + 0x10; }
     md_syms();
     self[0] = vt; self[1] = NULL;
-    // Only video (AVC / VP8 / VP9 = 1..3): NV12 output (Engage's Unity, CPU buffers), or RGBA output into the client's NVN texture (mode 2, Metroid Dread);
-    // anything else (audio) keeps a null impl and every method returns the SDK's failure code. Only VP9 is really decoded; AVC / VP8 give black frames
-    // Audio: Vorbis to PCM16 (Link's Awakening's movies carry a Vorbis track; without a decoder the SDK's player plays them silent)
-    int audio = type == MD_TYPE_VORBIS && fmt == MD_FMT_PCM16;
+    // Video uses NV12 CPU buffers or RGBA native textures; AAC and Vorbis audio decode to interleaved PCM16.
+    int audio = (type == MD_TYPE_AAC || type == MD_TYPE_VORBIS) && fmt == MD_FMT_PCM16;
     if (!audio && (type < 1 || type > 3 || (fmt != MD_FMT_NV12 && !(fmt == MD_FMT_ABGR && mode == MD_MODE_TEX)))) { LOG_ERROR("Unsupported movie decoder configuration: type=%d output=%d mode=%d; decoder methods will fail", type, fmt, mode); return; }
-    if (!audio && type != MD_TYPE_VP9) LOG_ERROR("Unsupported movie decoder type=%d (AVC/VP8); emitting black frames", type);
+    if (!audio && type != MD_TYPE_AVC && type != MD_TYPE_VP9) LOG_ERROR("Unsupported movie decoder type=%d (AVC/VP8); emitting black frames", type);
     mdec_t *d = calloc(1, sizeof *d);
     pthread_mutex_init(&d->mu, NULL); pthread_mutex_init(&d->dmu, NULL); pthread_mutex_init(&d->wmu, NULL); pthread_cond_init(&d->wcv, NULL);
     d->type = type; d->fmt = fmt; d->mode = mode;
@@ -363,7 +502,7 @@ static void md_free(void **self) {
     mdec_t *d = md_of(self); if (!d) return;
     md_defer_drop(d);
     self[1] = NULL;
-    LOG("[movie] Decoder destroyed: object=%p input_packets=%lu output_frames=%lu VP9_packets=%llu packet_avg_ms=%.2f packet_max_ms=%.2f", (void *)self, d->ncall[7], d->ncall[8],
+    LOG("[movie] Decoder destroyed: object=%p input_packets=%lu output_frames=%lu decode_packets=%llu packet_avg_ms=%.2f packet_max_ms=%.2f", (void *)self, d->ncall[7], d->ncall[8],
         (unsigned long long)d->dec_n, d->dec_n ? d->dec_ns / 1e6 / d->dec_n : 0.0, d->dec_max / 1e6);
     pthread_mutex_lock(&d->dmu); md_job(d, MDJ_QUIT); pthread_mutex_unlock(&d->dmu);
     pthread_join(d->wk, NULL);
@@ -380,6 +519,21 @@ HLE_FORCE("_ZN5movie7DecoderD0Ev", "影片解码器删除式析构：释放宿�
 
 HLE_FORCE("_ZN5movie7Decoder9ConfigureEPNS_9MediaDataE", "影片解码器配置", int, h_movie_Configure, void **self, void *md) {
     mdec_t *d = md_of(self); if (!d) return 0x1000;
+    if (d->type == MD_TYPE_AAC) {
+        for (int k = 0; k < 2 && md; k++) {
+            void *buffer = NULL; char key[8]; snprintf(key, sizeof key, "csd-%d", k);
+            if (G.find_buf(md, key, &buffer) && buffer && G.data(buffer) && G.size(buffer)) {
+                size_t n = G.size(buffer); if (n > 65536) return 0x100b;
+                uint8_t *copy = malloc(n); if (!copy) return 0x1000;
+                memcpy(copy, G.data(buffer), n); free(d->vhdr[k]); d->vhdr[k] = copy; d->vhdr_n[k] = (int)n;
+            }
+        }
+        int ch = 0, rate = 0;
+        if (md) { G.find_i32(md, "channel-count", &ch); G.find_i32(md, "sample-rate", &rate); }
+        if (ch > 0) d->ch = ch; if (rate > 0) d->rate = rate;
+        MD_TRACE(d, 0, "Configure (AAC): channels=%d sample_rate_hz=%d cookie_bytes=%d", d->ch, d->rate, d->vhdr_n[0]);
+        return 0;
+    }
     if (d->type == MD_TYPE_VORBIS) {   // codec-specific data as Android's MediaCodec takes it: csd-0 = identification header, csd-1 = setup header
         for (int k = 0; k < 2 && md; k++) { void *b = NULL; char key[8]; snprintf(key, sizeof key, "csd-%d", k);
             if (G.find_buf(md, key, &b) && b && G.data(b) && G.size(b)) { size_t n = G.size(b); free(d->vhdr[k]); d->vhdr[k] = malloc(n); memcpy(d->vhdr[k], G.data(b), n); d->vhdr_n[k] = (int)n; } }
@@ -389,6 +543,20 @@ HLE_FORCE("_ZN5movie7Decoder9ConfigureEPNS_9MediaDataE", "影片解码器配置"
         return 0;
     }
     int w = 0, h = 0; if (md) { G.find_i32(md, "width", &w); G.find_i32(md, "height", &h); }
+    if (d->type == MD_TYPE_AVC && md) {
+        static const char *keys[] = {"avcc", "csd-0", "csd-1"};
+        for (int k = 0; k < 3; k++) {
+            void *buf = NULL;
+            if (!G.find_buf(md, keys[k], &buf) || !buf || !G.data(buf)) continue;
+            size_t n = G.size(buf);
+            if (!n || n > 65536) continue;
+            int index = k == 2 ? 1 : 0;
+            uint8_t *copy = malloc(n); if (!copy) return 0x1000;
+            memcpy(copy, G.data(buf), n); free(d->vhdr[index]); d->vhdr[index] = copy; d->vhdr_n[index] = (int)n;
+            LOG("[movie] AVC configuration: field=%s bytes=%zu", keys[k], n);
+            if (!k) break;
+        }
+    }
     pthread_mutex_lock(&d->mu); if (w > 0 && h > 0 && !d->fmt_sent) { d->w = w; d->h = h; } pthread_mutex_unlock(&d->mu);
     MD_TRACE(d, 0, "Configure: MediaData width=%d height=%d", w, h);
     return 0;
@@ -409,9 +577,10 @@ HLE_FORCE("_ZN5movie7Decoder5StartEv", "影片解码器开始：输入全空，�
 // clear the queues and slots; with close, the libvpx decoder is closed too (rebuilt at the next packet)
 static void md_reset(mdec_t *d, int close) {
     pthread_mutex_lock(&d->dmu);   // wait for the packet being decoded
-    if (close) md_job(d, MDJ_CLOSE);
+    if (close || d->type == MD_TYPE_AVC) md_job(d, MDJ_CLOSE);
     pthread_mutex_lock(&d->mu);
-    for (int i = 0; i < MD_NIN; i++) d->infree[i] = i;
+    for (int i = 0; i < MD_NIN; i++) { d->infree[i] = i; d->instate[i] = 0; }
+    d->last_error = 0;
     d->ninfree = MD_NIN; d->noutq = 0; d->npend = 0;
     for (int i = 0; i < MD_NOUT; i++) d->out[i].used = d->out[i].pic = 0;
     pthread_mutex_unlock(&d->mu);
@@ -443,7 +612,7 @@ HLE_FORCE("_ZN5movie7Decoder23AcquireInputBufferIndexEPiS1_", "影片解码器�
     // after Stop returned every input index, a late input event could still get one, the wrapper was destroyed afterwards, and the worker thread (main+0x223bd4) read the freed object and crashed
     pthread_mutex_lock(&d->mu);
     int r = MD_NO_INPUT; *idx = -1; *left = 0;
-    if (d->ninfree && d->started) { *idx = d->infree[0]; memmove(d->infree, d->infree + 1, --d->ninfree * sizeof *d->infree); *left = d->ninfree; r = 0; }
+    if (d->ninfree && d->started) { *idx = d->infree[0]; memmove(d->infree, d->infree + 1, --d->ninfree * sizeof *d->infree); d->instate[*idx] = 1; *left = d->ninfree; r = 0; }
     pthread_mutex_unlock(&d->mu);
     MD_TRACE(d, 6, "AcquireInputBufferIndex: result=%#x index=%d remaining=%d", r, *idx, *left);
     return r;
@@ -459,9 +628,11 @@ HLE_FORCE("_ZN5movie7Decoder24SendInputBufferForDecodeEiiilj", "影片解码器�
     mdec_t *d = md_of(self); if (!d) return 0x1000;
     if (i < 0 || i >= MD_NIN || off < 0 || size < 0 || (uint32_t)off + (uint32_t)size > MD_INCAP) return 0x100b;
     pthread_mutex_lock(&d->mu);
+    if (!d->started || d->instate[i] != 1 || d->npend == MD_NIN) { pthread_mutex_unlock(&d->mu); return 0x100b; }
+    d->instate[i] = 2;
     int fmt_now = 0;
     if (d->type == MD_TYPE_VP9 && !d->w && size > 0 && vp9_size(d->in[i] + off, size, &d->w, &d->h)) LOG("[movie] VP9 keyframe: %dx%d", d->w, d->h);
-    if (!d->fmt_sent) { d->fmt_sent = 1; fmt_now = 1; if (!d->w && d->type != MD_TYPE_VORBIS) { d->w = 1920; d->h = 1080; } }   // the size is fixed from here on (slots are allocated by it)
+    if (!d->fmt_sent) { d->fmt_sent = 1; fmt_now = 1; if (!d->w && d->type != MD_TYPE_VORBIS && d->type != MD_TYPE_AAC) { d->w = 1920; d->h = 1080; } }   // the size is fixed from here on (slots are allocated by it)
     d->pend[d->npend].in = i; d->pend[d->npend].off = off; d->pend[d->npend].size = size; d->pend[d->npend].pts = pts; d->pend[d->npend].flags = flags; d->npend++;
     int queued = d->npend;
     pthread_mutex_unlock(&d->mu);
@@ -479,6 +650,7 @@ HLE_FORCE("_ZN5movie7Decoder24AcquireOutputBufferIndexEPiPlPjS1_", "影片解码
     int r = MD_NO_OUTPUT; *idx = -1; *left = 0;
     if (d->noutq && d->started) {
         int s = d->outq[0]; memmove(d->outq, d->outq + 1, --d->noutq * sizeof *d->outq);
+        d->out[s].used = 2; // Acquired outputs can be released; queued outputs cannot.
         *idx = s; *pts = d->out[s].pts; *flags = d->out[s].flags; *left = d->noutq; r = 0;
     }
     pthread_mutex_unlock(&d->mu);
@@ -486,7 +658,7 @@ HLE_FORCE("_ZN5movie7Decoder24AcquireOutputBufferIndexEPiPlPjS1_", "影片解码
     return r;
 }
 static void md_format(mdec_t *d, void *md) {
-    if (d->type == MD_TYPE_VORBIS) { G.set_i32(md, "channel-count", d->ch > 0 ? d->ch : 2); G.set_i32(md, "sample-rate", d->rate > 0 ? d->rate : 48000); return; }
+    if (d->type == MD_TYPE_AAC || d->type == MD_TYPE_VORBIS) { G.set_i32(md, "channel-count", d->ch > 0 ? d->ch : 2); G.set_i32(md, "sample-rate", d->rate > 0 ? d->rate : 48000); return; }
     int w, h, stride, slice; md_dims(d, &w, &h, &stride, &slice);
     G.set_i32(md, "width", w); G.set_i32(md, "height", h);
     G.set_rect(md, "crop", 0, 0, w - 1, h - 1);
@@ -508,7 +680,7 @@ HLE_FORCE("_ZN5movie7Decoder21GetOutputBufferFormatEiPNS_9MediaDataE", "影片�
 HLE_FORCE("_ZN5movie7Decoder19GetOutputBufferSizeEPiS1_", "影片解码器：输出缓冲大小（NV12 一帧）", int, h_movie_OutSize, void **self, int *size, int *mode) {
     mdec_t *d = md_of(self); if (!d) return 0x1000;
     if (!size || !mode) return 0x100b;
-    if (d->type == MD_TYPE_VORBIS) { *size = MD_PCM_CAP; *mode = d->mode; MD_TRACE(d, 11, "GetOutputBufferSize → %d（PCM）", *size); return 0; }
+    if (d->type == MD_TYPE_AAC || d->type == MD_TYPE_VORBIS) { *size = MD_PCM_CAP; *mode = d->mode; MD_TRACE(d, 11, "GetOutputBufferSize: bytes=%d format=PCM16", *size); return 0; }
     int w, h, stride, slice; md_dims(d, &w, &h, &stride, &slice);
     *size = stride * slice * 3 / 2; *mode = d->mode;   // the SDK fills the second output with the decoder mode
     MD_TRACE(d, 11, "GetOutputBufferSize → %d（%d×%d）", *size, w, h);
@@ -545,7 +717,7 @@ HLE_FORCE("_ZN5movie7Decoder15GetOutputBufferEiPNS_6BufferE", "影片解码器�
     mdec_t *d = md_of(self); if (!d) return 0x1000;
     if (!buf || i < 0 || i >= MD_NOUT) return 0x100b;
     if (d->mode == MD_MODE_TEX) return md_out_tex(d, i, buf);
-    if (d->type == MD_TYPE_VORBIS) {   // PCM16 interleaved; an output without samples (end of stream) is empty
+    if (d->type == MD_TYPE_AAC || d->type == MD_TYPE_VORBIS) {   // PCM16 interleaved; an output without samples (end of stream) is empty
         size_t n = d->out[i].pic ? d->out[i].bytes : 0, cap = G.cap(buf); uint8_t *p = G.data(buf);
         if (!p || cap < n) { LOG_ERROR("Client audio buffer is too small: capacity=%zu required=%zu", cap, n); G.set_range(buf, 0, 0); return 0x100b; }
         if (n) memcpy(p, d->out[i].frm, n);
@@ -572,11 +744,16 @@ HLE_FORCE("_ZN5movie7Decoder24ReleaseOutputBufferIndexEi", "影片解码器：�
     mdec_t *d = md_of(self); if (!d) return 0x1000;
     if (i < 0 || i >= MD_NOUT) return 0x100b;
     pthread_mutex_lock(&d->mu);
+    if (d->out[i].used != 2) { pthread_mutex_unlock(&d->mu); return 0x100b; }
     d->out[i].used = 0; d->out[i].pic = 0;
     int queued = d->npend;
     pthread_mutex_unlock(&d->mu);
     MD_TRACE(d, 13, "ReleaseOutputBufferIndex: index=%d queued_packets=%d", i, queued);
-    if (queued) md_pump(d);
+    if (queued || d->type == MD_TYPE_AVC) md_pump(d);
     return 0;
 }
-HLE_FORCE("_ZN5movie7Decoder12GetLastErrorEv", "影片解码器：最近错误（无）", int, h_movie_LastErr, void **self) { (void)self; return 0; }
+HLE_FORCE("_ZN5movie7Decoder12GetLastErrorEv", "Movie decoder: most recent error", int, h_movie_LastErr, void **self) {
+    mdec_t *d = md_of(self); if (!d) return 0x1000;
+    pthread_mutex_lock(&d->mu); int error = d->last_error; pthread_mutex_unlock(&d->mu);
+    return error;
+}

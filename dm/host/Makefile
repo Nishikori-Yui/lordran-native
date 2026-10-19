@@ -12,7 +12,7 @@ SRC=main.c loader.c hle.c crash.c probe.c thread.c memstat.m ../ios/Sources/dm_t
 # Sources under dm/gfx and dm/gfx/nvn are included by wildcard (tests/ and metal/ do not go into the host): adding a file does not touch this line
 GFX=$(sort $(wildcard ../gfx/*.c ../gfx/nvn/*.c ../gfx/nvn/*.m ../gfx/nvn/*.S ../gfx/tex/*.c ../gfx/tex/*.m))
 GFX_H=$(sort $(wildcard ../gfx/nvn/*.h ../gfx/nvn/*.inc ../gfx/nvn/include/*.h ../gfx/tex/*.h))
-# Third party: libvpx ships only the VP9 decoder's sources (movie decoding, hle_movie.c), with its configuration headers in config/ (arm64, shared by Mac and iOS). Built separately into a static library, file by file, so host changes do not recompile it
+# Third party: libvpx ships only the VP9 decoder's sources (movie decoding), with its configuration headers in config/ (arm64, shared by Mac and iOS). Built separately into a static library, file by file, so host changes do not recompile it
 VPX=../third_party/libvpx
 VPX_SRC=$(sort $(shell find $(VPX) -name '*.c'))
 VPX_OBJ=$(patsubst $(VPX)/%.c,gen/vpx/%.o,$(VPX_SRC))
@@ -28,4 +28,4 @@ game_profile: $(GAME_H)
 $(GAME_H): $(GAME_DIR)/game.tsv ../games/game.py
 	python3 ../games/game.py header $(GAME) $@
 dmhost: Makefile $(SRC) $(GFX) $(wildcard *.h) ../ios/Sources/dm_touch_controls.[ch] ../ios/vphone/*.h $(GFX_H) $(GAME_H) $(GAME_DIR)/dmsh_chain.h $(VPX_LIB)
-	clang $(CFLAGS) -I../gfx/nvn/include -I$(dir $(GAME_H)) -I$(GAME_DIR) -I$(VPX) -I../third_party/stb_vorbis -fobjc-arc -o $@ $(SRC) $(GFX) $(VPX_LIB) -framework Cocoa -framework GameController -framework QuartzCore -framework Metal -framework AudioToolbox -framework ImageIO -framework UniformTypeIdentifiers
+	clang $(CFLAGS) -I../gfx/nvn/include -I$(dir $(GAME_H)) -I$(GAME_DIR) -I$(VPX) -I../third_party/stb_vorbis -fobjc-arc -o $@ $(SRC) $(GFX) $(VPX_LIB) -framework Cocoa -framework GameController -framework QuartzCore -framework Metal -framework AudioToolbox -framework ImageIO -framework UniformTypeIdentifiers -framework VideoToolbox -framework CoreMedia

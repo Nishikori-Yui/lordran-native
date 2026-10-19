@@ -11,6 +11,8 @@ This is code written by others, shipped with the repository so there is nothing 
 | `stb_vorbis/` | Ogg Vorbis decoder, a single file `stb_vorbis.c` | 1.22 (upstream commit `1ee679c`), unmodified | Host: decodes the Vorbis sound tracks of the games' WebM movies (`dm/host/hle_movie.c`, which includes the file with its push-data API only) | `stb_vorbis/LICENSE` (MIT or public domain, your choice; the same text ends `stb_vorbis.c`) |
 | `ryujinx/` | The shader translation library from Ryujinx, three projects: `Ryujinx.Graphics.Shader`, `Ryujinx.Common`, `Spv.Generator` | Ryujinx 1.3.2, unmodified | Referenced by the shader translation tool `dm/gfx/tools/dmsh_xlate`, which translates the original Switch shaders to SPIR-V | `ryujinx/LICENSE.txt` (MIT); `ryujinx/src/Spv.Generator/LICENSE` is that subproject's own license text |
 
+The shell-based packager's Mach-O writer (`scripts/guest_dylib.py`) and source-only shader runner (`scripts/portable_shaders.py`) adapt techniques from [d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile), Copyright (c) 2026 jhaizhou, MIT licensed. The relevant implementation and attribution are retained in each script header; this repository's `LICENSE` contains the MIT grant.
+
 A few more notes:
 
 - `flip/tool/` also carries three single-header libraries used by the FLIP command-line tool: `stb_image.h` (2.23), `stb_image_write.h` (1.13) and `tinyexr.h`. Their license notices are in the files themselves.

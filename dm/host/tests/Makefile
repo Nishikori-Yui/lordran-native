@@ -8,6 +8,20 @@ GAME_H = ../gen/$(GAME)/game_profile.h
 GINC = -I../gen/$(GAME) -I../../games/$(GAME)
 TESTS = t_padmap t_touch t_oe t_fs t_thread_leak t_fs_case t_audio t_audio_spsc t_swkbd t_altstack t_condvar t_condvar_old t_time t_log_timestamp t_log t_crash_log
 .DEFAULT_GOAL := run
+MOVIE_B = ../../../game/$(GAME)-work/build/movie-tests
+movie-avc-build: $(MOVIE_B)/t_movie_avc $(MOVIE_B)/t_movie_sps
+$(MOVIE_B):
+	mkdir -p $@
+$(MOVIE_B)/t_movie_sps: t_movie_sps.c ../dm_movie_sps.h | $(MOVIE_B)
+	clang -O1 -g -Wall -Wextra -Werror -o $@ $<
+$(MOVIE_B)/t_movie_avc: t_movie_avc.m ../hle_movie_avc.c ../dm_movie_avc.h ../dm_movie_sps.h ../dm_log.h | $(MOVIE_B)
+	clang -O1 -g -Wall -Wextra -Werror -Wno-deprecated-declarations -fobjc-arc -o $@ t_movie_avc.m ../hle_movie_avc.c -framework AVFoundation -framework VideoToolbox -framework CoreMedia -framework CoreVideo
+movie-avc-simulator-build: $(MOVIE_B)/t_movie_avc_sim
+$(MOVIE_B)/t_movie_avc_sim: t_movie_avc.m ../hle_movie_avc.c ../dm_movie_avc.h ../dm_movie_sps.h ../dm_log.h | $(MOVIE_B)
+	xcrun --sdk iphonesimulator clang -target arm64-apple-ios26.0-simulator -O1 -g -Wall -Wextra -Werror -Wno-deprecated-declarations -fobjc-arc -o $@ t_movie_avc.m ../hle_movie_avc.c -framework AVFoundation -framework VideoToolbox -framework CoreMedia -framework CoreVideo
+movie-hle-build: $(MOVIE_B)/t_movie_hle
+$(MOVIE_B)/t_movie_hle: t_movie_hle.m ../hle_movie.c ../hle_movie_avc.c ../dm_movie_avc.h ../dm_movie_sps.h ../dm_log.h ../gen/vpx/libvpx.a $(GAME_H) | $(MOVIE_B)
+	clang -O1 -g -Wall -Wextra -Wno-unused-function -Wno-deprecated-declarations -Wno-incompatible-pointer-types -fobjc-arc $(GINC) -I../../third_party/libvpx -I../../third_party/stb_vorbis -o $@ t_movie_hle.m ../hle_movie_avc.c ../gen/vpx/libvpx.a -framework AVFoundation -framework AudioToolbox -framework VideoToolbox -framework CoreMedia -framework CoreVideo
 $(addprefix $(B)/,$(TESTS)) $(B)/t_audio_spsc_tsan: Makefile $(GAME_H) ../dm_log.h
 $(GAME_H): ../../games/$(GAME)/game.tsv ../../games/game.py
 	$(MAKE) -C .. GAME=$(GAME) game_profile
