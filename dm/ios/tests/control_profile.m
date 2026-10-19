@@ -9,21 +9,29 @@ int main(void) {
         DmControlProfile *p = [[DmControlProfile alloc] initWithDictionary:nil defaultFull:YES];
         assert(p.leftMode == DmStickJoystick && p.rightMode == DmStickSwipe && p.fullLayout);
         assert(p.faceMapping == DmFacePosition && p.hideWithController && near(p.deadzone, 0.12));
+        assert(near(p.lookSensitivity, 1) && !p.lookInvertX && !p.lookInvertY);
         DmControlStyle s = [p styleForControl:0];
         assert(!s.positioned && near(s.scale, 1) && near(s.opacity, 1));
         NSDictionary *bad = @{@"left": @"swipe", @"right": @99, @"deadzone": @(NAN),
+                              @"look_sensitivity": @(NAN), @"look_invert_x": @"yes", @"look_invert_y": @[],
                               @"styles": @[@{@"x": @(NAN), @"y": @0.2, @"scale": @99,
                                   @"opacity": @-2, @"angle": @-900, @"shape": @"square"}, @"bad"]};
         DmControlProfile *invalid = [[DmControlProfile alloc] initWithDictionary:bad defaultFull:NO];
         s = [invalid styleForControl:0];
         assert(!s.positioned && near(s.scale, 2) && near(s.opacity, 0.1) && near(s.angle, -180) && s.shape == DmShapeDefault);
         assert(near(invalid.deadzone, 0.12) && !invalid.fullLayout);
+        assert(near(invalid.lookSensitivity, 1) && !invalid.lookInvertX && !invalid.lookInvertY);
+        invalid = [[DmControlProfile alloc] initWithDictionary:@{@"look_sensitivity": @100} defaultFull:NO];
+        assert(near(invalid.lookSensitivity, 3));
+        invalid = [[DmControlProfile alloc] initWithDictionary:@{@"look_sensitivity": @-1} defaultFull:NO];
+        assert(near(invalid.lookSensitivity, 0.25));
         invalid = [[DmControlProfile alloc] initWithDictionary:(id)@[] defaultFull:YES];
         assert(invalid.fullLayout);
         s = DmControlStyleDefault(); s.positioned = YES; s.x = 0.27; s.y = 0.68;
         s.scale = 1.4; s.angle = 43; s.opacity = 0.6; s.shape = DmShapeDrop;
         [p setStyle:s forControl:3]; p.leftMode = DmStickSwipe; p.rightMode = DmStickJoystick;
         p.faceMapping = DmFaceAutomatic; p.deadzone = 0.24; p.hideWithController = NO;
+        p.lookSensitivity = 1.75; p.lookInvertX = p.lookInvertY = YES;
         NSData *data = [NSPropertyListSerialization dataWithPropertyList:p.dictionary format:NSPropertyListBinaryFormat_v1_0 options:0 error:nil];
         assert(data);
         NSDictionary *roundtrip = [NSPropertyListSerialization propertyListWithData:data options:0 format:nil error:nil];
@@ -33,6 +41,7 @@ int main(void) {
         assert(near(r.angle, s.angle) && near(r.opacity, s.opacity) && r.shape == s.shape);
         assert(restored.leftMode == DmStickSwipe && restored.rightMode == DmStickJoystick);
         assert(!restored.hideWithController && restored.faceMapping == DmFaceAutomatic && near(restored.deadzone, 0.24));
+        assert(near(restored.lookSensitivity, 1.75) && restored.lookInvertX && restored.lookInvertY);
         DmControlProfile *draft = [p copy];
         [draft resetStyles]; assert(![draft styleForControl:3].positioned);
         assert([p styleForControl:3].positioned);

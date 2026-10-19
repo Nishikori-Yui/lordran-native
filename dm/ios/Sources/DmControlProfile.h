@@ -18,6 +18,9 @@ typedef struct {
 @property (nonatomic) DmStickMode rightMode;
 @property (nonatomic) DmFaceMapping faceMapping;
 @property (nonatomic) CGFloat deadzone;
+@property (nonatomic) CGFloat lookSensitivity;
+@property (nonatomic) BOOL lookInvertX;
+@property (nonatomic) BOOL lookInvertY;
 @property (nonatomic) BOOL hideWithController;
 @property (nonatomic) BOOL fullLayout;
 - (instancetype)initWithDictionary:(NSDictionary *)dictionary defaultFull:(BOOL)full;
