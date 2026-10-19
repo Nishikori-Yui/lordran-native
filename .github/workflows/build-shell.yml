@@ -2,6 +2,13 @@ name: Build unsigned iOS shell
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - "test/windows-injection-pipeline"
+    paths:
+      - ".github/workflows/build-shell.yml"
+      - "dm/**"
+      - "scripts/**"
   pull_request:
     paths:
       - ".github/workflows/build-shell.yml"
