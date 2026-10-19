@@ -31,6 +31,8 @@ class SourceFingerprintTests(unittest.TestCase):
 
     def test_generated_outputs_do_not_change_source(self):
         expected = self.fingerprint()
+        self.write("dm/ios/Sources/Info.plist", b"generated plist\n")
+        self.assertEqual(self.fingerprint(), expected)
         for directory in ("t_shader_map.dSYM", "Release.app", "Build.xcarchive",
                           ".iosdd-simulator", "build", "__pycache__"):
             with self.subTest(directory=directory):

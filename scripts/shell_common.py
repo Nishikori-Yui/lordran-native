@@ -15,6 +15,11 @@ SOURCE_PATHS = (
     "dm/tools/make_ext_font.py", "dm/games/game.py",
     "dm/gfx/tools/dmsh_chain.lock", "dm/ios/tools/ios_metal.py", "dm/ios/project.yml",
 )
+GENERATED_FILE_PATHS = {
+    # XcodeGen materializes this plist from project.yml; it is ignored by Git
+    # and must not make shells differ between a dirty Mac and a clean runner.
+    "dm/ios/Sources/Info.plist",
+}
 
 
 def generated_directory(name):
@@ -34,10 +39,12 @@ def source_id(repo, game):
         base = repo / folder
         for parent, dirs, files in os.walk(base):
             dirs[:] = sorted(d for d in dirs if not generated_directory(d))
-            paths += [Path(parent, name).relative_to(repo).as_posix() for name in files
-                      if Path(name).suffix in (".c", ".m", ".h", ".inc", ".S", ".py",
-                                               ".cs", ".csproj", ".sh", ".yml", ".plist", ".json",
-                                               ".mk", ".xcconfig") or name == "Makefile"]
+            paths += [relative for name in files
+                      for relative in [Path(parent, name).relative_to(repo).as_posix()]
+                      if relative not in GENERATED_FILE_PATHS and
+                      (Path(name).suffix in (".c", ".m", ".h", ".inc", ".S", ".py",
+                                             ".cs", ".csproj", ".sh", ".yml", ".plist", ".json",
+                                             ".mk", ".xcconfig") or name == "Makefile")]
     paths += [p.relative_to(repo).as_posix() for p in (repo / "dm/gfx/tools").glob("dmsh_*.py")]
     paths += [p.relative_to(repo).as_posix() for p in (repo / "dm/gfx/tools/dmsh_xlate").glob("*")
               if p.suffix in (".cs", ".csproj")]
