@@ -6,6 +6,22 @@ import re
 from pathlib import Path
 
 SCHEMA = 1
+SOURCE_PATHS = (
+    "scripts/build_ipa_from_nsp.py", "scripts/build_ipa_from_shell.py",
+    "scripts/build_shell.py", "scripts/guest_dylib.py", "scripts/portable_shaders.py",
+    "scripts/shell_common.py",
+    "dm/tools/patch_nso.py", "dm/tools/nso.py", "dm/tools/nacp.py",
+    "dm/tools/nx_extract/Program.cs", "dm/tools/nx_extract/nx_extract.csproj",
+    "dm/tools/make_ext_font.py", "dm/games/game.py",
+    "dm/gfx/tools/dmsh_chain.lock", "dm/ios/tools/ios_metal.py", "dm/ios/project.yml",
+)
+
+
+def generated_directory(name):
+    return (name in {"Gen", "DmIOS.xcodeproj", "gen", "__pycache__", "bin", "obj",
+                     "build", "DerivedData", "node_modules"}
+            or name.startswith(".iosdd")
+            or name.lower().endswith((".dsym", ".app", ".xcarchive")))
 
 
 def digest(data):
@@ -13,26 +29,16 @@ def digest(data):
 
 
 def source_id(repo, game):
-    paths = [
-        "scripts/build_ipa_from_nsp.py", "scripts/build_ipa_from_shell.py",
-        "scripts/build_shell.py", "scripts/guest_dylib.py", "scripts/portable_shaders.py",
-        "scripts/shell_common.py",
-        "dm/tools/patch_nso.py", "dm/tools/nso.py", "dm/tools/nacp.py",
-        "dm/tools/nx_extract/Program.cs", "dm/tools/nx_extract/nx_extract.csproj",
-        "dm/tools/make_ext_font.py", "dm/games/game.py",
-    ]
+    paths = list(SOURCE_PATHS)
     for folder in ("dm",):
         base = repo / folder
         for parent, dirs, files in os.walk(base):
-            dirs[:] = sorted(d for d in dirs if d not in {
-                "Gen", "DmIOS.xcodeproj", "gen", "__pycache__", "bin", "obj", ".iosdd",
-                "build", "DerivedData", "node_modules"})
+            dirs[:] = sorted(d for d in dirs if not generated_directory(d))
             paths += [Path(parent, name).relative_to(repo).as_posix() for name in files
                       if Path(name).suffix in (".c", ".m", ".h", ".inc", ".S", ".py",
                                                ".cs", ".csproj", ".sh", ".yml", ".plist", ".json",
                                                ".mk", ".xcconfig") or name == "Makefile"]
     paths += [p.relative_to(repo).as_posix() for p in (repo / "dm/gfx/tools").glob("dmsh_*.py")]
-    paths += ["dm/gfx/tools/dmsh_chain.lock", "dm/ios/tools/ios_metal.py", "dm/ios/project.yml"]
     paths += [p.relative_to(repo).as_posix() for p in (repo / "dm/gfx/tools/dmsh_xlate").glob("*")
               if p.suffix in (".cs", ".csproj")]
     paths += [p.relative_to(repo).as_posix() for p in game.dir.iterdir()
