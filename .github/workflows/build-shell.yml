@@ -1,0 +1,54 @@
+name: Build unsigned iOS shell
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/build-shell.yml"
+      - "dm/**"
+      - "scripts/**"
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build-shell:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build dependencies
+        run: |
+          brew install xcodegen
+          python -m pip install fonttools
+      - name: Build game-free shell
+        run: |
+          python scripts/build_shell.py \
+            --work "$GITHUB_WORKSPACE/game/ci-shell" \
+            --out "$GITHUB_WORKSPACE/game/ci-shell/LordranNative-shell-build-input.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LordranNative-shell-build-input
+          path: game/ci-shell/LordranNative-shell-build-input.zip
+          if-no-files-found: error
+          retention-days: 30
+  attach-release:
+    if: github.event_name == 'release'
+    needs: build-shell
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: LordranNative-shell-build-input
+          path: dist
+      - name: Attach shell to GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/LordranNative-shell-build-input.zip --clobber
