@@ -64,31 +64,34 @@ class SpirvCrossTests(unittest.TestCase):
                 portable_shaders.verify_spirv_cross(self.sha)
 
     def test_invalid_windows_toolchain_fails_before_nsp_scan(self):
-        repo = Path(__file__).resolve().parents[2]
-        with tempfile.TemporaryDirectory(dir=repo / "game") as private:
-            private = Path(private)
-            keys, shell = private / "prod.keys", private / "shell.zip"
-            keys.touch()
-            shell.touch()
-            scanner = Mock(side_effect=AssertionError("NSPs must not be read"))
-            modules = {
-                "game": SimpleNamespace(load=lambda: SimpleNamespace(id="01004AB00A260000")),
-                "build_ipa_from_nsp": SimpleNamespace(scan_nsps=scanner),
-                "nacp": SimpleNamespace(),
-            }
-            with patch.dict(sys.modules, modules), \
-                    patch.object(sys, "argv", ["build_ipa_from_shell.py", str(private),
-                                              "-k", str(keys), "--shell", str(shell),
-                                              "-o", str(private / "out.ipa")]), \
-                    patch.object(build_ipa_from_shell, "safe_shell", return_value=(
-                        {"CFBundleSupportedPlatforms": ["iPhoneOS"]}, {},
-                        {"dm/c1_full.tsv": b"test table"})), \
-                    patch.object(build_ipa_from_shell, "check_manifest"), \
-                    patch.object(build_ipa_from_shell, "check_c1_table"):
-                with self.assertRaisesRegex(ValueError, "Windows builds require"):
-                    build_ipa_from_shell.main()
-            scanner.assert_not_called()
-            self.assertFalse((private / "01004AB00A260000_shell_build").exists())
+        repo = Path(self.temp.name) / "checkout"
+        private = repo / "game"
+        private.mkdir(parents=True)
+        keys, shell = private / "prod.keys", private / "shell.zip"
+        keys.touch()
+        shell.touch()
+        scanner = Mock(side_effect=AssertionError("NSPs must not be read"))
+        modules = {
+            "game": SimpleNamespace(load=lambda: SimpleNamespace(id="01004AB00A260000")),
+            "build_ipa_from_nsp": SimpleNamespace(scan_nsps=scanner),
+            "nacp": SimpleNamespace(),
+        }
+        with patch.dict(sys.modules, modules), \
+                patch.object(build_ipa_from_shell, "__file__",
+                             str(repo / "scripts/build_ipa_from_shell.py")), \
+                patch.object(sys, "path", sys.path.copy()), \
+                patch.object(sys, "argv", ["build_ipa_from_shell.py", str(private),
+                                          "-k", str(keys), "--shell", str(shell),
+                                          "-o", str(private / "out.ipa")]), \
+                patch.object(build_ipa_from_shell, "safe_shell", return_value=(
+                    {"CFBundleSupportedPlatforms": ["iPhoneOS"]}, {},
+                    {"dm/c1_full.tsv": b"test table"})), \
+                patch.object(build_ipa_from_shell, "check_manifest"), \
+                patch.object(build_ipa_from_shell, "check_c1_table"):
+            with self.assertRaisesRegex(ValueError, "Windows builds require"):
+                build_ipa_from_shell.main()
+        scanner.assert_not_called()
+        self.assertFalse((private / "01004AB00A260000_shell_build").exists())
 
 
 if __name__ == "__main__":
