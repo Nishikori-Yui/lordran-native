@@ -50,9 +50,16 @@ jobs:
       - name: Attach shell to GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+          tag=$(python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["GITHUB_REF_NAME"], safe=""))')
+          response=$(mktemp)
+          trap 'rm -f "$response"' EXIT
+          if gh api --include --silent "repos/$GH_REPO/releases/tags/$tag" > "$response"; then
             gh release upload "$GITHUB_REF_NAME" dist/LordranNative-shell-build-input.zip --clobber
-          else
+          elif grep -Eq '^HTTP/[0-9.]+ 404([[:space:]]|$)' "$response"; then
             echo "No release exists for this tag; download the shell from the workflow artifact."
+          else
+            echo "::error::Failed to query the GitHub release; see the API error above." >&2
+            exit 1
           fi
