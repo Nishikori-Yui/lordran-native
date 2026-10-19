@@ -1,5 +1,7 @@
 // Metal execution layer of the NVN null device, see nvn_mtl.h.
 #import <Metal/Metal.h>
+#import "nvn_sim_metal.h"
+#include "nvn_sim_packed16.h"
 #import <QuartzCore/CAMetalLayer.h>
 #import <QuartzCore/CAMetalDisplayLink.h>
 #import <ImageIO/ImageIO.h>
@@ -111,6 +113,9 @@ static pthread_mutex_t g_res_mu = PTHREAD_MUTEX_INITIALIZER;   // Dedicated lock
 static NSHashTable *g_res_objects;
 static void res_add(id<MTLResource> r) {
     if (!r) return;
+#if TARGET_OS_SIMULATOR
+    dm_sim_track_resource(r);
+#endif
     pthread_mutex_lock(&g_res_mu);
     [g_res addAllocation:(id<MTLAllocation>)r];
     if (!g_res_objects) g_res_objects = [NSHashTable weakObjectsHashTable];
@@ -120,6 +125,9 @@ static void res_add(id<MTLResource> r) {
 }
 static void res_remove(id<MTLResource> r) {
     if (!r) return;
+#if TARGET_OS_SIMULATOR
+    dm_sim_untrack_resource(r);
+#endif
     pthread_mutex_lock(&g_res_mu);
     [g_res removeAllocation:(id<MTLAllocation>)r];
     [g_res_objects removeObject:r];
@@ -128,6 +136,16 @@ static void res_remove(id<MTLResource> r) {
 }
 // DM_RES_CHECK=1 (diagnostic): if textures / buffers the shader accesses through the argument block are not in the residency set, print the first 40 (textures are attributed to the actual allocation via parent texture / underlying buffer)
 static int g_res_check_on;
+// Simulator Metal reports zero for allocation-size APIs; do not present that as a real zero-byte allocation.
+static const char *mtl_alloc_size_text(uint64_t value, char *buffer, size_t capacity) {
+#if TARGET_OS_SIMULATOR
+    (void)value; (void)buffer; (void)capacity;
+    return "unavailable";
+#else
+    snprintf(buffer, capacity, "%llu", (unsigned long long)value);
+    return buffer;
+#endif
+}
 static void res_check(id r, const char *what, int reg) {
     static int nbad;
     if (!g_res_check_on || !r || nbad >= 40) return;
@@ -136,8 +154,8 @@ static void res_check(id r, const char *what, int reg) {
     id<MTLResource> a = r; int hops = 0;
     if (is_tex) { id<MTLTexture> t = (id<MTLTexture>)a; while (t.parentTexture) { t = t.parentTexture; hops++; } a = t.buffer ? (id<MTLResource>)t.buffer : (id<MTLResource>)t; }
     pthread_mutex_lock(&g_res_mu); int ok = [g_res_objects containsObject:a]; pthread_mutex_unlock(&g_res_mu);
-    if (!ok) { nbad++; id<MTLTexture> t = is_tex ? (id<MTLTexture>)r : nil;
-        DM_LOG_ERROR("metal", "Missing GPU residency #%d: stage=%s slot=%d kind=%s object=%p parent_depth=%d allocated_bytes=%lu storage=%lu%s", nbad, what, reg, is_tex ? "texture" : "buffer", (__bridge void *)a, hops, (unsigned long)a.allocatedSize, (unsigned long)a.storageMode,
+    if (!ok) { nbad++; id<MTLTexture> t = is_tex ? (id<MTLTexture>)r : nil; char allocated[32];
+        DM_LOG_ERROR("metal", "Missing GPU residency #%d: stage=%s slot=%d kind=%s object=%p parent_depth=%d allocated_bytes=%s storage=%lu%s", nbad, what, reg, is_tex ? "texture" : "buffer", (__bridge void *)a, hops, mtl_alloc_size_text(a.allocatedSize, allocated, sizeof allocated), (unsigned long)a.storageMode,
              t ? [NSString stringWithFormat:@" format=%lu width=%lu height=%lu type=%lu usage=%#lx", (unsigned long)t.pixelFormat, (unsigned long)t.width, (unsigned long)t.height, (unsigned long)t.textureType, (unsigned long)t.usage].UTF8String : ""); }
 }
 static void res_commit(void) {
@@ -268,19 +286,25 @@ void mtl_init(void) {
     g_res_check_on = getenv("DM_RES_CHECK") != NULL;
     g_dev = MTLCreateSystemDefaultDevice();
     if (!g_dev) MDIE("No Metal device available");
+#if !TARGET_OS_SIMULATOR
     if (!g_dev.hasUnifiedMemory) MDIE("Unified-memory Metal device required for zero-copy pools");
+#endif
     g_q = [g_dev newCommandQueue];
     MTLResidencySetDescriptor *rd = [MTLResidencySetDescriptor new];
     rd.initialCapacity = 4096;
     NSError *re = nil;
+#if TARGET_OS_SIMULATOR
+    MLOG("Simulator graphics backend: Metal 3 command compatibility");
+#else
     g_res = [g_dev newResidencySetWithDescriptor:rd error:&re];
     if (!g_res) MDIE("Failed to create MTLResidencySet");
     [g_q addResidencySet:g_res];
+#endif
     { void crash_set_wait_dump(void (*fn)(void)); void mtl_wait_state_dump(void); crash_set_wait_dump(mtl_wait_state_dump); }
     dispatch_queue_attr_t feedback_attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0);
     g_feedback_q = dispatch_queue_create("dm.nvn.mtl4-feedback", feedback_attr);
     MTL4CommandQueueDescriptor *q4d = [MTL4CommandQueueDescriptor new]; q4d.feedbackQueue = g_feedback_q;
-    g_q4 = [g_dev newMTL4CommandQueueWithDescriptor:q4d error:&re];
+    g_q4 = dm_m4_queue(g_dev, q4d, &re);
     if (!g_q4) MDIE("Failed to create MTL4CommandQueue");
     [g_q4 addResidencySet:g_res];
     g_alloc_n = 3;
@@ -288,29 +312,29 @@ void mtl_init(void) {
         MTL4CommandAllocatorDescriptor *ad = [MTL4CommandAllocatorDescriptor new];
         ad.label = [NSString stringWithFormat:@"nvn-mtl allocator %d", i];
         NSError *ae = nil;
-        g_alloc4[i] = [g_dev newCommandAllocatorWithDescriptor:ad error:&ae];
+        g_alloc4[i] = dm_m4_allocator(g_dev, ad, &ae);
         if (!g_alloc4[i]) MDIE("Failed to create MTL4CommandAllocator[%d]: %s", i, ae.localizedDescription.UTF8String);
-        g_up_alloc4[i] = [g_dev newCommandAllocatorWithDescriptor:ad error:&ae];
+        g_up_alloc4[i] = dm_m4_allocator(g_dev, ad, &ae);
         if (!g_up_alloc4[i]) MDIE("Failed to create upload MTL4CommandAllocator[%d]: %s", i, ae.localizedDescription.UTF8String);
         MTL4CommandAllocatorDescriptor *pad = [MTL4CommandAllocatorDescriptor new];
         pad.label = [NSString stringWithFormat:@"nvn-mtl present allocator %d", i];
-        g_present_alloc4[i] = [g_dev newCommandAllocatorWithDescriptor:pad error:&ae];
+        g_present_alloc4[i] = dm_m4_allocator(g_dev, pad, &ae);
         if (!g_present_alloc4[i]) MDIE("Failed to create present MTL4CommandAllocator[%d]: %s", i, ae.localizedDescription.UTF8String);
-        g_present_cb[i] = [g_dev newCommandBuffer];
+        g_present_cb[i] = dm_m4_buffer(g_dev);
         if (!g_present_cb[i]) MDIE("Failed to create present MTL4CommandBuffer[%d]", i);
     }
     MTL4ArgumentTableDescriptor *atd = [MTL4ArgumentTableDescriptor new];
     atd.maxBufferBindCount = 31; atd.maxTextureBindCount = 1;
     NSError *ate = nil;
-    g_vt = [g_dev newArgumentTableWithDescriptor:atd error:&ate]; if (!g_vt) MDIE("Failed to create vertex argument table: %s", ate.localizedDescription.UTF8String);
-    g_ft = [g_dev newArgumentTableWithDescriptor:atd error:&ate]; if (!g_ft) MDIE("Failed to create fragment argument table: %s", ate.localizedDescription.UTF8String);
-    g_ct = [g_dev newArgumentTableWithDescriptor:atd error:&ate]; if (!g_ct) MDIE("Failed to create compute argument table: %s", ate.localizedDescription.UTF8String);
-    g_up_ct = [g_dev newArgumentTableWithDescriptor:atd error:&ate]; if (!g_up_ct) MDIE("Failed to create upload compute argument table: %s", ate.localizedDescription.UTF8String);
+    g_vt = dm_m4_arguments(g_dev, atd, &ate); if (!g_vt) MDIE("Failed to create vertex argument table: %s", ate.localizedDescription.UTF8String);
+    g_ft = dm_m4_arguments(g_dev, atd, &ate); if (!g_ft) MDIE("Failed to create fragment argument table: %s", ate.localizedDescription.UTF8String);
+    g_ct = dm_m4_arguments(g_dev, atd, &ate); if (!g_ct) MDIE("Failed to create compute argument table: %s", ate.localizedDescription.UTF8String);
+    g_up_ct = dm_m4_arguments(g_dev, atd, &ate); if (!g_up_ct) MDIE("Failed to create upload compute argument table: %s", ate.localizedDescription.UTF8String);
     MTL4ArgumentTableDescriptor *pad = [MTL4ArgumentTableDescriptor new];
     pad.maxTextureBindCount = 1; pad.maxSamplerStateBindCount = 1; pad.maxBufferBindCount = 1;
-    g_present_args = [g_dev newArgumentTableWithDescriptor:pad error:&ate];
+    g_present_args = dm_m4_arguments(g_dev, pad, &ate);
     if (!g_present_args) MDIE("Failed to create present argument table: %s", ate.localizedDescription.UTF8String);
-    g_bloomq_args = [g_dev newArgumentTableWithDescriptor:pad error:&ate];
+    g_bloomq_args = dm_m4_arguments(g_dev, pad, &ate);
     if (!g_bloomq_args) MDIE("Failed to create quarter-resolution bloom argument table: %s", ate.localizedDescription.UTF8String);
     for (int i = 0; i < 3; i++) {
         g_present_uv[i] = [g_dev newBufferWithLength:sizeof(float) * 8 options:MTLResourceStorageModeShared];
@@ -508,13 +532,13 @@ void mtl_sub_begin(void) {
     g_sub_thread = pthread_self(); atomic_store(&g_sub_thread_set, 1);
     atomic_store(&g_last_commit_error, 0);
     g_sub_pool = objc_autoreleasePoolPush();
-    g_cb = [g_dev newCommandBuffer];
+    g_cb = dm_m4_buffer(g_dev);
     // Do not wait for the GPU mid-frame (hot real device: with a fixed rotation of 3, when the GPU cannot keep up every frame blocks here, and the submit thread runs at low frequency after waking, instruction count −18% but CPU time +49%):
     // pick an allocator the GPU has finished with; if all are in use create a new one; only at the cap wait for the oldest one. How far ahead it runs is bounded by the wait where the game acquires the swapchain texture, same as the old interface.
     int alloc_i = -1; uint64_t done = g_done;
     for (int i = 0; i < g_alloc_n; i++) if (g_alloc_fence[i] <= done) { alloc_i = i; break; }
     if (alloc_i < 0 && g_alloc_n < ALLOC_MAX) { NSError *ae = nil; MTL4CommandAllocatorDescriptor *ad = [MTL4CommandAllocatorDescriptor new];
-        g_alloc4[g_alloc_n] = [g_dev newCommandAllocatorWithDescriptor:ad error:&ae]; if (!g_alloc4[g_alloc_n]) MDIE("Failed to create additional MTL4CommandAllocator: %s", ae.localizedDescription.UTF8String);
+        g_alloc4[g_alloc_n] = dm_m4_allocator(g_dev, ad, &ae); if (!g_alloc4[g_alloc_n]) MDIE("Failed to create additional MTL4CommandAllocator: %s", ae.localizedDescription.UTF8String);
         alloc_i = g_alloc_n++; g_alloc_grown++; }
     if (alloc_i < 0) { alloc_i = 0; for (int i = 1; i < g_alloc_n; i++) if (g_alloc_fence[i] < g_alloc_fence[alloc_i]) alloc_i = i; g_alloc_waits++; mtl_wait(g_alloc_fence[alloc_i], UINT64_MAX); }
     g_alloc_cur = alloc_i;
@@ -928,10 +952,25 @@ static int no_bc(void) {
     return v;
 }
 static int bc_unpack(uint32_t nvn_fmt, uint32_t *pf, int *bpp) { return no_bc() && nvn_bc_unpacked(nvn_fmt, pf, bpp); }
+static uint32_t sim_packed_format(uint32_t nvn_fmt) {
+#if TARGET_OS_SIMULATOR
+    uint32_t pf = 0; nvn_fmt_to_mtl(nvn_fmt, &pf, NULL);
+    return dm_sim_is_packed16(pf) ? pf : 0;
+#else
+    (void)nvn_fmt; return 0;
+#endif
+}
+static uint32_t sim_view_format(uint32_t pf) {
+#if TARGET_OS_SIMULATOR
+    if (dm_sim_is_packed16(pf)) return MTLPixelFormatRGBA8Unorm;
+#endif
+    return pf;
+}
 static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
     uint32_t pf = 0; uint8_t swz[4];
     if (!nvn_fmt_to_mtl(t->d.format, &pf, swz) || !pf) { RED_ONCE(0, "Texture format has no Metal equivalent: format=%#x (first occurrence)", t->d.format); return nil; }
     int unp = 0; { uint32_t upf; int ubpp; if (bc_unpack(t->d.format, &upf, &ubpp)) { pf = upf; unp = 1; } }
+    pf = sim_view_format(pf);
     // Metal's limits: 16384 in 2D, 2048 in 3D, 2048 array layers; beyond them Metal aborts the process on an assertion, so they are caught here with a red line
     if (t->d.width > 16384 || t->d.height > 16384 || t->d.depth > 2048 || t->d.levels > 15) { RED_ONCE(71, "Texture dimensions exceed Metal limits: %ux%ux%u levels=%u format=%#x target=%d first_serial=%llu", t->d.width, t->d.height, t->d.depth, t->d.levels, t->d.format, t->d.target, (unsigned long long)t->serial); return nil; }
     MTLTextureDescriptor *d = [MTLTextureDescriptor new];
@@ -945,8 +984,8 @@ static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
         case 2: d.textureType = MTLTextureType3D; d.depth = t->d.depth; break;
         case 3: d.textureType = MTLTextureType2DArray; d.arrayLength = t->d.height; d.height = 1; break;
         case 4: d.textureType = MTLTextureType2DArray; d.arrayLength = t->d.depth; break;
-        case 5: d.textureType = MTLTextureType2DMultisample; d.sampleCount = t->d.samples; d.mipmapLevelCount = 1; break;
-        case 6: d.textureType = MTLTextureType2DMultisampleArray; d.sampleCount = t->d.samples; d.arrayLength = t->d.depth; d.mipmapLevelCount = 1; break;
+        case 5: d.textureType = MTLTextureType2DMultisample; d.sampleCount = dm_mtl_sample_count(g_dev, t->d.samples); d.mipmapLevelCount = 1; break;
+        case 6: d.textureType = MTLTextureType2DMultisampleArray; d.sampleCount = dm_mtl_sample_count(g_dev, t->d.samples); d.arrayLength = t->d.depth; d.mipmapLevelCount = 1; break;
         // Cube textures are created as 6-layer 2D arrays and sampled through cube / cube array views made by tex_fit: Metal only allows cube array views of a 2D array base texture (not of a cube base).
         // The Legend of Zelda: Breath of the Wild has 1512 shaders that sample the environment light probes as a cube array while a single cube texture is bound (texture ID 1064 onwards): with mismatched types the reads are undefined, and every lit surface came out black
         case 8: d.textureType = MTLTextureType2DArray; d.arrayLength = 6; break;
@@ -954,6 +993,13 @@ static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
         case 10: RED_ONCE(1, "Buffer textures (TARGET_BUFFER) are not implemented"); return nil;
         default: d.textureType = MTLTextureType2D; break;
     }
+#if TARGET_OS_SIMULATOR
+    if ((t->d.target == 5 || t->d.target == 6) && d.sampleCount != t->d.samples) {
+        static atomic_flag reported = ATOMIC_FLAG_INIT;
+        if (!atomic_flag_test_and_set(&reported))
+            DM_LOG_WARN("metal", "Simulator MSAA fallback: requested_samples=%u actual_samples=%lu", t->d.samples, (unsigned long)d.sampleCount);
+    }
+#endif
     d.storageMode = MTLStorageModePrivate;   // Render targets and assets both go in GPU private storage (lossless compression available)
     d.usage = MTLTextureUsageShaderRead | (fmt_compressed(t->d.format) || packaged ? 0 : MTLTextureUsageRenderTarget)
             | (t->d.flags & NVN_TEXTURE_FLAGS_IMAGE ? MTLTextureUsageShaderWrite : 0)   // Image usage: shader-writable (compute kernels generating the 3D color lookup table, etc.)
@@ -1080,7 +1126,7 @@ static void up_flush(void) {
     if (b && g_nup_decs) {   // GPU decompression without BC (see up_dec): offsets in the parameter block are relative to the start of the staging block
         [b setArgumentTable:g_up_ct]; [b setComputePipelineState:bcd_pso()];
         for (int i = 0; i < g_nup_decs; i++) { up_dec *x = &g_up_decs[i];
-            [g_up_ct setAddress:x->src.gpuAddress atIndex:0]; [g_up_ct setAddress:x->params.gpuAddress + x->poff atIndex:1]; [g_up_ct setTexture:x->view.gpuResourceID atIndex:0];
+            [g_up_ct setAddress:x->src.gpuAddress atIndex:0]; [g_up_ct setAddress:x->params.gpuAddress + x->poff atIndex:1]; [g_up_ct setTexture:dm_m4_resource_id(x->view) atIndex:0];
             [b dispatchThreadgroups:MTLSizeMake((x->bw + 7) / 8, (x->bh + 7) / 8, 1) threadsPerThreadgroup:MTLSizeMake(8, 8, 1)]; }
     }
     if (b) { m4_end(b); g_up_ce = nil; }
@@ -1121,7 +1167,7 @@ static void up_begin(void) {
     while (atomic_load(&g_up_alloc_busy[slot])) usleep(1000);
     atomic_store(&g_up_alloc_busy[slot], 1);
     [g_up_alloc4[slot] reset];
-    g_up_cb = [g_dev newCommandBuffer];
+    g_up_cb = dm_m4_buffer(g_dev);
     [g_up_cb beginCommandBufferWithAllocator:g_up_alloc4[slot]];
     g_up_ce = [g_up_cb computeCommandEncoder];
     [g_up_ce barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:MTL4VisibilityOptionDevice];
@@ -1141,8 +1187,9 @@ static void up_diag(void) {
     unsigned long alive = 0, inres = 0; uint64_t abytes = 0; NSArray *olds = g_up_old.allObjects;
     pthread_mutex_lock(&g_res_mu); unsigned long nres = (unsigned long)g_res_objects.allObjects.count; for (id<MTLBuffer> o in olds) { alive++; abytes += o.length; inres += [g_res_objects containsObject:o]; } pthread_mutex_unlock(&g_res_mu);
     pthread_mutex_lock(&g_deferred_mu); unsigned long ndef = (unsigned long)g_deferred.count; pthread_mutex_unlock(&g_deferred_mu);
-    MLOG("Upload staging%s: blocks_created=%llu rotations_within_batch=%llu retired_mb=%llu live_retired_blocks=%lu live_retired_mb=%llu resident_retired_blocks=%lu gpu_allocated_mb=%llu resident_objects=%lu deferred_release_objects=%lu", fol && !chg ? " (after settling)" : "",
-         (unsigned long long)g_up_blocks_new, (unsigned long long)g_up_swaps, (unsigned long long)(g_up_swap_bytes >> 20), alive, (unsigned long long)(abytes >> 20), inres, (unsigned long long)(g_dev.currentAllocatedSize >> 20), nres, ndef);
+    char gpu_allocated[32];
+    MLOG("Upload staging%s: blocks_created=%llu rotations_within_batch=%llu retired_mb=%llu live_retired_blocks=%lu live_retired_mb=%llu resident_retired_blocks=%lu gpu_allocated_mb=%s resident_objects=%lu deferred_release_objects=%lu", fol && !chg ? " (after settling)" : "",
+         (unsigned long long)g_up_blocks_new, (unsigned long long)g_up_swaps, (unsigned long long)(g_up_swap_bytes >> 20), alive, (unsigned long long)(abytes >> 20), inres, mtl_alloc_size_text(g_dev.currentAllocatedSize >> 20, gpu_allocated, sizeof gpu_allocated), nres, ndef);
 }
 static id<MTLBuffer> up_alloc(size_t n, size_t *off) {
     size_t need = (n + 255u) & ~((size_t)255u);
@@ -1210,18 +1257,20 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp) {
     unsigned layers = (t->d.target == 4 || t->d.target == 9) ? t->d.depth : t->d.target == 8 ? 6 : t->d.target == 3 ? t->d.height : 1;
     if (t->d.target == 9) layers *= 6;
     uint32_t upf; int ubpp = 0, unp = bc_unpack(t->d.format, &upf, &ubpp);   // No BC: decompress on the CPU after deswizzling, with the staging area sized for the decompressed data
+    uint32_t packed = sim_packed_format(t->d.format);
+    if (packed) ubpp = 4;
     size_t total = 0;
     for (unsigned l = 0; l < d.mipmapLevelCount; l++) {
         uint32_t w = MAX(t->d.width >> l, 1u), h = MAX(t->d.height >> l, 1u), z = t->d.target == 2 ? MAX(t->d.depth >> l, 1u) : 1;
-        total += unp ? (size_t)w * ubpp * h * z * layers : (size_t)((w + bw - 1) / bw) * bpb * ((h + bh - 1) / bh) * z * layers;
+        total += (unp || packed) ? (size_t)w * ubpp * h * z * layers : (size_t)((w + bw - 1) / bw) * bpb * ((h + bh - 1) / bh) * z * layers;
     }
     g_bp_up_bytes += total;
     void *mb; uint64_t mo;
     int gdec = unp && t->d.target != 2 && bcd_fmt(t->d.format) && bcd_pso();   // BC1–5 without BC: GPU deswizzle + GPU decompression
     size_t ctotal = 0;   // Staging size of the compressed blocks (with GPU decompression the staging area holds compressed blocks)
     if (gdec) for (unsigned l = 0; l < d.mipmapLevelCount; l++) { uint32_t w = MAX(t->d.width >> l, 1u), h = MAX(t->d.height >> l, 1u); ctotal += (size_t)((w + bw - 1) / bw) * bpb * ((h + bh - 1) / bh) * layers; }
-    int use_gpu = (!unp || gdec) && g_nvn_deswz_gpu && mtl_addr((uint64_t)t->mem, t->L.size, &mb, &mo);
-    if (g_nvn_deswz_gpu && !use_gpu && !unp) RED_ONCE(40, "Prepacked texture storage is outside memory pools; falling back to CPU");
+    int use_gpu = !packed && (!unp || gdec) && g_nvn_deswz_gpu && mtl_addr((uint64_t)t->mem, t->L.size, &mb, &mo);
+    if (g_nvn_deswz_gpu && !use_gpu && !unp && !packed) RED_ONCE(40, "Prepacked texture storage is outside memory pools; falling back to CPU");
     if (use_gpu) {
         // The GPU reads the memory pool at execution time, which is closer to a real Switch than a snapshot at CPU upload time; the dirty-page stamp is still taken before encoding, and later writes still trigger a re-upload.
         up_begin();
@@ -1265,10 +1314,13 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp) {
         uint32_t w = MAX(t->d.width >> l, 1u), h = MAX(t->d.height >> l, 1u), z = t->d.target == 2 ? MAX(t->d.depth >> l, 1u) : 1;
         size_t pitch = (size_t)((w + bw - 1) / bw) * bpb, rows = (h + bh - 1) / bh;
         for (unsigned y = 0; y < layers; y++) {
-            if (unp) {   // No BC: first deswizzle into a temporary area (compressed blocks), then decompress layer by layer into the staging area
+            if (unp || packed) {   // Converted formats deswizzle before expanding into the destination format.
                 uint8_t *cb = malloc(pitch * rows * z); size_t up = (size_t)w * ubpp;
                 if (!cb || nvn_deswizzle(&t->d, l, y, t->mem, cb, pitch)) { free(cb); RED_ONCE(9, "Deswizzle failed: format=%#x target=%d", t->d.format, t->d.target); break; }
-                for (uint32_t zi = 0; zi < z; zi++) nvn_bc_decode(t->d.format, cb + zi * pitch * rows, pitch, w, h, (uint8_t *)stg.contents + off + zi * up * h, up);
+                for (uint32_t zi = 0; zi < z; zi++) {
+                    if (packed) dm_sim_expand_packed16(packed, cb + zi * pitch * rows, pitch, (uint8_t *)stg.contents + off + zi * up * h, up, w, h);
+                    else nvn_bc_decode(t->d.format, cb + zi * pitch * rows, pitch, w, h, (uint8_t *)stg.contents + off + zi * up * h, up);
+                }
                 free(cb);
                 up_blit_add(stg, off, up, up * h, MTLSizeMake(w, h, z), mt, y, l);
                 off += up * h * z;
@@ -1378,7 +1430,8 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
     tex_t *t = (tex_t *)ct;
     if (!t || !t->serial) return nil;
     if (t->magic != MAGIC('T', 'E', 'X', 0)) { RED_ONCE(70, "Invalid texture object: magic=%#x first_serial=%llu; MTLTexture creation skipped", t->magic, (unsigned long long)t->serial); return nil; }
-    int packaged = (t->has_layout || tex_cpu_written(t->serial)) && t->mem;
+    int sim_linear = sim_packed_format(t->d.format) && (t->d.flags & (NVN_TEXTURE_FLAGS_LINEAR | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET));
+    int packaged = (t->has_layout || tex_cpu_written(t->serial) || sim_linear) && t->mem;
     {   // Diagnostic DM_NVN_TEXINFO=WxH: log storage and description of textures of that size on first resolution (to tell whether two textures share storage and why they were not merged)
         static int ti = -1; static uint32_t tw, th; static uint64_t last[64]; static int nl;
         if (ti > 0 && t->d.width == tw && t->d.height == th && g_texinfo_n < 8) { int dup = 0; for (int i = 0; i < g_texinfo_n; i++) dup |= g_texinfo_ser[i] == t->serial; if (!dup && !(t->d.flags & 8)) g_texinfo_ser[g_texinfo_n++] = t->serial; }   // remember the non-render-target ones (no COMPRESSIBLE) for DM_NVN_TEXRAW=info
@@ -1469,7 +1522,9 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
 // Purpose: pin down "crashes with no log". The system gives no notice before killing a process for memory, so only readouts left beforehand can show which number kept climbing.
 // Called by the frame hook every 300 frames; printed only when resident or GPU allocated changed by ≥ 64 MB since the last line, otherwise one line every 3000 frames; capped at 400 lines per game. All integers (the frame hook runs on the guest thread's small stack, so no floating-point formatting)
 void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
-    static unsigned long long last_rss, last_gpu, last_frame; static int lines; unsigned long long gpu = (unsigned long long)(g_dev.currentAllocatedSize >> 20);
+    static unsigned long long last_rss, last_gpu, last_frame; static int lines;
+    unsigned long long gpu = (unsigned long long)(g_dev.currentAllocatedSize >> 20);
+    char gpu_text[32], texture_text[32], buffer_text[32], serial_texture_text[32];
     unsigned long long dr = rss_mb > last_rss ? rss_mb - last_rss : last_rss - rss_mb, dg = gpu > last_gpu ? gpu - last_gpu : last_gpu - gpu;
     if (lines >= 400 || (lines && dr < 64 && dg < 64 && frame - last_frame < 3000)) return; lines++; last_rss = rss_mb; last_gpu = gpu; last_frame = frame;
     pthread_mutex_lock(&g_deferred_mu); unsigned long nd = (unsigned long)g_deferred.count; pthread_mutex_unlock(&g_deferred_mu);
@@ -1498,6 +1553,10 @@ void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
         if (t) { serial_tex++; serial_tex_bytes += t.allocatedSize; }
     }
     pthread_mutex_unlock(&g_smu);
+    mtl_alloc_size_text(rtbytes >> 20, texture_text, sizeof texture_text);
+    mtl_alloc_size_text(rbbytes >> 20, buffer_text, sizeof buffer_text);
+    mtl_alloc_size_text(serial_tex_bytes >> 20, serial_texture_text, sizeof serial_texture_text);
+    mtl_alloc_size_text(gpu, gpu_text, sizeof gpu_text);
     unsigned view_nonnull = treg_view_count();
     unsigned long dead_n = 0; unsigned long long dead_mb = 0;
     // Objects read from a weak table come back retained + autoreleased: the frame hook runs on a guest thread with no autorelease pool that drains, so without this wrapper every buffer counted would be pinned for good (the readout creating the leak itself)
@@ -1520,7 +1579,7 @@ void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
 #if TARGET_OS_IPHONE
     snprintf(avail, sizeof avail, "%llu MB", (unsigned long long)(os_proc_available_memory() >> 20));
 #endif
-    MLOG("Memory through frame %llu: resident_mb=%llu metal_allocated_mb=%llu deferred_objects=%lu residency_objects=%lu textures=%lu/%llu_MB buffers=%lu/%llu_MB serial_objects=%u serial_textures=%u/%llu_MB cached_views=%u serial_view_evictions=%llu pools=%d resident_pools=%d/%d pool_mb=%llu/%llu peak_pools=%d pool_capacity=%d retired_live_pools=%lu/%llu_MB shared_textures=%u pool_texture_evictions=%llu reuploads=%llu arena_blocks_created=%llu system_headroom=%s", frame, rss_mb, gpu, nd, nr, nrt, rtbytes >> 20, nrb, rbbytes >> 20, ns, serial_tex, serial_tex_bytes >> 20, view_nonnull, (unsigned long long)g_treg_serial_drops, pool_live, pool_res, pres, pool_res_bytes, pool_bytes, peak, cap, dead_n, dead_mb, ashared, (unsigned long long)g_alias_evicted, (unsigned long long)g_pkg_reuploads, (unsigned long long)g_arena_made, avail);
+    MLOG("Memory through frame %llu: resident_mb=%llu metal_allocated_mb=%s deferred_objects=%lu residency_objects=%lu textures=%lu texture_memory_mb=%s buffers=%lu buffer_memory_mb=%s serial_objects=%u serial_textures=%u serial_texture_memory_mb=%s cached_views=%u serial_view_evictions=%llu pools=%d resident_pools=%d/%d pool_mb=%llu/%llu peak_pools=%d pool_capacity=%d retired_live_pools=%lu/%llu_MB shared_textures=%u pool_texture_evictions=%llu reuploads=%llu arena_blocks_created=%llu system_headroom=%s", frame, rss_mb, gpu_text, nd, nr, nrt, texture_text, nrb, buffer_text, ns, serial_tex, serial_texture_text, view_nonnull, (unsigned long long)g_treg_serial_drops, pool_live, pool_res, pres, pool_res_bytes, pool_bytes, peak, cap, dead_n, dead_mb, ashared, (unsigned long long)g_alias_evicted, (unsigned long long)g_pkg_reuploads, (unsigned long long)g_arena_made, avail);
     if (g_allocprof > 0) { char ab[256]; int o = 0; for (int i = 0; i < g_alloc_n && o < 200; i++) o += snprintf(ab + o, sizeof ab - o, " #%d %llu MB", i, (unsigned long long)(g_alloc4[i].allocatedSize >> 20));
         for (int i = 0; i < 3 && o < 240; i++) o += snprintf(ab + o, sizeof ab - o, " upload%d=%llu present%d=%llu", i, (unsigned long long)(g_up_alloc4[i].allocatedSize >> 20), i, (unsigned long long)(g_present_alloc4[i].allocatedSize >> 20));
         MLOG("Command allocator usage: %s", ab);
@@ -1878,7 +1937,9 @@ static MTLPixelFormat rt_view_fmt(id<MTLTexture> base, const view_t *v, int has_
     }
     if (!base || !has_v || !v->set_format) return base.pixelFormat;
     uint32_t pf = 0; uint8_t swz[4];
-    if (!nvn_fmt_to_mtl(v->format, &pf, swz) || !pf || pf == (uint32_t)base.pixelFormat) return base.pixelFormat;
+    if (!nvn_fmt_to_mtl(v->format, &pf, swz) || !pf) return base.pixelFormat;
+    pf = sim_view_format(pf);
+    if (pf == (uint32_t)base.pixelFormat) return base.pixelFormat;
     if (tex_need_pfv(base.pixelFormat, (MTLPixelFormat)pf) && !(base.usage & MTLTextureUsagePixelFormatView)) return base.pixelFormat;
     return (MTLPixelFormat)pf;
 }
@@ -2115,7 +2176,7 @@ static _Thread_local unsigned g_rmu_depth;
 static void rmu_lock(void) { pthread_mutex_lock(&g_rmu); g_rmu_depth++; }
 static void rmu_unlock(void) { if (g_rmu_depth) g_rmu_depth--; pthread_mutex_unlock(&g_rmu); }
 // ---------- Shader mapping table: Switch control section hash → PC metallib (produced by dm/gfx/tools/shader_map.py) ----------
-static NSMutableDictionary<NSString *, NSArray *> *g_shmap;
+static NSMutableDictionary<NSString *, NSString *> *g_shmap;
 static NSString *g_shmap_path, *g_msl_dir;
 static NSString *exe_rel(const char *rel) {
     char buf[4096]; uint32_t n = sizeof buf;
@@ -2320,9 +2381,14 @@ static NvShader *shader_load(NSString *pc, int stage) {
     return o;
 }
 
-static int stage_of(NSString *zh) {
-    if ([zh isEqualToString:@"vertex"]) return 0; if ([zh isEqualToString:@"fragment"]) return 1; if ([zh isEqualToString:@"compute"]) return 5;
-    if ([zh isEqualToString:@"tessellation-control"]) return 3; if ([zh isEqualToString:@"tessellation-evaluation"]) return 4; return -1;
+static int stage_of(NSString *name) {
+    // These are serialized shader-map tokens, independent of diagnostic language.
+    if ([name isEqualToString:@"顶点"] || [name isEqualToString:@"vertex"]) return 0;
+    if ([name isEqualToString:@"像素"] || [name isEqualToString:@"fragment"]) return 1;
+    if ([name isEqualToString:@"计算"] || [name isEqualToString:@"compute"]) return 5;
+    if ([name isEqualToString:@"外壳"] || [name isEqualToString:@"tessellation-control"]) return 3;
+    if ([name isEqualToString:@"域"] || [name isEqualToString:@"tessellation-evaluation"]) return 4;
+    return -1;
 }
 #define NVN_RT_RANGE_RO_IMPL 1
 // Private continuation accepts only B reflection that is explicitly RO; a missing rw on sbuf does not let the default 0 count as proof; does not change the existing reflection / translation chain.
@@ -2579,6 +2645,7 @@ static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
         uint32_t pf = (uint32_t)base.pixelFormat; uint8_t swz[4];
         if (r.v.set_format && !(nvn_fmt_to_mtl(r.v.format, &pf, swz) && pf)) pf = (uint32_t)base.pixelFormat;
         { uint32_t upf; int ubpp; if (r.v.set_format && bc_unpack(r.v.format, &upf, &ubpp)) pf = upf; }   // No BC: a BC view is switched to the decompressed format just like the base texture
+        pf = sim_view_format(pf);
         if (r.v.set_format && tex_need_pfv(base.pixelFormat, (MTLPixelFormat)pf) && !(base.usage & MTLTextureUsagePixelFormatView)) {
             base = tex_upgrade_pfv(&rp->t, base, (MTLPixelFormat)pf);
             sg = g_ser_gen;
@@ -2592,7 +2659,7 @@ static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
                     : [base newTextureViewWithPixelFormat:(MTLPixelFormat)pf textureType:tt levels:NSMakeRange(l0, nl) slices:NSMakeRange(s0, ns)];
         if (!v) { RED_ONCE(11, "Failed to create texture view: id=%d", tid); v = base; }
     }
-    rp->view = (void *)CFBridgingRetain(v); rp->view_rid = v.gpuResourceID._impl; rp->view_ser = sg; rp->view_dirty = dg;
+    rp->view = (void *)CFBridgingRetain(v); rp->view_rid = dm_m4_resource_id(v)._impl; rp->view_ser = sg; rp->view_dirty = dg;
     return v;
 }
 // Hot-path object fetch: if the table entry is valid, return the table-held pointer directly (without ARC retain / autorelease), otherwise take the slow path to build / validate. Caller holds g_rmu.
@@ -2616,7 +2683,7 @@ static id<MTLTexture> tex_fit(int tid, id<MTLTexture> t, MTLTextureType want, ui
     if (r->alt) { defer_obj_unref((__bridge id)r->alt); CFRelease(r->alt); r->alt = r->alt_of = NULL; r->alt_rid = 0; }
     id<MTLTexture> v = [t newTextureViewWithPixelFormat:t.pixelFormat textureType:want levels:NSMakeRange(0, t.mipmapLevelCount) slices:NSMakeRange(0, ns) swizzle:t.swizzle];
     if (!v) { RED_ONCE(77, "Failed to create compatible texture-type view: %lu -> %lu id=%d", (unsigned long)have, (unsigned long)want, tid); return nil; }
-    r->alt = (void *)CFBridgingRetain(v); r->alt_of = (__bridge void *)t; r->alt_type = (uint8_t)want; r->alt_rid = v.gpuResourceID._impl;
+    r->alt = (void *)CFBridgingRetain(v); r->alt_of = (__bridge void *)t; r->alt_type = (uint8_t)want; r->alt_rid = dm_m4_resource_id(v)._impl;
     *rid = r->alt_rid; return v;
 }
 // Alpha from red: the fragment shaders the game profile's alpha_from_red lists read a single-channel render target whose channel mapping is exactly (R, 0, 0, 1) as (R, 0, 0, R).
@@ -2651,12 +2718,12 @@ static id<MTLTexture> tex_alpha_red(int tid, id<MTLTexture> t, uint64_t *rid) {
                                                    swizzle:MTLTextureSwizzleChannelsMake(MTLTextureSwizzleRed, MTLTextureSwizzleZero, MTLTextureSwizzleZero, MTLTextureSwizzleRed)];
     if (!v) { RED_ONCE(82, "Failed to create alpha-from-red view: texture_id=%d format=%lu", tid, (unsigned long)pf); return nil; }
     { static int once; if (!once++) MLOG("Single-channel alpha-from-red first use: texture_id=%d size=%lux%lu", tid, (unsigned long)t.width, (unsigned long)t.height); }
-    r->ar = (void *)CFBridgingRetain(v); r->ar_of = (__bridge void *)t; r->ar_rid = v.gpuResourceID._impl;
+    r->ar = (void *)CFBridgingRetain(v); r->ar_of = (__bridge void *)t; r->ar_rid = dm_m4_resource_id(v)._impl;
     *rid = r->ar_rid; return v;
 }
 static inline __attribute__((always_inline)) uint64_t tex_fast_rid(int tid, void **out) {
     if (tid > 0 && tid < g_ntreg && g_treg[tid].ok && g_treg[tid].view && g_treg[tid].view_ser == g_ser_gen && g_treg[tid].view_dirty == nvn_dirty_now()) { if (out) *out = g_treg[tid].view; return g_treg[tid].view_rid; }
-    id<MTLTexture> t = tex_by_id(tid); if (out) *out = (__bridge void *)t; return t ? t.gpuResourceID._impl : 0;
+    id<MTLTexture> t = tex_by_id(tid); if (out) *out = (__bridge void *)t; return t ? dm_m4_resource_id(t)._impl : 0;
 }
 static MTLSamplerAddressMode wrapm(int w) {
     switch (w) { case 0: case 7: return MTLSamplerAddressModeClampToEdge; case 1: return MTLSamplerAddressModeRepeat;
@@ -2686,7 +2753,7 @@ static id<MTLSamplerState> samp_state(sreg_t *r) {
     d.borderColor = p.border[3] > 0.5f ? (p.border[0] > 0.5f ? MTLSamplerBorderColorOpaqueWhite : MTLSamplerBorderColorOpaqueBlack) : MTLSamplerBorderColorTransparentBlack;
     d.supportArgumentBuffers = YES;
     id<MTLSamplerState> s = [g_dev newSamplerStateWithDescriptor:d];
-    if (s) { r->view = (void *)CFBridgingRetain(s); r->rid = s.gpuResourceID._impl; }
+    if (s) { r->view = (void *)CFBridgingRetain(s); r->rid = dm_m4_resource_id(s)._impl; }
     return s;
 }
 static id<MTLSamplerState> samp_by_id(int sid) { return samp_state(samp_entry(sid)); }
@@ -2912,7 +2979,7 @@ static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvS
                 if (!hl) DM_LOG_ERROR("metal", "Highlight shader compilation failed: %s", e.localizedDescription.UTF8String); }
             if (hl) d.fragmentFunction = [hl newFunctionWithName:[NSString stringWithFormat:@"hl%d", i]];
             break; } }
-    d.rasterSampleCount = k->samples ? k->samples : 1;
+    d.rasterSampleCount = dm_mtl_sample_count(g_dev, k->samples);
     d.alphaToCoverageEnabled = k->a2c;
     for (int i = 0; i < 8; i++) {
         if (!k->cfmt[i]) continue;
@@ -2980,9 +3047,15 @@ static struct { pso_key k; id<MTLRenderPipelineState> ps; int used, done; } g_pp
 static pthread_mutex_t g_pp_mu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g_pp_cv = PTHREAD_COND_INITIALIZER;
 static uint64_t g_pp_submit_mark, g_pp_kicked, g_pp_taken;   // Whether this submission has already been predicted (by submission serial); cumulative kicked / taken counts
 static void pso_predict_rest(void);
+static int pso_key_has_attachments(const pso_key *k) {
+    for (int i = 0; i < 8; i++) if (k->cfmt[i]) return 1;
+    return k->dfmt || k->sfmt;
+}
 static int pso_pend_find(const pso_key *k) { for (int i = 0; i < PSO_PEND_MAX; i++) if (g_pp[i].used && !memcmp(&g_pp[i].k, k, sizeof *k)) return i; return -1; }
 static void pso_pend_kick(const pso_key *k, NvShader *vs, NvShader *fs) {   // Called by the submit thread: kick only if it is neither in the cache nor in the table
-    if (hm_get_id(&g_pso, k)) return;
+    // Prediction can include a depth/stencil-detached variant of a depth-only pass.
+    // Metal rejects pipelines with no attachments, and Simulator aborts during validation.
+    if (!pso_key_has_attachments(k) || hm_get_id(&g_pso, k)) return;
     pthread_mutex_lock(&g_pp_mu);
     int at = pso_pend_find(k), slot = -1;
     if (at < 0) for (int i = 0; i < PSO_PEND_MAX; i++) if (!g_pp[i].used) { slot = i; break; }
@@ -3172,7 +3245,7 @@ static id<MTLTexture> dummy_tex(int dtt, int dpf) {
     t = [g_dev newTextureWithDescriptor:d];   // Shared storage is all zeros when newly created
     if (pf != MTLPixelFormatDepth32Float) { uint8_t z[64] = {0}; NSUInteger faces = tt == MTLTextureTypeCube || tt == MTLTextureTypeCubeArray ? 6 : 1;
         for (NSUInteger f = 0; f < faces; f++) [t replaceRegion:MTLRegionMake3D(0, 0, 0, 1, 1, 1) mipmapLevel:0 slice:f withBytes:z bytesPerRow:16 bytesPerImage:16]; }
-    cache[dtt & 7][dpf & 3] = t; g_dummy_tex_rid[dtt & 7][dpf & 3] = t.gpuResourceID._impl; res_add(t);
+    cache[dtt & 7][dpf & 3] = t; g_dummy_tex_rid[dtt & 7][dpf & 3] = dm_m4_resource_id(t)._impl; res_add(t);
     return t;
 }
 // Write sink for unbound image slots: kept separate from the dummy textures that read 0 (writes must not pollute them); one is shared per same type and same pixel class
@@ -3182,7 +3255,7 @@ static id<MTLTexture> dummy_img(int dtt, int dpf) {
     MTLTextureDescriptor *d = [MTLTextureDescriptor new];
     d.textureType = (MTLTextureType)dtt; d.pixelFormat = dpf == NVN_DPF_UINT ? MTLPixelFormatRGBA32Uint : dpf == NVN_DPF_SINT ? MTLPixelFormatRGBA32Sint : MTLPixelFormatRGBA16Float;
     d.width = d.height = d.depth = 1; d.storageMode = MTLStorageModePrivate; d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-    t = [g_dev newTextureWithDescriptor:d]; cache[dtt & 7][dpf & 3] = t; g_dummy_img_rid[dtt & 7][dpf & 3] = t.gpuResourceID._impl; res_add(t); return t;
+    t = [g_dev newTextureWithDescriptor:d]; cache[dtt & 7][dpf & 3] = t; g_dummy_img_rid[dtt & 7][dpf & 3] = dm_m4_resource_id(t)._impl; res_add(t); return t;
 }
 static id<MTLBuffer> dummy_buf(void);
 static id<MTLTexture> dummy_tbuf(int dpf) {   // Unbound typed buffer: all zeros (pixel class matches the shader's texture_buffer<T>)
@@ -3192,13 +3265,13 @@ static id<MTLTexture> dummy_tbuf(int dpf) {   // Unbound typed buffer: all zeros
     id<MTLBuffer> b = dummy_buf();
     MTLTextureDescriptor *d = [MTLTextureDescriptor textureBufferDescriptorWithPixelFormat:pf width:b.length / 16 resourceOptions:b.resourceOptions usage:MTLTextureUsageShaderRead];
     t = [b newTextureWithDescriptor:d offset:0 bytesPerRow:b.length];
-    cache[dpf & 3] = t; g_dummy_tbuf_rid[dpf & 3] = t.gpuResourceID._impl; return t;
+    cache[dpf & 3] = t; g_dummy_tbuf_rid[dpf & 3] = dm_m4_resource_id(t)._impl; return t;
 }
 static id<MTLSamplerState> dummy_samp(void) {
     static id<MTLSamplerState> s; if (!s) { MTLSamplerDescriptor *d = [MTLSamplerDescriptor new]; d.supportArgumentBuffers = YES; s = [g_dev newSamplerStateWithDescriptor:d]; }
     return s;
 }
-static uint64_t dummy_samp_rid(void) { static uint64_t rid; if (!rid) rid = dummy_samp().gpuResourceID._impl; return rid; }
+static uint64_t dummy_samp_rid(void) { static uint64_t rid; if (!rid) rid = dm_m4_resource_id(dummy_samp())._impl; return rid; }
 static id<MTLBuffer> dummy_buf(void) { static id<MTLBuffer> b; if (!b) { b = [g_dev newBufferWithLength:64 << 10 options:MTLResourceStorageModeShared]; res_add(b); } return b; }
 static uint64_t dummy_buf_gpu(void) { static uint64_t gpu; if (!gpu) gpu = dummy_buf().gpuAddress; return gpu; }
 // useResource is idempotent for the same (resource, usage, stage) within one encoder: remember what this render encoder has already declared and skip repeats (a compute encoder is created anew for each dispatch, no dedup)
@@ -3254,7 +3327,12 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
         g_stat_args_reuse++;
         return 1;
     }
+    #if TARGET_OS_SIMULATOR
+    __strong id sim_resources[NVN_REFL_MAXB] = {nil};
+    #define USE(r, u) do { sim_resources[aid] = (r); (void)(u); if (__builtin_expect(g_res_check_on, 0)) res_check(sim_resources[aid], sh->key, reg); } while (0)
+    #else
     #define USE(r, u) do { (void)(u); if (__builtin_expect(g_res_check_on, 0)) res_check((r), sh->key, reg); } while (0)
+    #endif
     // DM_NVN_PASSDUMP: on the first new encode per pass per stage, records the shader key (K) and the actual source of each binding (B: UBO address / length / first 4 floats, texture ID and serial, or 「哑」(dummy))
     static uint64_t bl_pass[6]; static int bl_all = -1; if (bl_all < 0) bl_all = getenv("DM_NVN_PASSDUMP_ALL") != NULL;   // Record on every new encode (otherwise only the first time per pass per stage)
     int bl = passdump() && (bl_all || g_kd_force || bl_pass[nvn_stage] != g_stat_pass);
@@ -3384,7 +3462,26 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
     rmu_unlock();
     NSUInteger arg_len = sh->arg_len ? sh->arg_len : sh->ae.encodedLength;
     id<MTLBuffer> ab; size_t off = arena_alloc(arg_len, &ab);
+    #if TARGET_OS_SIMULATOR
+    // Simulator texture and sampler arguments require the encoder's resource representation.
+    memset((uint8_t *)ab.contents + off, 0, arg_len);
+    [sh->ae setArgumentBuffer:ab offset:off];
+    for (int i = 0; i < sh->rf.nb; i++) {
+        const nvn_rbind *b = &sh->rf.b[i];
+        id resource = sim_resources[b->aid];
+        if (b->kind == NVN_RB_SAMP || b->kind == NVN_RB_SAMPT || b->kind == NVN_RB_SAMPU)
+            [sh->ae setSamplerState:resource atIndex:b->aid];
+        else if (b->kind == NVN_RB_TEX || b->kind == NVN_RB_TEXU || b->kind == NVN_RB_IMG || b->kind == NVN_RB_TBUF)
+            [sh->ae setTexture:resource atIndex:b->aid];
+        else {
+            id<MTLBuffer> buffer = resource;
+            NSUInteger buffer_off = buffer ? slots[b->aid] - buffer.gpuAddress : 0;
+            [sh->ae setBuffer:buffer offset:buffer_off atIndex:b->aid];
+        }
+    }
+    #else
     memcpy((uint8_t *)ab.contents + off, slots, arg_len);
+    #endif
     bind_args(en, nvn_stage, metal_vertex, ab, g_cur_arena->gpu + off, off, sh->rf.abi);
     sh->ab_buf = ab; sh->ab_gpu = g_cur_arena->gpu + off; sh->ab_off = off; sh->ab_pass = g_pass.serial; g_args_dirty[nvn_stage] = 0;
     g_stat_args_enc++;
@@ -3660,6 +3757,7 @@ static void pso_predict_rest(void) {
                 if (v && dv[v] == dv[0] && sv[v] == sv[0]) continue;
                 if (v == 2 && !sfull) continue; if (v == 3 && (!dfull || !sfull)) continue;
                 pso_key k; pso_key_fill(&k, vs, fs, cf, dv[v], sv[v], samples, 0);
+                if (!pso_key_has_attachments(&k)) continue;
                 if (hm_get_id(&g_pso, &k)) continue;
                 int dup = 0; for (int i = 0; i < (v ? nb : na) && !dup; i++) dup = !memcmp(&(v ? qb : qa)[i].k, &k, sizeof k);
                 if (dup) continue;
@@ -4658,7 +4756,7 @@ static int bloomq_capture(void) {
     MTL4RenderPassDescriptor *rp = [MTL4RenderPassDescriptor new]; rp.colorAttachments[0].texture = dst; rp.colorAttachments[0].loadAction = MTLLoadActionDontCare; rp.colorAttachments[0].storeAction = MTLStoreActionStore;
     id<MTL4RenderCommandEncoder> en = [g_cb renderCommandEncoderWithDescriptor:rp]; if (!en) return 0;
     [en barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:MTL4VisibilityOptionDevice]; [en setArgumentTable:g_bloomq_args atStages:MTLRenderStageFragment];
-    [g_bloomq_args setTexture:src.gpuResourceID atIndex:0]; [g_bloomq_args setSamplerState:g_bloomq_samp.gpuResourceID atIndex:0];
+    [g_bloomq_args setTexture:dm_m4_resource_id(src) atIndex:0]; [g_bloomq_args setSamplerState:dm_m4_resource_id(g_bloomq_samp) atIndex:0];
     float *p = g_bloomq_const[g_bloomq_i].contents; p[0] = g_bloomq.threshold; p[1] = g_bloomq.coeff_g; p[2] = g_bloomq.coeff_b; p[3] = src.width; p[4] = src.height; [g_bloomq_args setAddress:g_bloomq_const[g_bloomq_i].gpuAddress atIndex:0];
     [en setViewport:(MTLViewport){0,0,dst.width,dst.height,0,1}]; [en setRenderPipelineState:g_bloomq_pso]; [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3]; m4_end(en);
     g_bloomq_i = (g_bloomq_i + 1) % 3; args_dirty_all(); g_pso_dirty = g_dss_dirty = 1; return 1;
@@ -4810,7 +4908,7 @@ void ms_after(void) {
     if (failed) return;
     if (!ps) { NSError *e = nil; id<MTLLibrary> lib = [g_dev newLibraryWithSource:@(k_ms_msl) options:nil error:&e]; id<MTLFunction> fn = lib ? [lib newFunctionWithName:@"ms"] : nil;
         ps = fn ? [g_dev newComputePipelineStateWithFunction:fn error:&e] : nil;
-        MTL4ArgumentTableDescriptor *ad = [MTL4ArgumentTableDescriptor new]; ad.maxTextureBindCount = 1; ad.maxBufferBindCount = 1; at = [g_dev newArgumentTableWithDescriptor:ad error:&e];
+        MTL4ArgumentTableDescriptor *ad = [MTL4ArgumentTableDescriptor new]; ad.maxTextureBindCount = 1; ad.maxBufferBindCount = 1; at = dm_m4_arguments(g_dev, ad, &e);
         if (!ps || !at) { failed = 1; DM_LOG_ERROR("metal", "Magenta-scan compute pipeline creation failed: %s", e.localizedDescription.UTF8String); return; } }
     ms_scan *s = &g_ms_s[g_ms_cur]; int pdist = g_ms_pframe == s->frame && g_ms_ppass != ~0ull ? (int)((int64_t)g_stat_pass - (int64_t)g_ms_ppass) : 9999;
     for (int i = 0; i < na; i++) { id<MTLTexture> t = g_ms_att[i]; g_ms_att[i] = nil;
@@ -4829,7 +4927,7 @@ void ms_after(void) {
         ms_ent *e = &s->e[s->n++]; e->pass_idx = g_stat_pass - g_ms_first; e->ser = g_ms_aser[i]; e->att = i; e->pdist = pdist; e->fmt = (int)pf; e->w = w; e->h = h; e->off = s->used; s->used += need;
         if (g_blit) { enc_b_end(g_blit); g_blit = nil; }
         id<MTL4ComputeCommandEncoder> ce = (id<MTL4ComputeCommandEncoder>)enc_c_begin(NULL); [ce setArgumentTable:at];
-        [at setTexture:v.gpuResourceID atIndex:0]; [at setAddress:s->b.gpuAddress + e->off atIndex:0];
+        [at setTexture:dm_m4_resource_id(v) atIndex:0]; [at setAddress:s->b.gpuAddress + e->off atIndex:0];
         enc_c_pso(ce, ps); enc_c_dispatch(ce, MTLSizeMake(tw, th, 1), MTLSizeMake(16, 16, 1)); enc_c_end(ce);
         args_dirty_all(); s->fence = g_fence + 1;
         if (v != t) defer_obj_unref(v);
@@ -4891,7 +4989,7 @@ static void fb_prepare(NvProg *pr) {
             id<MTLTexture> use = same ? snap : [snap newTextureViewWithPixelFormat:t.pixelFormat textureType:MTLTextureType2D levels:NSMakeRange(0, 1) slices:NSMakeRange(0, 1) swizzle:sw];
             if (!use) { RED_ONCE(81, "Failed to create same-pass feedback snapshot view: format=%lu; leaving unchanged", (unsigned long)t.pixelFormat); continue; }
             if (g_fb_use[g_fb_n] && g_fb_use[g_fb_n] != use) defer_obj_unref(g_fb_use[g_fb_n]);
-            g_fb_src[g_fb_n] = t; g_fb_use[g_fb_n] = use; g_fb_rid[g_fb_n] = use.gpuResourceID._impl; g_fb_n++;
+            g_fb_src[g_fb_n] = t; g_fb_use[g_fb_n] = use; g_fb_rid[g_fb_n] = dm_m4_resource_id(use)._impl; g_fb_n++;
             g_fb_count++;
             if (g_fb_count == 1 || g_fb_count == 10 || g_fb_count == 1000 || g_fb_count % 100000 == 0)
                 MLOG("Same-pass feedback snapshot #%llu: frame=%llu pass=%llu shader=%s slot=%d attachment=%d serial=%llu size=%lux%lu format=%lu", (unsigned long long)g_fb_count, (unsigned long long)atomic_load(&g_cur_frame), g_stat_pass + !g_enc,
@@ -5243,7 +5341,7 @@ static void bright_lut(NvShader *cs) {
     if (!lut || lut.textureType != MTLTextureType3D || !(lut.usage & MTLTextureUsageShaderWrite)) { static int n; if (!n++) DM_LOG_ERROR("metal", "Scene brightness adjustment skipped; grading LUT not recognized: texture_id=%d", tid); return; }
     if (!ps) { NSError *e = nil; id<MTLLibrary> lib = [g_dev newLibraryWithSource:@(k_lut_msl) options:nil error:&e]; id<MTLFunction> f = lib ? [lib newFunctionWithName:@"lutk"] : nil;
         ps = f ? [g_dev newComputePipelineStateWithFunction:f error:&e] : nil;
-        MTL4ArgumentTableDescriptor *ad = [MTL4ArgumentTableDescriptor new]; ad.maxTextureBindCount = 2; ad.maxBufferBindCount = 1; at = [g_dev newArgumentTableWithDescriptor:ad error:&e];
+        MTL4ArgumentTableDescriptor *ad = [MTL4ArgumentTableDescriptor new]; ad.maxTextureBindCount = 2; ad.maxBufferBindCount = 1; at = dm_m4_arguments(g_dev, ad, &e);
         for (int i = 0; i < 3; i++) { kb[i] = [g_dev newBufferWithLength:16 options:MTLResourceStorageModeShared]; if (kb[i]) res_add(kb[i]); }
         if (!ps || !at || !kb[0] || !kb[1] || !kb[2]) { failed = 1; DM_LOG_ERROR("metal", "Scene brightness compute pipeline creation failed: %s; using original brightness", e.localizedDescription.UTF8String); return; }
         MLOG("Scene brightness adjustment initialized: LUT=%lux%lux%lu; exposure supplied per frame by dm_bright_k", (unsigned long)lut.width, (unsigned long)lut.height, (unsigned long)lut.depth); }
@@ -5252,7 +5350,7 @@ static void bright_lut(NvShader *cs) {
         d.usage = MTLTextureUsageShaderRead; d.storageMode = MTLStorageModePrivate; if (tmp) defer_obj_release(tmp); tmp = [g_dev newTextureWithDescriptor:d]; if (!tmp) { failed = 1; return; } res_add(tmp); }
     id<MTLBuffer> b0 = kb[ki]; ki = (ki + 1) % 3; *(float *)b0.contents = k;   // Three copies in rotation: in-flight frames are still reading the previous copy
     id<MTL4ComputeCommandEncoder> b = blit(); enc_b_copy_texture(b, lut, 0, 0, MTLOriginMake(0, 0, 0), MTLSizeMake(lut.width, lut.height, lut.depth), tmp, 0, 0, MTLOriginMake(0, 0, 0)); enc_b_end(g_blit); g_blit = nil;
-    id<MTL4ComputeCommandEncoder> ce = (id<MTL4ComputeCommandEncoder>)enc_c_begin(NULL); [ce setArgumentTable:at]; [at setTexture:tmp.gpuResourceID atIndex:0]; [at setTexture:lut.gpuResourceID atIndex:1]; [at setAddress:b0.gpuAddress atIndex:0];
+    id<MTL4ComputeCommandEncoder> ce = (id<MTL4ComputeCommandEncoder>)enc_c_begin(NULL); [ce setArgumentTable:at]; [at setTexture:dm_m4_resource_id(tmp) atIndex:0]; [at setTexture:dm_m4_resource_id(lut) atIndex:1]; [at setAddress:b0.gpuAddress atIndex:0];
     enc_c_pso(ce, ps); enc_c_dispatch(ce, MTLSizeMake((lut.width + 3) / 4, (lut.height + 3) / 4, (lut.depth + 3) / 4), MTLSizeMake(4, 4, 4)); enc_c_end(ce);
     args_dirty_all();
 }
@@ -5362,12 +5460,17 @@ static void copy_b2t(const p_copy_b2t *c) {
     void *mb; uint64_t mo;
     if (!mtl_addr(c->src, img * nz, &mb, &mo)) { RED_ONCE(23, "Buffer-to-texture copy source is outside memory pools"); return; }
     uint32_t upf; int ubpp;
-    if (bc_unpack(c->tex->d.format, &upf, &ubpp)) {   // No BC: the compressed blocks in the source are decompressed on the CPU into a temporary buffer, then copied pixel-wise into the decompressed-format texture
+    uint32_t packed = sim_packed_format(c->tex->d.format);
+    if (packed) ubpp = 4;
+    if (packed || bc_unpack(c->tex->d.format, &upf, &ubpp)) {   // Convert unsupported storage formats before uploading.
         const uint8_t *src = [(__bridge id<MTLBuffer>)mb contents];
         if (!src) { RED_ONCE(46, "BC fallback copy source buffer is not CPU-accessible"); return; }
         size_t up = (size_t)c->r.width * ubpp, uimg = up * c->r.height;
         id<MTLBuffer> tb = [g_dev newBufferWithLength:uimg * nz ?: 16 options:MTLResourceStorageModeShared];
-        for (int z = 0; z < nz; z++) nvn_bc_decode(c->tex->d.format, src + mo + z * img, row, c->r.width, c->r.height, (uint8_t *)tb.contents + z * uimg, up);
+        for (int z = 0; z < nz; z++) {
+            if (packed) dm_sim_expand_packed16(packed, src + mo + z * img, row, (uint8_t *)tb.contents + z * uimg, up, c->r.width, c->r.height);
+            else nvn_bc_decode(c->tex->d.format, src + mo + z * img, row, c->r.width, c->r.height, (uint8_t *)tb.contents + z * uimg, up);
+        }
         res_add(tb);
         id<MTL4ComputeCommandEncoder> b = blit();
         if (is3d) enc_b_copy_buffer_texture(b, tb, 0, up, uimg, MTLSizeMake(c->r.width, c->r.height, nz), t, 0, level, MTLOriginMake(c->r.xoffset, c->r.yoffset, c->r.zoffset));
@@ -5395,7 +5498,7 @@ static int copy_t2t_astc(id<MTLTexture> s, id<MTLTexture> d, unsigned sl, unsign
     if (failed) return 0;
     if (!ps) { NSError *e = nil; id<MTLLibrary> lib = [g_dev newLibraryWithSource:@(k_a2u_msl) options:nil error:&e]; id<MTLFunction> f = lib ? [lib newFunctionWithName:@"a2u"] : nil;
         ps = f ? [g_dev newComputePipelineStateWithFunction:f error:&e] : nil;
-        MTL4ArgumentTableDescriptor *ad = [MTL4ArgumentTableDescriptor new]; ad.maxTextureBindCount = 2; ad.maxBufferBindCount = 1; at = [g_dev newArgumentTableWithDescriptor:ad error:&e];
+        MTL4ArgumentTableDescriptor *ad = [MTL4ArgumentTableDescriptor new]; ad.maxTextureBindCount = 2; ad.maxBufferBindCount = 1; at = dm_m4_arguments(g_dev, ad, &e);
         if (!ps || !at) { failed = 1; DM_LOG_ERROR("metal", "Failed to create ASTC-to-uncompressed compute pipeline: %s", e.localizedDescription.UTF8String); return 0; } }
     MTLTextureType tt = MTLTextureType2D;
     id<MTLTexture> sv = [s newTextureViewWithPixelFormat:s.pixelFormat textureType:tt levels:NSMakeRange(sl, 1) slices:NSMakeRange(ss, 1)];
@@ -5406,7 +5509,7 @@ static int copy_t2t_astc(id<MTLTexture> s, id<MTLTexture> d, unsigned sl, unsign
     res_add(pb);
     rp_end(); if (g_blit) { enc_b_end(g_blit); g_blit = nil; }
     id<MTL4ComputeCommandEncoder> ce = (id<MTL4ComputeCommandEncoder>)enc_c_begin(NULL); [ce setArgumentTable:at];
-    [at setTexture:sv.gpuResourceID atIndex:0]; [at setTexture:dv.gpuResourceID atIndex:1]; [at setAddress:pb.gpuAddress atIndex:0];
+    [at setTexture:dm_m4_resource_id(sv) atIndex:0]; [at setTexture:dm_m4_resource_id(dv) atIndex:1]; [at setAddress:pb.gpuAddress atIndex:0];
     enc_c_pso(ce, ps); enc_c_dispatch(ce, MTLSizeMake((w + 7) / 8, (h + 7) / 8, 1), MTLSizeMake(8, 8, 1)); enc_c_end(ce);
     args_dirty_all();
     defer_obj_unref(sv); defer_obj_unref(dv); defer_obj_release(pb);   // Release after this submit has finished running (views are not made resident separately; the parameter block is removed from residency)
@@ -5446,7 +5549,7 @@ static int copy_t2t_draw(id<MTLTexture> s, id<MTLTexture> d, unsigned sl, unsign
         NSError *e = nil; id<MTLLibrary> lib = [g_dev newLibraryWithSource:@(src) options:nil error:&e];
         vf = [lib newFunctionWithName:@"vs"]; ff = [lib newFunctionWithName:@"fs"]; fd = [lib newFunctionWithName:@"fsd"];
         MTLDepthStencilDescriptor *dd = [MTLDepthStencilDescriptor new]; dd.depthCompareFunction = MTLCompareFunctionAlways; dd.depthWriteEnabled = YES; dss = [g_dev newDepthStencilStateWithDescriptor:dd];
-        MTL4ArgumentTableDescriptor *ad = [MTL4ArgumentTableDescriptor new]; ad.maxTextureBindCount = 1; ad.maxSamplerStateBindCount = 1; ad.maxBufferBindCount = 1; at = [g_dev newArgumentTableWithDescriptor:ad error:&e];
+        MTL4ArgumentTableDescriptor *ad = [MTL4ArgumentTableDescriptor new]; ad.maxTextureBindCount = 1; ad.maxSamplerStateBindCount = 1; ad.maxBufferBindCount = 1; at = dm_m4_arguments(g_dev, ad, &e);
         for (int i = 0; i < 2; i++) { MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new]; sd.minFilter = sd.magFilter = i ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
             sd.sAddressMode = sd.tAddressMode = MTLSamplerAddressModeClampToEdge; sd.supportArgumentBuffers = YES; samp[i] = [g_dev newSamplerStateWithDescriptor:sd]; }
         if (!vf || !ff || !fd || !dss || !at || !samp[0] || !samp[1]) { failed = 1; DM_LOG_ERROR("metal", "Failed to create texture conversion/scaling pipeline: %s", e.localizedDescription.UTF8String); return 0; }
@@ -5480,7 +5583,7 @@ static int copy_t2t_draw(id<MTLTexture> s, id<MTLTexture> d, unsigned sl, unsign
         ser_gate(); id<MTL4RenderCommandEncoder> en = enc_r_begin(rp);
         if (depth) [en setDepthStencilState:dss];
         [en setArgumentTable:at atStages:MTLRenderStageFragment];
-        [at setTexture:sv.gpuResourceID atIndex:0]; [at setSamplerState:samp[!!linear && !depth].gpuResourceID atIndex:0]; [at setAddress:pb.gpuAddress atIndex:0];
+        [at setTexture:dm_m4_resource_id(sv) atIndex:0]; [at setSamplerState:dm_m4_resource_id(samp[!!linear && !depth]) atIndex:0]; [at setAddress:pb.gpuAddress atIndex:0];
         [en setViewport:(MTLViewport){dr->xoffset, dr->yoffset, dr->width, dr->height, 0, 1}];
         [en setScissorRect:(MTLScissorRect){(NSUInteger)dr->xoffset, (NSUInteger)dr->yoffset, (NSUInteger)dr->width, (NSUInteger)dr->height}];
         [en setRenderPipelineState:ps]; [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3]; enc_r_end(en);
@@ -5586,6 +5689,7 @@ static void clear_tex(const p_clear_tex *c) {
     if (c->has_view && c->view.set_format) {   // View with changed format: the clear value is interpreted in the view format (all 5 of the game's calls are the ui version with an integer view), and the clear is done on a view of the same format
         uint32_t vpf = 0; uint8_t swz[4];
         if (!nvn_fmt_to_mtl(c->view.format, &vpf, swz) || !vpf) { RED_ONCE(42, "Texture clear view format is unmapped: %#x", c->view.format); return; }
+        vpf = sim_view_format(vpf);
         if (tex_need_pfv(t.pixelFormat, (MTLPixelFormat)vpf) && !(t.usage & MTLTextureUsagePixelFormatView)) t = tex_upgrade_pfv(c->tex, t, (MTLPixelFormat)vpf);
         if (tex_need_pfv(t.pixelFormat, (MTLPixelFormat)vpf)) {
             id<MTLTexture> v = [t newTextureViewWithPixelFormat:(MTLPixelFormat)vpf];
@@ -5837,7 +5941,7 @@ static void sub_cut(void) {
     [g_cb endCommandBuffer];
     id<MTL4CommandBuffer> buffers[] = {g_cb};
     [g_q4 commit:buffers count:1 options:o];
-    g_cb = [g_dev newCommandBuffer];
+    g_cb = dm_m4_buffer(g_dev);
     [g_cb beginCommandBufferWithAllocator:g_alloc4[g_alloc_cur]];   // one allocator encodes several command buffers in sequence; it is reset only once its fence (the last segment) has passed, when a later submission starts
     g_cut_draw0 = g_stat_draw;
     if (!g_cuts++) MLOG("First segmented submission: frame=%llu pass=%llu", (unsigned long long)f, (unsigned long long)g_stat_pass);
@@ -5856,7 +5960,13 @@ void mtl_exec(const uint8_t *p) {
         if ((g_frz_on || g_frz_state || g_dm_rt_ab == 1) && frz_op(h.op, p + 8)) { p += h.size; continue; }
         if (trace) PD("o cmd=%p pass=%llu op=%u size=%u", p, g_stat_pass, (unsigned)h.op, (unsigned)h.size);
         // Diagnostic DM_NVN_ALLOCPROF=1: growth of the GPU allocated size is charged to the previous operation's type (rough: allocations on other threads are counted too); the memory report line appends the top 4
-        if (g_allocprof < 0) g_allocprof = getenv("DM_NVN_ALLOCPROF") != NULL;
+        if (g_allocprof < 0) {
+            g_allocprof = getenv("DM_NVN_ALLOCPROF") != NULL;
+#if TARGET_OS_SIMULATOR
+            if (g_allocprof) MLOG("DM_NVN_ALLOCPROF is unavailable on Simulator; allocation-size counters are disabled");
+            g_allocprof = 0;
+#endif
+        }
         if (g_allocprof) { static uint64_t last; static int prev = -1; uint64_t now = g_dev.currentAllocatedSize; if (prev >= 0 && prev < 64 && now > last) g_ap_bytes[prev] += now - last; last = now; prev = h.op; }
         if (g_hoist_n && hoist_take(p)) { if (g_fz.active && p == g_fz.rt2_op) { g_fz.phase = 2; g_rt_merged = 0; PD("F %llu merged pass entering the next pass draw", g_stat_pass); } p += h.size; continue; }   // A pure-clear render pass already executed early / the start of a later pass already merged in   // Entering the later pass: the same-target continuation of the earlier pass ends here; the later pass reading the earlier pass's attachment is proven to be same-pixel by fz_p2_draw, and is no longer split by the continuation rule
         const void *a = p + 8;
@@ -6338,8 +6448,8 @@ static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MT
     if (!en) { DM_LOG_ERROR("metal", "Failed to create Metal 4 presentation render encoder"); return 0; }
     [en barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:MTL4VisibilityOptionDevice];
     [en setArgumentTable:g_present_args atStages:MTLRenderStageFragment];
-    [g_present_args setTexture:present_raw_src(src).gpuResourceID atIndex:0];
-    [g_present_args setSamplerState:g_blit_samp.gpuResourceID atIndex:0];
+    [g_present_args setTexture:dm_m4_resource_id(present_raw_src(src)) atIndex:0];
+    [g_present_args setSamplerState:dm_m4_resource_id(g_blit_samp) atIndex:0];
     float *uv = g_present_uv[uv_i].contents;
     uv[0] = (float)cx / src.width; uv[1] = (float)cy / src.height; uv[2] = (float)cw / src.width; uv[3] = (float)ch / src.height;
     uv[4] = (cx + 0.5f) / src.width; uv[5] = (cy + 0.5f) / src.height; uv[6] = (cx + cw - 0.5f) / src.width; uv[7] = (cy + ch - 0.5f) / src.height;
@@ -6400,7 +6510,9 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
 
     CAMetalLayer *layer = (__bridge CAMetalLayer *)front_metal_layer();
     if (!layer) return 0;
+#if !TARGET_OS_SIMULATOR
     if (g_present_layer_resident != layer) { [g_q4 addResidencySet:layer.residencySet]; g_present_layer_resident = layer; }
+#endif
 #if TARGET_OS_OSX
     if (!layer.displaySyncEnabled) layer.displaySyncEnabled = YES;   // Windowed mode follows the display's vsync to prevent tearing
 #endif
@@ -6417,11 +6529,22 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
         pthread_mutex_unlock(&g_pq_mu);
     }
     [g_present_alloc4[alloc_i] reset];
+#if !TARGET_OS_SIMULATOR
     [g_q4 waitForDrawable:dr];
+#endif
     id<MTL4CommandBuffer> cb = g_present_cb[alloc_i];
     [cb beginCommandBufferWithAllocator:g_present_alloc4[alloc_i]];
-    if (!present_encode_m4(cb, src, dr.texture, crop, alloc_i)) { [cb endCommandBuffer]; [g_q4 signalDrawable:dr]; return 0; }
+    if (!present_encode_m4(cb, src, dr.texture, crop, alloc_i)) {
+        [cb endCommandBuffer];
+#if !TARGET_OS_SIMULATOR
+        [g_q4 signalDrawable:dr];
+#endif
+        return 0;
+    }
     [cb endCommandBuffer];
+#if TARGET_OS_SIMULATOR
+    dm_sim_present(cb, dr);
+#endif
     MTL4CommitOptions *o = [MTL4CommitOptions new];
     [o addFeedbackHandler:^(id<MTL4CommitFeedback> f) {
         if (f.error) DM_LOG_ERROR("metal", "Presentation command buffer failed: %s", f.error.description.UTF8String);
@@ -6445,10 +6568,12 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
                  (unsigned long long)g_link_dropped, a[149], a[0], b[149], b[0], b[299]);
         }
     }
+#if !TARGET_OS_SIMULATOR
     [g_q4 signalDrawable:dr];
+#endif
     g_present_alloc_fence[alloc_i] = ticket;
 #if TARGET_OS_SIMULATOR   // The iOS simulator SDK has no presentation-time callback and no minimum display duration (used only for picture acceptance, display-link ticks are not counted)
-    (void)period; [dr present];
+    (void)period;
 #else
     uint64_t pn = ticket;   // Record the present time by the game's present sequence number (ticket number): hle's present statistics are taken by "the game's nth present"; in the display link path the actual present count != the game's present count (old frames get merged and dropped)
     [dr addPresentedHandler:^(id<MTLDrawable> d) {   // Actual presentation time (the time this frame is really put on screen, CACurrentMediaTime base)

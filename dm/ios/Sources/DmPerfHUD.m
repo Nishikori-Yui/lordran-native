@@ -2,6 +2,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <Metal/Metal.h>
 #include <mach/mach.h>
+#include <TargetConditionals.h>
 #include "../../gfx/nvn/nvn_perf.h"
 
 @implementation DmPerfHUD {
@@ -56,8 +57,11 @@
 
 - (void)refresh {
     nvn_perf_snapshot s; nvn_perf_read((uint64_t)(CACurrentMediaTime() * 1e9), &s);
-    NSString *fps = s.presented_frames ? [NSString stringWithFormat:@"%.1f FPS", s.display_fps] : @"-- FPS";
-    NSString *frame = s.frame_ms >= 0 ? [NSString stringWithFormat:@"%.1f ms", s.frame_ms] : @"-- ms";
+    double headline_fps = s.presented_frames ? s.display_fps : s.game_fps;
+    double headline_ms = s.frame_ms >= 0 ? s.frame_ms : (headline_fps > 0 ? 1000.0 / headline_fps : -1);
+    NSString *fps = (s.presented_frames || s.game_fps > 0)
+        ? [NSString stringWithFormat:@"%.1f %@FPS", headline_fps, s.presented_frames ? @"" : @"Game "] : @"-- FPS";
+    NSString *frame = headline_ms >= 0 ? [NSString stringWithFormat:@"%.1f ms", headline_ms] : @"-- ms";
     _headline.text = [NSString stringWithFormat:@"%@   %@", fps, frame];
     self.accessibilityHint = _collapsed ? @"Show performance details" : @"Hide performance details";
     if (_collapsed) { self.accessibilityValue = _headline.text; return; }
@@ -72,8 +76,13 @@
         case NSProcessInfoThermalStateSerious: thermal = @"Serious"; break;
         default: thermal = @"Critical"; break;
     }
-    _details.text = [NSString stringWithFormat:@"Game %.1f FPS   GPU %@\nRAM %@   Metal %llu MiB\n%ux%u   Thermal %@",
-        s.game_fps, gpu, ram, (unsigned long long)(_device.currentAllocatedSize >> 20), s.width, s.height, thermal];
+#if TARGET_OS_SIMULATOR
+    NSString *metal = @"N/A (Simulator)";
+#else
+    NSString *metal = [NSString stringWithFormat:@"%llu MiB", (unsigned long long)(_device.currentAllocatedSize >> 20)];
+#endif
+    _details.text = [NSString stringWithFormat:@"Game %.1f FPS   GPU %@\nRAM %@   Metal %@\n%ux%u   Thermal %@",
+        s.game_fps, gpu, ram, metal, s.width, s.height, thermal];
     self.accessibilityValue = [NSString stringWithFormat:@"%@. %@", _headline.text, _details.text];
 }
 

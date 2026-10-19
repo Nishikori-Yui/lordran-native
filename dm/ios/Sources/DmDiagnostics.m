@@ -4,6 +4,7 @@
 #import <QuartzCore/QuartzCore.h>
 #include <mach/mach.h>
 #include <sys/sysctl.h>
+#include <TargetConditionals.h>
 #include "game_profile.h"
 #include "dmsh_chain.h"
 #include "../../gfx/nvn/nvn_perf.h"
@@ -17,6 +18,15 @@ static NSDictionary *diagnosticMetadata(void) {
     nvn_perf_read((uint64_t)(CACurrentMediaTime() * 1e9), &perf);
     task_vm_info_data_t vm = {0}; mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
     task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vm, &count);
+#if TARGET_OS_SIMULATOR
+    BOOL metal4 = NO;
+    NSString *runtimePlatform = @"ios-simulator", *graphicsBackend = @"metal3-compatibility";
+    id metalMemory = NSNull.null;
+#else
+    BOOL metal4 = [device supportsFamily:MTLGPUFamilyMetal4];
+    NSString *runtimePlatform = @"ios", *graphicsBackend = @"metal4";
+    id metalMemory = @(device.currentAllocatedSize);
+#endif
     return @{
         @"exported_at": [NSISO8601DateFormatter.new stringFromDate:NSDate.date],
         @"game": @DM_GAME_ID,
@@ -26,11 +36,12 @@ static NSDictionary *diagnosticMetadata(void) {
         @"device_model": @(model), @"os": NSProcessInfo.processInfo.operatingSystemVersionString,
         @"shader_chain": @DMSH_CHAIN,
         @"gpu": device.name ?: @"unavailable",
-        @"metal4": @([device supportsFamily:MTLGPUFamilyMetal4]),
+        @"metal4": @(metal4),
+        @"runtime_platform": runtimePlatform, @"graphics_backend": graphicsBackend,
         @"argument_buffer_tier": @(device.argumentBuffersSupport),
         @"physical_memory_bytes": @(NSProcessInfo.processInfo.physicalMemory),
         @"app_memory_bytes": @(vm.phys_footprint),
-        @"metal_memory_bytes": @(device.currentAllocatedSize),
+        @"metal_memory_bytes": metalMemory,
         @"thermal_state": @(NSProcessInfo.processInfo.thermalState),
         @"performance": @{@"display_fps": @(perf.display_fps), @"game_fps": @(perf.game_fps),
             @"frame_ms": @(perf.frame_ms), @"gpu_ms": @(perf.gpu_ms),
