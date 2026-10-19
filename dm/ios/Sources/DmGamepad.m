@@ -3,6 +3,7 @@
 #import <GameController/GameController.h>
 #import <CoreText/CoreText.h>
 #import <QuartzCore/QuartzCore.h>
+#import <TargetConditionals.h>
 #include <pthread.h>
 #include "dm_input.h"
 #include "dm_padmap.h"
@@ -322,13 +323,17 @@ static CGPathRef arm(CGFloat angle) {
             CGPoint c = [self controlCenter:DmControlLeftStick + side];
             double radius = 66 * self.unit * [_profile styleForControl:DmControlLeftStick + side].scale * 0.8;
             if (_stickTouch[side]) dm_pad_axis((_stickNow[side].x - c.x) / radius, (c.y - _stickNow[side].y) / radius, 0.1, &axes[side * 2], &axes[side * 2 + 1]);
+            if (side) dm_camera_axis_tune(axes[2] / 32767.0, axes[3] / 32767.0, _profile.lookSensitivity,
+                                         _profile.lookInvertX, _profile.lookInvertY, &axes[2], &axes[3]);
         }
     }
     pthread_mutex_lock(&g_mu); g_touch_btn = buttons; memcpy(g_touch_axis, axes, sizeof axes); pthread_mutex_unlock(&g_mu);
     publish(); [self refresh:buttons];
 }
 - (void)swipeTick:(CADisplayLink *)link {
-    for (int side = 0; side < 2; side++) dm_camera_swipe_sample(&_swipe[side], link.targetTimestamp - link.timestamp, &_swipeAxis[side * 2], &_swipeAxis[side * 2 + 1]);
+    dm_camera_swipe_sample(&_swipe[0], link.targetTimestamp - link.timestamp, &_swipeAxis[0], &_swipeAxis[1]);
+    dm_camera_swipe_sample_tuned(&_swipe[1], link.targetTimestamp - link.timestamp, _profile.lookSensitivity,
+                                _profile.lookInvertX, _profile.lookInvertY, &_swipeAxis[2], &_swipeAxis[3]);
     [self recompute];
 }
 - (void)startSwipeLink {
@@ -414,7 +419,15 @@ static CGPathRef arm(CGFloat angle) {
     pthread_mutex_lock(&g_mu); g_touch_btn = 0; memset(g_touch_axis, 0, sizeof g_touch_axis); pthread_mutex_unlock(&g_mu);
     publish(); [self refresh:0];
 }
-- (void)updateVisibility { self.hidden = !_editingControls && _activeController && _profile.hideWithController; }
+- (void)updateVisibility {
+#if TARGET_OS_SIMULATOR
+    // Simulator may expose a virtual controller even when the player is using
+    // mouse clicks; keep the on-screen controls visible so the game is usable.
+    self.hidden = NO;
+#else
+    self.hidden = !_editingControls && _activeController && _profile.hideWithController;
+#endif
+}
 - (void)setSelectedControl:(NSInteger)c {
     if (c < 0 || c >= DmControlCount) return;
     _selectedControl = c; [self setNeedsLayout]; if (_selectionChanged) _selectionChanged();
