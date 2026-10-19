@@ -3,19 +3,8 @@ name: Build unsigned iOS shell
 on:
   workflow_dispatch:
   push:
-    branches:
-      - "test/windows-injection-pipeline"
-    paths:
-      - ".github/workflows/build-shell.yml"
-      - "dm/**"
-      - "scripts/**"
-  pull_request:
-    paths:
-      - ".github/workflows/build-shell.yml"
-      - "dm/**"
-      - "scripts/**"
-  release:
-    types: [published]
+    tags:
+      - "*"
 
 permissions:
   contents: read
@@ -47,7 +36,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
   attach-release:
-    if: github.event_name == 'release'
+    if: startsWith(github.ref, 'refs/tags/')
     needs: build-shell
     runs-on: ubuntu-latest
     permissions:
@@ -61,4 +50,9 @@ jobs:
       - name: Attach shell to GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" dist/LordranNative-shell-build-input.zip --clobber
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/LordranNative-shell-build-input.zip --clobber
+          else
+            echo "No release exists for this tag; download the shell from the workflow artifact."
+          fi
