@@ -69,14 +69,19 @@ def main():
     (gen / "dm.xcconfig").write_text(config, encoding="utf-8")
     subprocess.run(["xcodegen", "generate", "-q"], cwd=ios, env=env, check=True)
     with (work / "build.log").open("w", encoding="utf-8") as log:
-        subprocess.run(["xcodebuild", "-project", "DmIOS.xcodeproj", "-scheme", "DmIOS",
-                        "-configuration", "Release", "-sdk", "iphoneos",
-                        "-destination", "generic/platform=iOS", "-derivedDataPath", str(work / "dd"),
-                        # Override custom Xcode product locations as well.
-                        f"CONFIGURATION_BUILD_DIR={work / 'products'}",
-                        "ONLY_ACTIVE_ARCH=NO", "CODE_SIGNING_ALLOWED=NO",
-                        "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_IDENTITY=", "build"],
-                       cwd=ios, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
+        try:
+            subprocess.run(["xcodebuild", "-project", "DmIOS.xcodeproj", "-scheme", "DmIOS",
+                            "-configuration", "Release", "-sdk", "iphoneos",
+                            "-destination", "generic/platform=iOS", "-derivedDataPath", str(work / "dd"),
+                            # Override custom Xcode product locations as well.
+                            f"CONFIGURATION_BUILD_DIR={work / 'products'}",
+                            "ONLY_ACTIVE_ARCH=NO", "CODE_SIGNING_ALLOWED=NO",
+                            "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_IDENTITY=", "build"],
+                           cwd=ios, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
+        except subprocess.CalledProcessError as error:
+            tail = (work / "build.log").read_text(encoding="utf-8", errors="replace").splitlines()[-80:]
+            raise ValueError(f"Xcode shell build failed ({error.returncode}); final build log lines:\n" +
+                             "\n".join(tail)) from error
     app = work / "products/DmIOS.app"
     info = plistlib.loads((app / "Info.plist").read_bytes())
     if info.get("CFBundleSupportedPlatforms") != ["iPhoneOS"]:
