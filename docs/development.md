@@ -34,6 +34,9 @@ python3 scripts/build_ipa_from_nsp.py game/01004AB00A260000 -k game/01004AB00A26
 
 In Spyder, open the script, fill in the settings at the top (`NSP_DIR`, `PROD_KEYS`, and optionally `PACKAGE`, `OUT_IPA`, `APP_NAME`, `BUNDLE_ID`), and press F5. Empty paths are asked for at run time.
 
+For the experimental shell-based Windows packager, Mac CI shell build and its
+release artifacts, see the [Windows packaging guide](windows-packaging.md).
+
 What the script does:
 
 1. It finds the game profile from the title ID (the `[title ID]` in the file names, or the NSP's ticket; the update by its `[vN]` tag).
@@ -146,6 +149,54 @@ Notes on these steps:
 - `DM_ENV_FILE=` bakes environment switches into the app, and `DM_DISPLAY_NAME=` renames it.
 - If Xcode's Locations setting puts products in a custom place, the script finds the app through the build log.
 - `nx_extract` uses LibHac because some Switch update NCAs cannot be read by hactool.
+
+## Build for iOS Simulator (Apple silicon)
+
+The Simulator build is a separate arm64 app, packaged as `.app.zip`. A device
+IPA cannot run in Simulator. The Simulator SDK does not expose the Metal 4
+command interfaces used by the device renderer, so this build uses a
+Simulator-only Metal 3 adapter. It is intended for functional checks; its
+performance does not predict performance on an iPhone.
+
+Guest memory uses anonymous shared mappings on Simulator so its GPU service can
+access zero-copy pools through XPC. Packed 16-bit color textures unsupported by
+the Simulator GPU are expanded to RGBA8 during upload; the conversion is checked
+against native Metal sampling for every possible 16-bit value. Device builds
+retain their original memory mapping and texture formats. Simulator argument
+buffers use `MTLArgumentEncoder` for buffers, textures and samplers because
+writing native resource IDs directly does not produce valid Simulator bindings.
+
+Keep the rewritten modules, RomFS and existing translated MSL from the manual
+build above. Compile that MSL for the Simulator platform, then package:
+
+```sh
+python3 dm/ios/tools/build_simulator_shaders.py \
+  "$W/build/cache/metal_shader_cache/b-<chain version>" \
+  "$W/build/ios-simulator/dmsh_b"
+GAME=$G W="$W" DM_IOS_TARGET=simulator \
+  dm/ios/tools/build_ipa.sh "$W/DarkSoulsRemastered-Simulator.app.zip"
+```
+
+The compiler checks the current profile's shader chain, preserves reflection,
+and caches Simulator output separately from device and Mac libraries. Use
+`MSL_IOS=` if the Simulator shader cache is elsewhere. The packager rejects
+shader metadata for another platform and verifies the executable's
+`IOSSIMULATOR` platform before creating the archive.
+
+The archive contains `DmIOS.app` at its root. An unpacked copy is also retained
+at `$W/build/ios-simulator/pkg/Simulator/DmIOS.app`; install that app into a
+booted Simulator rather than sending it to a physical device. Diagnostic
+reports identify the runtime as `ios-simulator` and its renderer as
+`metal3-compatibility`.
+
+The adapter has an independent compute, copy-ordering, GPU-address, indexed
+draw, texture/sampler and fence test:
+
+```sh
+make -C dm/ios/tests simulator-metal-build
+xcrun simctl spawn booted \
+  "$PWD/game/01004AB00A260000-work/build/ios-diagnostics-tests/simulator_metal"
+```
 
 ## Prewarm lists
 

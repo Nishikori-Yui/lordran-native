@@ -55,13 +55,30 @@ python3 scripts/build_ipa_from_nsp.py game/01004AB00A260000 -k game/01004AB00A26
 
 运行 `python3 scripts/build_ipa_from_nsp.py -h` 可查看选项，包括用 `-o` 指定输出路径、用 `--app-name` 指定主屏幕名称。版本选择和 Mac 手动构建步骤见[开发文档](docs/development.md)。
 
+如需在 Apple 芯片 Mac 上构建实验性的 iOS 模拟器版本，请参照[模拟器构建步骤](docs/development.md#build-for-ios-simulator-apple-silicon)。此版本输出独立的 `.app.zip`，与真机 IPA 分开。
+
+### 在 Windows 上打包（无需 Xcode）
+
+Actions 仅在手动运行或推送 tag 时构建不含游戏内容的未签名 iOS「壳」。从对应的工作流产物或 Release 下载 `LordranNative-shell-build-input.zip`。Windows 需要 Python 3.12 或更高版本、.NET 10 SDK、`zstd`，以及 `spirv-cross` 1.4.357.0（Vulkan SDK 标签 `vulkan-sdk-1.4.357.0`）。把游戏本体 NSP、1.0.3 更新 NSP 和你自己的 `prod.keys` 放在 `game/` 下的私有文件夹中（该目录已被 Git 忽略）。
+
+安装 Python 依赖并运行：
+
+```powershell
+py -3 -m pip install lz4 capstone
+py -3 scripts/build_ipa_from_shell.py game/01004AB00A260000 `
+  --keys game/01004AB00A260000/prod.keys `
+  --shell game/01004AB00A260000/LordranNative-shell-build-input.zip
+```
+
+壳和源码必须来自同一个 Release。脚本会校验游戏标题及档案登记的模块构建号，在本机改写游戏模块并生成未签名 IPA。NSP、密钥、解包文件和生成的 IPA 都不会上传。此无 Xcode 流程会把着色器源码放进 IPA，首次启动时由 iPhone 编译；首次进入场景可能需要等待数分钟。Mac 的常规流程仍会预先编译着色器。壳 ZIP 只是打包输入，不是可安装 App；请对最终生成的 IPA 进行签名和侧载。依赖与故障排查见 [Windows 打包说明](docs/windows-packaging.zh-CN.md)。
+
 ### 4. 侧载 IPA
 
 使用你的侧载工具签名并安装未签名 IPA。App 会采用 NSP 中的游戏名称和图标。
 
 ## 操作方式
 
-- **触屏：** 左摇杆控制移动。3D 布局下，在屏幕空白处滑动可转动视角，手指停下或抬起即停止。按钮触摸独立处理，R3 用于锁定目标。
+- **触屏：** 左摇杆控制移动。3D 布局下，在屏幕空白处滑动可转动视角，手指停下或抬起即停止。**触控与手柄 → 触屏视角** 中可分别设置横轴、纵轴反转，并将灵敏度调整为 0.25～3 倍，默认 1 倍。这些设置同时作用于滑屏和右侧虚拟摇杆，立即生效，并在下次启动时保留。按钮触摸独立处理，R3 用于锁定目标。
 - **悬浮菜单：** 点按吸附在屏幕边缘的半透明悬浮球，可打开帧率开关、带时间戳的日志导出和输入设置。进入 **调整按键** 后，拖动带外框的按键可移动位置，拖动右下角手柄可缩放，点画面中央的 **确定** 保存退出。旋转、透明度和形状在当前按键的设置中调整。
 - **手柄：** 连接实体手柄后，触屏按键默认隐藏，手柄提供完整按键布局。菜单中可以选择当前手柄、自动识别任天堂/Xbox 按键映射，并调整摇杆死区。
 - **Mac：** 可使用 DualSense 手柄，或 PC 风格的键盘和鼠标映射。启动宿主时设置 `DM_WINDOW=1`，即可打开游戏窗口。

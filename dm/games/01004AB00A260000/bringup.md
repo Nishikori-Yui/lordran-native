@@ -71,8 +71,9 @@ dm/ios/tools/build_ipa.sh "<NSP folder>/LordranNative.ipa"
 
 ## Remaining work
 
-- AVC/VP8 movie decoding currently produces black frames. The player advances
-  through the title movie; this does not verify playback of the story movies.
+- VP8 movie decoding remains unsupported and produces black frames. AVC movie
+  decoding uses VideoToolbox. Simulator validation reached the story movie and
+  Northern Undead Asylum; performance and longer gameplay still need validation.
 - Dirty-page tracking reaches its 4,096-range limit at startup. Excess pools
   are untracked, which may cause unnecessary texture uploads.
 - Revisit character creation and asylum gameplay on the repaired build,

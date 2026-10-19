@@ -9,6 +9,7 @@ version is [README.zh-CN.md](../README.zh-CN.md).
 | If you want to... | Start here |
 |---|---|
 | Build and use the app | [Root README](../README.md) |
+| Package on Windows without Xcode, or have an agent execute/debug that route | [Windows packaging and agent runbook](windows-packaging.md) |
 | Understand the architecture or build manually | [Development guide](development.md) |
 | Extract files and bring up the host | [Porting guide](porting/README.md) |
 | Inspect title-specific build and shader data | [Game profile](../dm/games/README.md) |
@@ -23,6 +24,7 @@ README.zh-CN.md                   Player-facing Chinese entry point
 docs/
   README.md                       Documentation index
   development.md                  Architecture, builds and regression checks
+  windows-packaging.md             Experimental Windows shell-based packaging
   porting/
     README.md                     Porting and debugging overview
     01-extract.md                 NSP extraction and workspaces
