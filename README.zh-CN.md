@@ -70,7 +70,7 @@ py -3 scripts/build_ipa_from_shell.py game/01004AB00A260000 `
   --shell game/01004AB00A260000/LordranNative-shell-build-input.zip
 ```
 
-壳和源码必须来自同一个 Release。脚本会校验游戏标题及档案登记的模块构建号，在本机改写游戏模块并生成未签名 IPA。NSP、密钥、解包文件和生成的 IPA 都不会上传。此无 Xcode 流程会把着色器源码放进 IPA，首次启动时由 iPhone 编译；首次进入场景可能需要等待数分钟。Mac 的常规流程仍会预先编译着色器。壳 ZIP 只是打包输入，不是可安装 App；请对最终生成的 IPA 进行签名和侧载。依赖与故障排查见 [Windows 打包说明](docs/windows-packaging.zh-CN.md)。
+壳和源码必须来自同一个 Release。构建前先按 [Windows 打包说明](docs/windows-packaging.zh-CN.md) 从指定源码构建 SPIRV-Cross，并将其 SHA-256 保存到 `DM_SPIRV_CROSS_SHA256`，或通过 `--spirv-cross-sha256` 传入。脚本会校验游戏标题及档案登记的模块构建号，在本机改写游戏模块并生成未签名 IPA。NSP、密钥、解包文件和生成的 IPA 都不会上传。此无 Xcode 流程会把着色器源码放进 IPA，首次启动时由 iPhone 编译；首次进入场景可能需要等待数分钟。Mac 的常规流程仍会预先编译着色器。壳 ZIP 只是打包输入，不是可安装 App；请对最终生成的 IPA 进行签名和侧载。
 
 ### 4. 侧载 IPA
 

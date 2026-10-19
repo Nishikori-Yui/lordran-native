@@ -13,6 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from shell_common import check_manifest, chain_id, shader_keys
+from portable_shaders import verify_spirv_cross
 
 
 def run(command, log, env=None, cwd=None):
@@ -51,6 +52,9 @@ def main():
     parser.add_argument("nsp_dir", type=Path, help="Folder containing the base and update NSP")
     parser.add_argument("-k", "--keys", required=True, type=Path, help="Path to your prod.keys")
     parser.add_argument("--shell", required=True, type=Path, help="Shell ZIP from a matching release")
+    parser.add_argument("--spirv-cross-sha256", default=os.environ.get("DM_SPIRV_CROSS_SHA256"),
+                        help="Windows SPIRV-Cross SHA-256 recorded after the pinned source build "
+                             "(default: DM_SPIRV_CROSS_SHA256)")
     parser.add_argument("-p", "--package", help="Profile package version (default: v196608)")
     parser.add_argument("-o", "--out", type=Path, help="Output IPA path")
     parser.add_argument("--keep-extracted", action="store_true")
@@ -74,6 +78,13 @@ def main():
     check_manifest(shell_manifest, repo, profile)
     if info.get("CFBundleSupportedPlatforms") != ["iPhoneOS"]:
         raise ValueError("The input shell is not an iPhoneOS build")
+    # Reject an incomplete toolchain before scanning or extracting private inputs.
+    dotnet = shutil.which("dotnet")
+    if not dotnet:
+        parser.error("Install the .NET 10 SDK and add dotnet to PATH")
+    if not shutil.which("zstd"):
+        parser.error("Install zstd and add it to PATH")
+    verify_spirv_cross(args.spirv_cross_sha256)
     app, family = source.scan_nsps(nsp_dir)
     if app != profile.title_id:
         raise ValueError(f"Unsupported title ID: {app:016X}")
@@ -89,13 +100,9 @@ def main():
     logs.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, DM_GAME=profile.id, DM_ROOT=str(work), WORK=str(work / "tmp"),
                PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+    if args.spirv_cross_sha256 is not None:
+        env["DM_SPIRV_CROSS_SHA256"] = args.spirv_cross_sha256
     (work / "tmp").mkdir(exist_ok=True)
-    dotnet = shutil.which("dotnet")
-    if not dotnet:
-        parser.error("Install the .NET 10 SDK and add dotnet to PATH")
-    for tool in ("spirv-cross", "zstd"):
-        if not shutil.which(tool):
-            parser.error(f"Install {tool} and add it to PATH")
     tools = work / "tools"
     run([dotnet, "build", str(repo / "dm/tools/nx_extract/nx_extract.csproj"),
          "-c", "Release", "-o", str(tools / "nx_extract"), "-v", "quiet", "-nologo"],

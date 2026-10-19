@@ -17,6 +17,32 @@ import sys
 from pathlib import Path
 
 
+def verify_spirv_cross(expected=None):
+    """Check the Windows user's build fingerprint or the locked Mac binary."""
+    executable = shutil.which("spirv-cross")
+    if not executable:
+        raise ValueError("Install spirv-cross and add it to PATH")
+    actual = hashlib.sha256(Path(executable).read_bytes()).hexdigest()
+    if sys.platform == "win32":
+        if expected is None:
+            expected = os.environ.get("DM_SPIRV_CROSS_SHA256", "")
+        expected = expected.strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", expected):
+            raise ValueError("Windows builds require --spirv-cross-sha256 or "
+                             "DM_SPIRV_CROSS_SHA256 (64 hexadecimal digits); see "
+                             "docs/windows-packaging.md for the pinned source build")
+        if actual != expected:
+            raise ValueError("SPIRV-Cross SHA-256 mismatch; PATH must select the executable "
+                             "built and fingerprinted during Windows toolchain setup")
+    else:
+        lock_path = Path(__file__).resolve().parents[1] / "dm/gfx/tools/dmsh_chain.lock"
+        lock = dict(line.split("\t", 1) for line in lock_path.read_text(
+            encoding="utf-8").splitlines() if "\t" in line and not line.startswith("#"))
+        if actual[:16] != lock.get("spirv-cross"):
+            raise ValueError("SPIRV-Cross binary does not match the release toolchain lock")
+    return executable
+
+
 def main():
     repo = Path(__file__).resolve().parents[1]
     tools = repo / "dm/gfx/tools"
@@ -25,9 +51,6 @@ def main():
 
     real_run, real_open = subprocess.run, builtins.open
     xlate = Path(os.environ.get("XLATE", tools / "dmsh_xlate_bin/dmsh_xlate"))
-    lock = dict(line.split("\t", 1) for line in Path(dmsh_chain.LOCK).read_text(
-        encoding="utf-8").splitlines() if "\t" in line and not line.startswith("#"))
-
     def run(args, *a, **kw):
         cmd = [str(x) for x in args]
         output = ""
@@ -61,18 +84,11 @@ def main():
         return subprocess.CompletedProcess(args, 0, output, output)
 
     def check_tools():
-        spirv_cross = shutil.which("spirv-cross")
         bad = []
-        if not spirv_cross:
-            bad.append("SPIRV-Cross is not on PATH")
-        elif sys.platform == "win32":
-            expected = os.environ.get("DM_SPIRV_CROSS_SHA256", "").lower()
-            if not re.fullmatch(r"[0-9a-f]{64}", expected):
-                bad.append("Windows builds require the verified SPIRV-Cross SHA-256 from the private toolchain record")
-            elif hashlib.sha256(Path(spirv_cross).read_bytes()).hexdigest() != expected:
-                bad.append("SPIRV-Cross binary does not match the verified Windows toolchain SHA-256")
-        elif dmsh_chain.sha16(spirv_cross) != lock.get("spirv-cross"):
-            bad.append("SPIRV-Cross binary does not match the release toolchain lock")
+        try:
+            verify_spirv_cross()
+        except ValueError as error:
+            bad.append(str(error))
         result = run([str(xlate), "--source-sha"], capture_output=True, text=True, check=True)
         if result.stdout.strip() != dmsh_chain.xlate_source_sha():
             bad.append("Translator source does not match this checkout")

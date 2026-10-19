@@ -8,13 +8,18 @@
 
 - Windows 10/11 x64、Python 3.12 或更高版本、.NET 10 SDK。
 - 将 `zstd` 加入 `PATH`，用于解压着色器容器。
-- 使用 SPIRV-Cross 上游标签 `vulkan-sdk-1.4.357.0` 构建的程序。安装 CMake 和 Ninja，然后执行：
+- 使用 SPIRV-Cross 上游标签 `vulkan-sdk-1.4.357.0`、提交 `6c09849fe88c48eaed08413aa022aaa136a3a057` 构建的程序。安装 CMake、Ninja 和 C++ 编译器；使用 MSVC 时，在 Visual Studio 的 Developer PowerShell 中执行：
 
   ```powershell
   git clone --branch vulkan-sdk-1.4.357.0 --depth 1 https://github.com/KhronosGroup/SPIRV-Cross
-  cmake -S SPIRV-Cross -B SPIRV-Cross/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSPIRV_CROSS_ENABLE_TESTS=OFF
+  if ((git -C SPIRV-Cross rev-parse HEAD) -ne "6c09849fe88c48eaed08413aa022aaa136a3a057") { throw "Unexpected SPIRV-Cross source revision" }
+  cmake -S SPIRV-Cross -B SPIRV-Cross/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSPIRV_CROSS_ENABLE_TESTS=OFF "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=$PWD/SPIRV-Cross/build/bin"
   cmake --build SPIRV-Cross/build --target spirv-cross
-  $env:Path += ";$PWD\SPIRV-Cross\build\bin\Release"
+  if ($LASTEXITCODE -ne 0) { throw "SPIRV-Cross build failed" }
+  $spirvCross = (Resolve-Path SPIRV-Cross/build/bin/spirv-cross.exe).Path
+  $spirvCrossSha256 = (Get-FileHash -Algorithm SHA256 $spirvCross).Hash.ToLowerInvariant()
+  $env:Path = "$(Split-Path $spirvCross);$env:Path"
+  $env:DM_SPIRV_CROSS_SHA256 = $spirvCrossSha256
   ```
 
 - 游戏本体 NSP、1.0.3 更新 NSP（`v196608`）和你自己的 `prod.keys`。
@@ -29,7 +34,7 @@ spirv-cross --version
 zstd --version
 ```
 
-着色器翻译阶段会校验 SPIRV-Cross 二进制指纹。若按上面的源码标签构建出的程序仍与仓库锁定值不同，脚本会停止，不会默默使用其他翻译器。请按错误提示处理；不要为了绕过错误而修改 `dmsh_chain.lock` 或 `dmsh_chain.h`。
+Windows 使用你从指定上游源码构建的可执行文件的完整 SHA-256。可通过 `--spirv-cross-sha256` 传入，也可在构建会话中保留 `DM_SPIRV_CROSS_SHA256`。配置工具链时保存该值，在新会话中恢复；不要从未经信任的替换程序重新计算指纹。此检查用于发现 `PATH` 指向了其他程序或二进制被替换，哈希本身不能证明源码来源。整个流程不需要私有工具链记录。macOS 仍校验仓库锁定的 Mac 二进制指纹；不要把 Windows 哈希写入 `dmsh_chain.lock` 或 `dmsh_chain.h`。
 
 ## 构建
 
@@ -39,10 +44,11 @@ zstd --version
 py -3 -m pip install lz4 capstone fonttools
 py -3 scripts/build_ipa_from_shell.py game/01004AB00A260000 `
   --keys game/01004AB00A260000/prod.keys `
-  --shell game/01004AB00A260000/LordranNative-shell-build-input.zip
+  --shell game/01004AB00A260000/LordranNative-shell-build-input.zip `
+  --spirv-cross-sha256 $spirvCrossSha256
 ```
 
-打包器会校验壳的源码指纹、游戏档案、着色器链版本和着色器清单；识别 NSP 标题号与版本，按档案核对改写后的模块构建号，编译仓库内的着色器翻译器，提取和改写所选游戏版本，将全部档案着色器翻译为 MSL，生成 `Guest.framework` 并组装 IPA。中间文件和日志保存在 `<NSP 文件夹>/01004AB00A260000_shell_build/`；成功后会删除解包目录，传入 `--keep-extracted` 则保留。要打包本体版本可加 `-p v0`，但仍须提供档案要求的着色器版本。
+打包器会校验壳的源码指纹、游戏档案、着色器链版本和着色器清单，并在读取 NSP 前检查工具链；识别 NSP 标题号与版本，按档案核对改写后的模块构建号，编译仓库内的着色器翻译器，提取和改写所选游戏版本，将全部档案着色器翻译为 MSL，生成 `Guest.framework` 并组装 IPA。开始翻译时还会再次校验工具指纹。中间文件和日志保存在 `<NSP 文件夹>/01004AB00A260000_shell_build/`；成功后会删除解包目录，传入 `--keep-extracted` 则保留。要打包本体版本可加 `-p v0`，但仍须提供档案要求的着色器版本。
 
 常用选项：
 
@@ -75,7 +81,7 @@ py -3 scripts/build_ipa_from_shell.py -h
 - **壳与源码不匹配：** 下载与源码检出版本相同的 Release。
 - **标题号或构建号不受支持：** 使用《黑暗之魂：重制版》本体 NSP 和档案已登记的版本。本仓库只支持标题 `01004AB00A260000`。
 - **缺少工具：** 在同一个 PowerShell 会话中确认 `dotnet`、`spirv-cross`、`zstd` 和 `py -3` 可用，并把 Python 依赖安装到该 Python 解释器。
-- **SPIRV-Cross 指纹不符：** 使用与 `dm/gfx/tools/dmsh_chain.lock` 锁定内容匹配的二进制。仅使用相同源码标签不保证二进制指纹一致。除非有意更换整个项目的着色器工具链，否则不要修改锁。
+- **SPIRV-Cross 指纹缺失或不符：** 按上面说明从指定上游提交构建，记录完整 SHA-256，通过 `--spirv-cross-sha256` 或 `DM_SPIRV_CROSS_SHA256` 提供，并确认 `Get-Command spirv-cross` 指向该程序。Windows 编译产物与仓库锁定的 Mac 二进制指纹不同，不要因此修改共享锁。
 - **解包失败：** 查看对应的 `nx_extract_build.log` 或 `extract_<version>.log`；确认本体和更新 NSP 完整、密钥是用户自己的有效 `prod.keys`，且磁盘空间足够。不要打印或复制密钥到日志。
 - **模块构建号不匹配：** NSP 版本未登记在 `dm/games/01004AB00A260000/game.tsv`；停止，不要绕过校验。
 - **壳 ZIP 路径缺失或多出文件：** 壳生成端和消费端的白名单采用 fail-closed。添加资源前必须先证明它是公开数据且不含游戏派生或私人内容，不要直接放宽白名单。
