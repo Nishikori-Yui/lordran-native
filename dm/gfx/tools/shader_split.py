@@ -15,7 +15,9 @@ import struct
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../games'))
+TOOLS = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, TOOLS)
+sys.path.insert(0, os.path.join(TOOLS, '../../games'))
 import game as _game
 
 GAME = _game.load()
