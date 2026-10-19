@@ -63,7 +63,9 @@ def run(cmd, log, env=None, cwd=None, quiet=False):
     p = subprocess.Popen(cmd, env=env, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace', bufsize=1)
     if quiet: threading.Thread(target=beat, daemon=True).start()
     try:
-        with open(log, 'w') as f:
+        # Shader extraction emits non-ASCII diagnostics; keep the retained log
+        # portable instead of using the Windows console code page.
+        with open(log, 'w', encoding='utf-8', newline='\n') as f:
             for line in p.stdout:
                 f.write(line); tail.append(line); n[0] += 1
                 if not quiet: print(line, end='', flush=True)
