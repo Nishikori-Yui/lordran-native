@@ -57,12 +57,57 @@ static void test_upload_versions(void) {
     puts("texture upload: two versions in one submission preserve both GPU readbacks");
 }
 
+static void test_movie_stream(void) {
+    assert(g_nvn_deswz_gpu);
+    tex_t t = {.magic = MAGIC('T', 'E', 'X', 0), .serial = 70003, .has_layout = 1};
+    t.d = (nvn_texdesc){.width = 1920, .height = 1080, .depth = 1, .levels = 1,
+        .target = NVN_TEXTURE_TARGET_2D, .format = NVN_FORMAT_RGBA8, .pkg_block_h = 1};
+    nvn_tex_layout(&t.d, &t.L);
+    size_t size = (t.L.size + getpagesize() - 1) & ~((size_t)getpagesize() - 1);
+    assert(!posix_memalign((void **)&t.mem, getpagesize(), size));
+    memset(t.mem, 0x55, size);
+    mtl_pool_add(t.mem, size);
+    mtl_reg_tex(259, &t, NULL);
+    NSHashTable *versions = [NSHashTable weakObjectsHashTable];
+    uint64_t settled_bytes = 0;
+    for (int i = 0; i < 512; i++) { @autoreleasepool {
+        mtl_sub_begin();
+        rmu_lock(); g_ser_gen++;
+        id<MTLTexture> texture = tex_by_id(259); assert(texture);
+        [versions addObject:texture];
+        rmu_unlock();
+        uint64_t fence = mtl_sub_commit();
+        assert(mtl_wait(fence, 5000000000ull) && !mtl_last_commit_error());
+        dispatch_sync(g_feedback_q, ^{});
+        assert(versions.allObjects.count <= 2);
+        uint64_t allocated = g_dev.currentAllocatedSize;
+        if (i == 127) settled_bytes = allocated;
+        if (i >= 128) assert(allocated <= settled_bytes + (128ull << 20));
+    } }
+    mtl_tex_release(&t); mtl_pool_del(t.mem);
+    mtl_sub_begin(); uint64_t fence = mtl_sub_commit();
+    assert(mtl_wait(fence, 5000000000ull));
+    dispatch_sync(g_feedback_q, ^{});
+    assert(!serial_get(t.serial));
+    assert(!g_treg[259].view && !g_treg[259].alt);
+    // Completion objects may outlive a fence, but retired storage must not
+    // stay resident or accumulate with the number of uploaded frames.
+    assert(versions.allObjects.count <= 2);
+    for (id texture in versions.allObjects) assert(![g_res_objects containsObject:texture]);
+    free(t.mem);
+    puts("movie stream: 512 full-HD GPU uploads, bounded allocations and residency retirement passed");
+}
+
 int main(int argc, char **argv) { @autoreleasepool {
     alarm(30);
     mtl_init();
     test_feedback_pool();
     if (argc == 2 && !strcmp(argv[1], "--pools-only")) {
         puts("GPU feedback: autoreleased objects are released between work items");
+        return 0;
+    }
+    if (argc == 2 && !strcmp(argv[1], "--movie-stream")) {
+        test_movie_stream();
         return 0;
     }
     g_nvn_deswz_gpu = 0;
