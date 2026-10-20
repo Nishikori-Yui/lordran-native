@@ -15,6 +15,7 @@ version is [README.zh-CN.md](../README.zh-CN.md).
 | Inspect title-specific build and shader data | [Game profile](../dm/games/README.md) |
 | Understand NVN on Metal | [Graphics guide](../dm/gfx/README.md) |
 | Check validation status and unresolved issues | [Bring-up notes](../dm/games/01004AB00A260000/bringup.md) |
+| Follow the agent issue, review, and merge workflow | [Agent guide index](../AGENTS.md) |
 
 ## Documentation layout
 
@@ -23,6 +24,7 @@ README.md                         Player-facing English entry point
 README.zh-CN.md                   Player-facing Chinese entry point
 docs/
   README.md                       Documentation index
+  agents/                         Task-specific agent guidance, loaded via AGENTS.md
   development.md                  Architecture, builds and regression checks
   windows-packaging.md             Experimental Windows shell-based packaging
   porting/

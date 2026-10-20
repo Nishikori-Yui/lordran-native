@@ -1,11 +1,16 @@
-# Notes for Lordran Native agents
+# Lordran Native agent guide
 
-- This repository is dedicated to the native Apple port for title `01004AB00A260000`. The game's own aarch64 code runs on Apple hardware; only code that depends on Apple's kernel is rewritten, while Horizon services and NVN are hosted by this repository. Do not add support for another title here.
-- Game-specific constants, build IDs, shader tables, prewarm data and bring-up notes live in `dm/games/01004AB00A260000/`. The tools use this profile by default. Keep game-specific values in the profile rather than scattering them through host code.
-- Per-build knowledge is keyed by the NSO build ID in the profile's `build` rows and any host code that uses fixed module addresses. The rewriter accepts only registered module builds for this title and applies no game-specific cuts. Any fixed-address behaviour must check the matching build ID before it runs.
-- The user's NSP files, keys, extracted files, caches, logs and binaries stay under the game's work folder in `game/`; never print key values or commit any of these artifacts.
-- `README.md` is the player-facing page in English; `README.zh-CN.md` is its Chinese counterpart. Keep both versions aligned and link them to each other. Other documentation and code comments are in English. Use the game's name naturally in documentation, with the title ID where it helps identify a build or profile.
-- Write authored runtime messages in English through `dm_log.h`: UTC millisecond timestamp, severity (`DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`), component and host thread ID. Keep a complete record under one stream lock; use explicit severity macros rather than localized markers. Preserve diagnostic addresses, error codes and units. Signal-context dumps retain their emergency descriptor fallback; historical logs remain verbatim. Diagnostic export filenames must contain an export timestamp.
-- After changing anything in the shader translation chain (`dm/gfx/tools/dmsh_*`, `dmsh_xlate/`, `dm/ios/tools/ios_metal.py`, or the target title's shader tables), regenerate `dmsh_chain.h`, rebuild the Mac/iOS shader libraries as applicable, regenerate `c1_full.tsv`, and rebuild the host. The host only accepts libraries with its own chain version.
-- Validate the target title after independent changes. At minimum use `python3 -m py_compile` for changed Python and `make -C dm/host GAME=01004AB00A260000 dmhost` for host changes; run focused tests when their targets build.
-- Do not sign IPA builds. Installing unsigned Simulator `.app` builds for validation is allowed. During testing, close, replace, or relaunch a running game instance when needed; avoid doing so outside a test step. Delete one-off helper scripts after use and do not commit them.
+This file is an index. Read the required guidance below when its condition
+applies; follow it as repository instructions. Load only the documents needed
+for the current task, rather than reading the whole directory in advance.
+
+| When | Required guidance |
+|---|---|
+| Starting any repository task | [Project scope and documentation](docs/agents/project.md) |
+| Receiving or discovering a bug, starting a fix, or handling another request during a fix | [Issues, branches, and task scope](docs/agents/issue-workflow.md) |
+| Reading, writing, exporting, or publishing diagnostic evidence | [Diagnostics and private data](docs/agents/diagnostics.md) |
+| Changing code, testing, building, packaging, or working on CI | [Validation and artifacts](docs/agents/validation.md) |
+| Committing, pushing, opening or reviewing a PR, or merging | [Review and merge workflow](docs/agents/review-and-merge.md) |
+
+Contributor-facing guidance is in [CONTRIBUTING.md](.github/CONTRIBUTING.md).
+Issue and PR forms are under [.github/](.github/).
