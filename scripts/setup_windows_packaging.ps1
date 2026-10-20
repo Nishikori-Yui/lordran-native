@@ -157,7 +157,12 @@ function Ensure-Zstd {
     $installRoot = Join-Path $Root "zstd-v$ZstdVersion"
     $archive = Join-Path $Root "zstd-v$ZstdVersion-win64.zip"
     New-Item -ItemType Directory -Force -Path $Root | Out-Null
-    if (-not (Test-Path -LiteralPath (Join-Path $installRoot 'zstd.exe') -PathType Leaf)) {
+    $downloaded = $null
+    if (Test-Path -LiteralPath $installRoot -PathType Container) {
+        $downloaded = Get-ChildItem -LiteralPath $installRoot -Filter 'zstd.exe' -File -Recurse |
+            Select-Object -First 1
+    }
+    if ($null -eq $downloaded) {
         Write-Step "Downloading official zstd v$ZstdVersion"
         if (-not (Test-Path -LiteralPath $archive -PathType Leaf) -or $Force) {
             Invoke-WebRequest -UseBasicParsing -Uri $ZstdUrl -OutFile $archive
@@ -171,9 +176,9 @@ function Ensure-Zstd {
             Remove-Item -LiteralPath $installRoot -Recurse -Force
         }
         Expand-Archive -LiteralPath $archive -DestinationPath $installRoot -Force
+        $downloaded = Get-ChildItem -LiteralPath $installRoot -Filter 'zstd.exe' -File -Recurse |
+            Select-Object -First 1
     }
-    $downloaded = Get-ChildItem -LiteralPath $installRoot -Filter 'zstd.exe' -File -Recurse |
-        Select-Object -First 1
     if ($null -eq $downloaded) {
         throw "The downloaded zstd archive did not contain zstd.exe: $ZstdUrl"
     }
