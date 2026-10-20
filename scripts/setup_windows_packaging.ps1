@@ -165,15 +165,33 @@ function Ensure-Zstd {
     if ($null -eq $downloaded) {
         Write-Step "Downloading official zstd v$ZstdVersion"
         if (-not (Test-Path -LiteralPath $archive -PathType Leaf) -or $Force) {
-            Invoke-WebRequest -UseBasicParsing -Uri $ZstdUrl -OutFile $archive
+            $download = Join-Path $Root "zstd-v$ZstdVersion.download-$([guid]::NewGuid().ToString('N')).zip"
+            try {
+                Invoke-WebRequest -UseBasicParsing -Uri $ZstdUrl -OutFile $download
+                $downloadHash = (Get-FileHash -Algorithm SHA512 -LiteralPath $download).Hash.ToLowerInvariant()
+                if ($downloadHash -ne $ZstdSha512) {
+                    throw "The downloaded zstd archive failed its SHA-512 check: $ZstdUrl"
+                }
+                if (Test-Path -LiteralPath $archive) {
+                    $backup = "$archive.backup-$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ'))"
+                    Move-Item -LiteralPath $archive -Destination $backup
+                    Write-Host "Existing zstd archive moved to: $backup" -ForegroundColor Yellow
+                }
+                Move-Item -LiteralPath $download -Destination $archive
+            } finally {
+                if (Test-Path -LiteralPath $download) {
+                    Remove-Item -LiteralPath $download -Force
+                }
+            }
         }
         $archiveHash = (Get-FileHash -Algorithm SHA512 -LiteralPath $archive).Hash.ToLowerInvariant()
         if ($archiveHash -ne $ZstdSha512) {
-            Remove-Item -LiteralPath $archive -Force
-            throw "The downloaded zstd archive failed its SHA-512 check: $ZstdUrl"
+            throw "The existing zstd archive failed its SHA-512 check and was left untouched. Rerun with -Force to download a verified copy: $archive"
         }
         if (Test-Path -LiteralPath $installRoot) {
-            Remove-Item -LiteralPath $installRoot -Recurse -Force
+            $backup = "$installRoot.backup-$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ'))"
+            Move-Item -LiteralPath $installRoot -Destination $backup
+            Write-Host "Existing zstd directory moved to: $backup" -ForegroundColor Yellow
         }
         Expand-Archive -LiteralPath $archive -DestinationPath $installRoot -Force
         $downloaded = Get-ChildItem -LiteralPath $installRoot -Filter 'zstd.exe' -File -Recurse |
