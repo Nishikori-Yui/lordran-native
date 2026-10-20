@@ -13,15 +13,17 @@ export DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer
 xcrun --sdk iphoneos clang -target arm64-apple-ios26.0 -O1 -g -fobjc-arc -Wall \
     "$SOURCE/metal_probe.m" -framework UIKit -framework Foundation -framework Metal \
     -o "$APP/MetalProbe"
-python3 - "$OUT" <<'PY'
+python3 - "$OUT" "$ROOT" <<'PY'
 import pathlib
 import plistlib
 import sys
 import zipfile
 
 out = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(pathlib.Path(sys.argv[2]) / "dm/games"))
+import game
 app = out / "Payload/MetalProbe.app"
-info = dict(CFBundleIdentifier="org.nxnative.vphone-metal-probe",
+info = dict(CFBundleIdentifier=game.load().bundle_id() + ".vphone-metal-probe",
             CFBundleExecutable="MetalProbe", CFBundleName="Metal Probe",
             CFBundlePackageType="APPL", CFBundleVersion="1",
             CFBundleShortVersionString="1.0", MinimumOSVersion="26.0",

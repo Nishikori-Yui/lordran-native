@@ -40,7 +40,7 @@ Build a small, unsigned probe without rebuilding or bundling the game:
 bash dm/ios/vphone/build_metal_probe.sh game/01004AB00A260000-work/build/vphone-metal-probe
 ```
 
-The probe has bundle ID `org.nxnative.vphone-metal-probe`. Install it only into
+The probe derives its Bundle ID from the profile: `dev.nishikori.lordran-native.vphone-metal-probe`. Install it only into
 an authorized virtual test guest. Its UI and `Documents/metal-probe.txt` report
 the device class and GPU families, argument-buffer tier, a completed basic
 render with pixel readback, residency-set creation at two capacities, and
