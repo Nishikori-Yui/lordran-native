@@ -31,15 +31,23 @@ assignees: []
 
 ## 诊断信息
 
-<!-- Attach an exported diagnostic report or paste a short relevant excerpt. -->
+<!-- Paste a short sanitized excerpt with useful timestamps, error codes and units. Keep full reports private; remove personal paths, usernames, device identifiers, machine addresses, access details and private game data. -->
 
+- 日志时间 / 时区：
 - 复现频率：
 - 最后一个正常工作的版本：
 - 重启 App 后是否仍然出现：
 
 ```text
-请粘贴相关日志片段。
+请粘贴脱敏后的相关日志片段；没有日志时请说明。
 ```
+
+## 定位情况
+
+- 已确认的现象：
+- 疑似原因（尚未证实）：
+- 缺失信息 / 待验证事项：
+- 相关 issue / PR（如有）：
 
 ## 其他信息
 
@@ -50,3 +58,4 @@ assignees: []
 - [ ] 我测试了最新构建，或注明了实际测试的 commit / IPA。
 - [ ] 我已删除私钥、NSP、存档和无关的个人数据。
 - [ ] 我提供了复现步骤和相关诊断信息。
+- [ ] 我区分了已确认现象、疑似原因和尚未验证的结论。

@@ -27,3 +27,8 @@ assignees: []
 - [ ]
 
 ## 其他信息
+
+- 相关 issue / PR（如有）：
+- 与当前修复的关系（如适用）：
+
+<!-- A request recorded during another fix remains separate unless the user explicitly approves changing that fix's scope or priority. -->
