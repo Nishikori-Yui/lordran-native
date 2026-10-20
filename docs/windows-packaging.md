@@ -70,6 +70,33 @@ SHA-256 file, and the Python interpreter path. Keep those values for the
 packaging commands below. It uses CMake's Visual Studio generator, so this
 automatic route does not require a separate Developer PowerShell window.
 
+### Set up and build in one run
+
+The setup script can continue directly into packaging. First put the shell ZIP
+from the same release as this checkout, your base and `v196608` update NSPs,
+and your `prod.keys` in `game/01004AB00A260000/`. The shell and source must match;
+the script does not download a shell, game files, or keys. Then run:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -Build
+```
+
+This installs/checks the public toolchain, prepares the Python environment,
+runs the shell compatibility preflight, builds the unsigned IPA, and verifies
+the resulting archive. By default, the input paths above are used and the
+timestamped IPA is written beside the NSPs. To package after a previous setup,
+run the same command with `-SkipInstall -SkipSpirvCross`; the saved pinned
+SPIRV-Cross executable and hash are checked before use:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -SkipInstall -SkipSpirvCross -Build
+```
+
+Useful build options include `-NspDirectory`, `-KeysFile`, `-ShellZip`, and
+`-OutputPath` (all paths must remain under this checkout's `game/` folder),
+`-Package v0`, and `-KeepExtracted`. The script refuses to overwrite an
+existing output unless you also pass `-ReplaceOutput`.
+
 The script can be run again safely when the checkout is already prepared. Useful
 options are:
 

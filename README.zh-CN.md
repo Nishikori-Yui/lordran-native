@@ -160,6 +160,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_
 
 Visual Studio Build Tools 可能会请求管理员确认；脚本还需要联网下载公开安装程序和 SPIRV-Cross。运行结束后会打印后续打包所需的程序路径和 SHA-256。然后从同一个 Release 下载匹配的壳 ZIP，并把游戏本体 NSP、1.0.3 更新 NSP 和自己的 `prod.keys` 放入私有的 `game/01004AB00A260000/` 目录（该目录已被 Git 忽略）。
 
+准备好这 4 个输入文件后，也可以在一次运行中完成依赖配置和 IPA 构建：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -Build
+```
+
+如果已经完成环境配置，加上 `-SkipInstall -SkipSpirvCross -Build` 即可重新检查已保存的工具链并打包，无需重复安装。脚本会校验生成的 IPA；签名和侧载仍由你自行完成。
+
 如果不使用上面的自动配置脚本、而是按照 [Windows 文档](docs/windows-packaging.zh-CN.md#环境要求)的备用流程操作，请先配置指定版本的 SPIRV-Cross 并记录 `$spirvCrossSha256`。建议在仓库的私有 `game/` 目录中创建虚拟环境，并直接调用其解释器；这样无需修改 PowerShell 执行策略，也不会把依赖装到其他 Python 环境：
 
 ```powershell

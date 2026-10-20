@@ -3,6 +3,15 @@ param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path,
     [string]$ToolRoot = (Join-Path $env:USERPROFILE 'src'),
     [string]$ZstdPath,
+    [string]$NspDirectory,
+    [string]$KeysFile,
+    [string]$ShellZip,
+    [string]$OutputPath,
+    [string]$Package,
+    [switch]$Build,
+    [switch]$KeepExtracted,
+    [switch]$ReplaceOutput,
+    [switch]$Help,
     [switch]$SkipInstall,
     [switch]$SkipVisualStudio,
     [switch]$SkipSpirvCross,
@@ -10,6 +19,42 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ($Help) {
+    @'
+Set up the Windows packaging toolchain and optionally build an unsigned iOS IPA.
+
+Usage:
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 [options]
+
+Options:
+  -Build                 Build an IPA after setup. Requires your matching shell ZIP,
+                         base/update NSPs, and prod.keys under this checkout's game\ folder.
+  -NspDirectory PATH     Folder containing your base and update NSPs.
+                         Default: game\01004AB00A260000.
+  -KeysFile PATH         Your prod.keys file. Default: game\01004AB00A260000\prod.keys.
+  -ShellZip PATH         Matching game-free shell ZIP. Default: game\01004AB00A260000\LordranNative-shell-build-input.zip.
+  -OutputPath PATH       IPA output under game\. Default: a timestamped name beside the NSPs.
+  -Package VERSION       Registered game version, e.g. v196608 or v0.
+  -KeepExtracted         Keep extracted game files after a successful build.
+  -ReplaceOutput         Allow replacing the exact existing IPA named by -OutputPath.
+  -SkipInstall           Skip winget installs; existing dependencies are still checked.
+  -SkipVisualStudio      Do not install Visual Studio Build Tools (it must already exist).
+  -SkipSpirvCross        Reuse the pinned SPIRV-Cross checkout after verifying its saved hash.
+  -ZstdPath PATH         Use an existing zstd.exe.
+  -ToolRoot PATH         Store zstd and SPIRV-Cross under this directory.
+  -Force                 Move unexpected zstd/SPIRV-Cross data aside before reinstalling.
+  -Help                  Show this help.
+
+The script installs public tools only. It never downloads NSPs, keys, or game data.
+'@ | Write-Host
+    return
+}
+
+if (-not $Build -and ($NspDirectory -or $KeysFile -or $ShellZip -or $OutputPath -or
+        $Package -or $KeepExtracted -or $ReplaceOutput)) {
+    throw 'Build-specific options require -Build. Use -Help to see the supported options.'
+}
 
 $SpirvCrossTag = 'vulkan-sdk-1.4.357.0'
 $SpirvCrossCommit = '6c09849fe88c48eaed08413aa022aaa136a3a057'
@@ -39,7 +84,7 @@ function Invoke-Checked {
     )
     & $Command @Arguments
     if ($LASTEXITCODE -ne 0) {
-        throw "Command failed with exit code $LASTEXITCODE: $Command $($Arguments -join ' ')"
+        throw "Command failed with exit code ${LASTEXITCODE}: $Command $($Arguments -join ' ')"
     }
 }
 
@@ -51,7 +96,7 @@ function Invoke-Captured {
     $output = & $Command @Arguments 2>&1
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
-        throw "Command failed with exit code $exitCode: $Command $($Arguments -join ' ')`n$($output -join "`n")"
+        throw "Command failed with exit code ${exitCode}: $Command $($Arguments -join ' ')`n$($output -join "`n")"
     }
     return ($output -join "`n").Trim()
 }
@@ -89,6 +134,28 @@ function Install-WingetPackage {
     }
     Invoke-Checked $winget $arguments
     Refresh-Path
+}
+
+function Resolve-RepoPath {
+    param([string]$Path, [string]$DefaultPath)
+    $resolved = if ([string]::IsNullOrWhiteSpace($Path)) { $DefaultPath } else { $Path }
+    if (-not [IO.Path]::IsPathRooted($resolved)) {
+        $resolved = Join-Path $RepoRoot $resolved
+    }
+    return [IO.Path]::GetFullPath($resolved)
+}
+
+function Resolve-PrivatePath {
+    param([string]$Path, [string]$DefaultPath)
+    $resolved = Resolve-RepoPath $Path $DefaultPath
+    $privateRoot = [IO.Path]::GetFullPath((Join-Path $RepoRoot 'game')).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $privatePrefix = $privateRoot + [IO.Path]::DirectorySeparatorChar
+    if ($resolved -ne $privateRoot -and
+        -not $resolved.StartsWith($privatePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Build paths must stay under this checkout's game directory: $privateRoot"
+    }
+    return $resolved
 }
 
 function Get-PythonCommand {
@@ -224,7 +291,7 @@ function Ensure-SpirvCross {
         }
         $actualSource = (Invoke-Captured 'git' @('-C', $sourceRoot, 'rev-parse', 'HEAD')).Trim()
         if ($actualSource -ne $SpirvCrossCommit) {
-            throw "-SkipSpirvCross was specified, but the checkout is not pinned to $SpirvCrossCommit: $actualSource"
+            throw "-SkipSpirvCross was specified, but the checkout is not pinned to ${SpirvCrossCommit}: $actualSource"
         }
         $buildRoot = Join-Path $sourceRoot 'build-vs'
         $existing = Get-ChildItem -LiteralPath $buildRoot -Filter 'spirv-cross.exe' -File -Recurse |
@@ -420,28 +487,63 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
 Invoke-Checked $python @('-m', 'pip', 'install', '--upgrade', 'pip')
 Invoke-Checked $python @('-m', 'pip', 'install', 'lz4', 'capstone', 'fonttools')
 
-Write-Step 'Running the repository preflight check'
 New-Item -ItemType Directory -Force -Path $buildWork | Out-Null
-Invoke-Checked $python @(
-    (Join-Path $RepoRoot 'scripts/player_support.py'), 'doctor',
-    '--route', 'shell', '--work-dir', $buildWork,
-    '--spirv-cross-sha256', $spirv.Hash
-)
+$supportScript = Join-Path $RepoRoot 'scripts/player_support.py'
+$defaultNspDirectory = $gameDir
+$defaultKeysFile = Join-Path $gameDir 'prod.keys'
+$defaultShellZip = Join-Path $gameDir 'LordranNative-shell-build-input.zip'
 
-$shell = Join-Path $gameDir 'LordranNative-shell-build-input.zip'
-$keys = Join-Path $gameDir 'prod.keys'
+if ($Build) {
+    Write-Step 'Building and verifying the unsigned iOS IPA'
+    if ($ReplaceOutput -and -not $OutputPath) {
+        throw '-ReplaceOutput requires -OutputPath so the exact file to replace is explicit.'
+    }
+    $buildNspDirectory = Resolve-PrivatePath $NspDirectory $defaultNspDirectory
+    $buildKeysFile = Resolve-PrivatePath $KeysFile $defaultKeysFile
+    $buildShellZip = Resolve-PrivatePath $ShellZip $defaultShellZip
+    foreach ($item in @(
+        @{ Path = $buildNspDirectory; Kind = 'Container'; Label = 'NSP folder' },
+        @{ Path = $buildKeysFile; Kind = 'Leaf'; Label = 'prod.keys file' },
+        @{ Path = $buildShellZip; Kind = 'Leaf'; Label = 'matching shell ZIP' }
+    )) {
+        if (-not (Test-Path -LiteralPath $item.Path -PathType $item.Kind)) {
+            throw "Missing $($item.Label): $($item.Path). Put your own files under game/ or pass the matching path."
+        }
+    }
+
+    $buildArgs = @(
+        $supportScript, 'build', $buildNspDirectory,
+        '--keys', $buildKeysFile,
+        '--shell', $buildShellZip,
+        '--spirv-cross-sha256', $spirv.Hash
+    )
+    if ($OutputPath) { $buildArgs += @('--out', (Resolve-PrivatePath $OutputPath '')) }
+    if ($Package) { $buildArgs += @('--package', $Package) }
+    if ($KeepExtracted) { $buildArgs += '--keep-extracted' }
+    if ($ReplaceOutput) { $buildArgs += '--replace' }
+    Invoke-Checked -Command $python -Arguments $buildArgs
+} else {
+    Write-Step 'Running the repository preflight check'
+    Invoke-Checked $python @(
+        $supportScript, 'doctor',
+        '--route', 'shell', '--work-dir', $buildWork,
+        '--spirv-cross-sha256', $spirv.Hash
+    )
+}
+
 Write-Host ''
-Write-Host 'Setup completed.' -ForegroundColor Green
+if ($Build) {
+    Write-Host 'Setup and IPA build completed.' -ForegroundColor Green
+} else {
+    Write-Host 'Setup completed.' -ForegroundColor Green
+}
 Write-Host "SPIRV-Cross: $($spirv.Path)"
 Write-Host "SHA-256:     $($spirv.Hash)"
 Write-Host "Hash file:   $($spirv.HashFile)"
 Write-Host "Python:      $python"
-Write-Host ''
-Write-Host 'Next steps (manual files are intentionally not downloaded):' -ForegroundColor Yellow
-Write-Host "1. Put the matching shell ZIP at: $shell"
-Write-Host "2. Put your own base/update NSPs and prod.keys under: $gameDir"
-Write-Host '3. In a new PowerShell window, read the saved hash and run the shell doctor:'
-Write-Host "   `$SpirvCrossSha256 = (Get-Content -Raw '$($spirv.HashFile)').Trim().ToLowerInvariant()"
-Write-Host "   `$Python = (Resolve-Path '$python').Path"
-Write-Host "   & `$Python '$RepoRoot\scripts\player_support.py' doctor --route shell --shell '$shell' --work-dir '$buildWork' --spirv-cross-sha256 `$SpirvCrossSha256"
+if (-not $Build) {
+    Write-Host ''
+    Write-Host 'After downloading the matching public shell ZIP and placing your own NSPs and prod.keys under game/, build and verify the IPA with:' -ForegroundColor Yellow
+    Write-Host '   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -SkipInstall -SkipSpirvCross -Build'
+}
 Write-Host 'The setup script did not access or print any key, NSP, or private game data.'

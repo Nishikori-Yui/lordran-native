@@ -39,6 +39,22 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_
 
 脚本使用 `winget` 安装 Git、Python 3.12、.NET 10、CMake、Ninja 和 Visual Studio Build Tools。Visual Studio 安装程序可能弹出 UAC 管理员确认，并需要几分钟；公开工具和 SPIRV-Cross 的下载需要联网。脚本结束时会打印 SPIRV-Cross 程序路径、SHA-256 文件和 Python 解释器路径，请保留这些信息供后续打包命令使用。自动流程使用 CMake 的 Visual Studio 生成器，不需要另外打开 Developer PowerShell。
 
+### 一次完成环境配置和打包
+
+配置脚本也可以在依赖安装后直接继续打包。先把与当前源码 checkout 来自同一 Release 的公开壳 ZIP、你自己的游戏本体 NSP、`v196608` 更新 NSP 和 `prod.keys` 放入 `game/01004AB00A260000/`。壳和源码版本必须一致；脚本不会下载壳、游戏文件或密钥。然后执行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -Build
+```
+
+脚本会安装/检查公开工具链、准备 Python 环境、执行壳兼容性预检、构建未签名 IPA 并检查生成的归档。默认使用上面的输入路径，IPA 会以带时间戳的名称输出到 NSP 同目录。若之前已经完成环境配置，可加上 `-SkipInstall -SkipSpirvCross`，脚本会验证已保存的 SPIRV-Cross 程序及其指纹后直接构建：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -SkipInstall -SkipSpirvCross -Build
+```
+
+可用 `-NspDirectory`、`-KeysFile`、`-ShellZip` 和 `-OutputPath` 指定其他输入/输出路径（都必须位于当前 checkout 的 `game/` 目录下），用 `-Package v0` 选择打包版本，或用 `-KeepExtracted` 保留解包数据。若目标 IPA 已存在，脚本默认拒绝覆盖；确认后再加 `-ReplaceOutput`。
+
 脚本可以安全地再次运行。常用选项如下：
 
 ```powershell

@@ -61,6 +61,7 @@ jobs:
             $errors | ForEach-Object { Write-Error $_.Message }
             exit 1
           }
+          & (Join-Path $env:GITHUB_WORKSPACE 'scripts/setup_windows_packaging.ps1') -Help
 
       - name: Check Mac setup script and launcher syntax
         if: runner.os == 'macOS'

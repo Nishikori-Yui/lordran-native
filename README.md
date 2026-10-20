@@ -216,6 +216,17 @@ it finishes, download the matching shell ZIP from the same release, then put
 the base game NSP, the 1.0.3 update NSP, and your own `prod.keys` in the
 private `game/01004AB00A260000/` directory (that directory is ignored by Git).
 
+To install dependencies and build the unsigned IPA in one run after placing all
+four inputs above, use `-Build`:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -Build
+```
+
+If setup has already completed, add `-SkipInstall -SkipSpirvCross -Build` to
+recheck the saved toolchain and build without reinstalling it. The script
+verifies the resulting IPA; signing and sideloading remain your steps.
+
 If you are following the manual fallback in the [Windows guide](docs/windows-packaging.md#requirements) instead of the setup script, first build the pinned SPIRV-Cross executable and record `$spirvCrossSha256`. Create a private Python environment, then use its interpreter for the preflight and build. This avoids changing PowerShell's activation policy or installing dependencies into another Python environment:
 
 ```powershell
