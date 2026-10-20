@@ -2,6 +2,10 @@
 
 The [README](../README.md) covers requirements, IPA packaging, controls and troubleshooting. This guide covers the Dark Souls: Remastered implementation (`01004AB00A260000`), packer options, manual Mac builds and regression checks. For extraction, bring-up failures and capture recipes, see the [porting and debugging guide](porting/README.md).
 
+Player setup, unsigned artifact inspection, and issue-draft commands are
+collected in the [player support section](../README.md#local-support-commands)
+and [support skill](../skills/lordran-native-support/SKILL.md).
+
 ## How it works
 
 | Part | Responsibility |

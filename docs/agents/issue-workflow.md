@@ -1,5 +1,18 @@
 # Issues, branches, and task scope
 
+## Player feedback requests
+
+When a player asks to understand a log or prepare feedback, generate a local
+draft using the current issue template. They do not need a GitHub login or a
+build environment for this. Do not publish an issue or start implementation
+unless requested. If they ask for submission, show the sanitized draft first
+and use their explicit authorization. When available, check existing issues
+and offer a supplemental comment draft for a matching report.
+
+The [player support skill](../../skills/lordran-native-support/SKILL.md) routes
+these requests to the existing documentation and helpers. If the player instead
+authorizes a repository fix, use the maintainer workflow below.
+
 ## Report the bug first
 
 1. Search existing issues and PRs before creating a duplicate. For every newly

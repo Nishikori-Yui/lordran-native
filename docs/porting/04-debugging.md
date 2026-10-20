@@ -83,7 +83,7 @@ Patterns that worked: print every call of one function with its arguments; stop 
 
 ## Memory growth
 
-1. The host's memory report line (`内存 至帧 …`) every few hundred frames; `footprint -p <pid>` from outside. On a phone, a crash with no log usually means `离系统内存上限还有` reached 0.
+1. Compare the host's memory report line (`内存 至帧 …`) and `footprint -p <pid>` readings over time. A missing final app-log line does not establish why iOS terminated the process; confirm memory-pressure termination from the corresponding system diagnostic or Jetsam report. An earlier memory snapshot alone is not proof of the termination cause.
 2. `vmmap -summary <pid>` twice a few seconds apart: which region grows. "owned unmapped (graphics)" = private Metal resources.
 3. `DM_NVN_ALLOCPROF=1`: growth per replayed op type and per function (`tex_mtl` / pass begin / pipelines / argument buffers), command allocator sizes, and a log of new textures with serial, size, format and storage. A stream of new serials with the same sizes = objects re-created every frame.
 
@@ -100,6 +100,8 @@ See [03](03-graphics.md) section 7. Notes: pass dumps are large and may contain 
 ## On-device diagnostics (iOS)
 
 The phone runs an unsigned IPA the user sideloads; nothing is attached to a debugger. The loop is: build an IPA with switches, the user plays and sends `Documents/log.txt` (the previous launch is `log.prev.txt`), read it, repeat.
+
+For player-submitted evidence, use the [export and feedback instructions](../../README.md#troubleshooting) and [player support skill](../../skills/lordran-native-support/SKILL.md). `scripts/prepare_issue.py` can produce a local sanitized draft using the current issue template; preview its redactions before sharing. Do not treat a report excerpt as a substitute for an OS crash or Jetsam report when termination reason matters.
 
 - **Switches**: `DM_ENV_FILE=<file> dm/ios/tools/build_ipa.sh` bakes `KEY=VALUE` lines into the app (`dm/env.txt`); `Documents/env.txt` overrides diagnostic switches without a rebuild. Language (`DM_LANG`), operation mode (`DM_OPMODE`) and the performance panel (`DM_HUD`) are controlled by the in-game floating menu instead. Every applied environment switch is logged at boot (`boot: 环境 KEY=VALUE（来源文件）`). The app's working directory is `Documents`, so relative output paths (`DM_NVN_SHOT=3600:shot_%d.png`, `DM_NVN_TEXDUMP`) land where the Files app can reach them.
 - **Which build ran**: the first lines name the modules (`main: … patch_off …`), the shader map size (`映射表 N 条`) and, for builds that have it, the build-ID gate line. Compare them with the build you sent before reading further; users sometimes send an old log. The save path (`fs 挂载 save:`) shows the data folder, which changes when a sideloading tool gives a reinstall a new one.
