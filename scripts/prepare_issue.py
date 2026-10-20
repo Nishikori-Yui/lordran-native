@@ -60,11 +60,15 @@ def read_report(path):
         raise ValueError("Report exceeds 32 MiB; provide an exported diagnostic report or a smaller selected build log")
     text = path.read_text(encoding="utf-8-sig", errors="replace")
     metadata, end = {}, 0
-    start = text.find("{")
-    if 0 <= start < 256:
+    header = re.match(r"\A(?:[^\[\]\r\n]{1,200} diagnostics\r?\n)?\s*(?=\{)", text)
+    if header:
+        start = header.end()
         try:
             value, length = json.JSONDecoder().raw_decode(text[start:])
-            if isinstance(value, dict):
+            remainder = text[start + length:]
+            boundary = not remainder.strip() or re.match(r"\s*===== [^\r\n]+ =====(?:\r?\n|$)", remainder)
+            if (isinstance(value, dict) and isinstance(value.get("exported_at"), str) and
+                    any(key in value for key in ("app_version", "device_model", "log_schema_version")) and boundary):
                 metadata, end = value, start + length
         except json.JSONDecodeError:
             pass
@@ -73,6 +77,8 @@ def read_report(path):
     sections = [(parts[i], parts[i + 1]) for i in range(1, len(parts) - 1, 2)]
     if not sections:
         sections = [("provided log", text)]
+    elif parts[0].strip():
+        sections.insert(0, ("provided log (preamble)", parts[0]))
     return metadata, sections
 
 

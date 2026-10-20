@@ -80,6 +80,32 @@ class ReportTests(unittest.TestCase):
         self.assertIn("启动失败", draft)
         self.assertNotIn("已修复", draft)
 
+    def test_plain_inline_and_standalone_json_do_not_hide_errors(self):
+        for text in (
+            '[ERROR] Build failed config={"exit_code":17}\n[INFO] cleanup finished\n',
+            '{"level":"ERROR","message":"Build failed","exit_code":17}\n[INFO] cleanup finished\n',
+            '[ERROR] Build failed config={"exit_code":17}\n===== worker.log =====\n[INFO] cleanup finished\n',
+        ):
+            with self.subTest(text=text):
+                metadata, sections = report.read_report(self.write(text))
+                excerpt, observations = report.evidence(sections)
+                self.assertEqual(metadata, {})
+                self.assertIn("Build failed", excerpt)
+                self.assertIn("1 条错误", observations)
+
+    def test_export_headers_are_identified_by_metadata_and_body_boundary(self):
+        metadata = dict(exported_at="2026-10-20T04:57:51.920Z", app_version="1.0")
+        for prefix in ("Dark Souls: Remastered diagnostics\n", ""):
+            text = prefix + json.dumps(metadata) + "\n===== log.txt =====\n[ERROR] known failure\n"
+            parsed, sections = report.read_report(self.write(text))
+            self.assertEqual(parsed, metadata)
+            self.assertEqual(sections[0][0], "log.txt")
+            self.assertEqual(sections[0][1].strip(), "[ERROR] known failure")
+        incomplete = 'Dark Souls: Remastered diagnostics\n{"exported_at":"unfinished'
+        parsed, sections = report.read_report(self.write(incomplete))
+        self.assertEqual(parsed, {})
+        self.assertIn("unfinished", sections[0][1])
+
     def test_user_fields_cannot_inject_extra_markdown_sections(self):
         path = self.write("[ERROR] failed")
         draft = self.draft(path, symptom="launch failed\n## Injected section [link](https://example.invalid)",
