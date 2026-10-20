@@ -6,7 +6,7 @@
 
 - Issue:
 
-<!-- Bug fixes must have an issue before implementation. Use Closes #<number> only for a fully addressed issue; otherwise reference it without closing it. For a task without an issue, explain why it is not applicable. -->
+<!-- Bug fixes need an issue before implementation, except review findings corrected within this PR, which use review comments. Independent, deferred, or out-of-scope review findings need an issue. Use Closes #<number> only for a fully addressed issue; otherwise reference it without closing it. For a task without an issue, explain why it is not applicable. -->
 
 ## Change type
 
@@ -73,7 +73,7 @@ Do not commit NSP files, keys, saves, shader caches, private logs, or signed/pro
 ## Checklist
 
 - [ ] The change is limited to the stated scope.
-- [ ] Bug fixes reference an issue filed before implementation; unrelated requirements remain separate.
+- [ ] Bug fixes reference an issue when required; corrections within this PR use review comments, and unrelated or deferred work remains separate.
 - [ ] I added or updated focused tests where behavior changed.
 - [ ] I ran the relevant build and test commands.
 - [ ] I checked `git diff --check`.

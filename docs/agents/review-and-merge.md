@@ -28,9 +28,11 @@
 
 For each actionable finding:
 
-1. Follow the [issue workflow](issue-workflow.md) to create or update its bug
-   record. Findings within the already approved fix scope stay on that branch;
-   independent work needs a separate issue and implementation decision.
+1. Track a finding corrected within the current PR in its review comment;
+   do not create a separate issue for each correction. Create or update an
+   issue only when the finding needs independent handling, is deferred, or
+   falls outside the current PR's scope. Follow the
+   [issue workflow](issue-workflow.md) for that separate work.
 2. Before correcting it, post an English PR review comment describing severity,
    the affected code, a concrete trigger, impact, and the proposed correction.
    Include short sanitized evidence where useful.
