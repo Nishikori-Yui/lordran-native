@@ -82,6 +82,8 @@ Windows 使用你从指定上游源码构建的可执行文件的完整 SHA-256�
 
 输出路径必须位于当前仓库的 `game/` 下。默认输出为 `<NSP 文件夹>/DarkSoulsRemastered.ipa`。不要让两个打包进程同时使用同一个工作目录。
 
+空壳默认 Bundle ID 从游戏 profile 读取，为 `dev.nishikori.lordran-native`。注入器继承匹配空壳的 ID，也可用 `--bundle-id` 覆盖；`Guest.framework` 使用最终 App ID 加 `.guest`。空壳生成器和辅助打包命令也支持 `--bundle-id`。请下载与当前源码版本完全匹配的新空壳，不要混用旧空壳和新打包器。
+
 ## 安装与首次启动
 
 从 Actions 下载的 ZIP 只是壳构建输入。请用 AltStore 或 Sideloadly 等工具对最终 IPA 签名和侧载；该工具需要用你自己的身份替换占位签名信息。Windows 无法运行 Apple Metal 编译器，因此 IPA 会将 MSL 源码作为着色器库内容。iOS 首次使用时会逐个编译着色器并缓存；首次加载场景可能要等几分钟。之后的启动会复用系统缓存。此流程尚未在所有 iOS 设备上验证。

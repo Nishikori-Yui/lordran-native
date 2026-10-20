@@ -50,12 +50,12 @@ What the script does:
 5. It builds the iOS shader libraries.
 6. It calls `build_ipa.sh`.
 
-Everything it writes stays in the NSP folder: intermediate files and logs in `<id>_build/`, the IPA next to the NSPs. The extracted game files are deleted at the end unless you pass `--keep-extracted`. It exits with 0 when done and 1 on an error. The app's bundle ID is `org.nxnative.01004ab00a260000`; `--app-name` / `--bundle-id` (or `APP_NAME` / `BUNDLE_ID` in Spyder) override the name and ID.
+Everything it writes stays in the NSP folder: intermediate files and logs in `<id>_build/`, the IPA next to the NSPs. The extracted game files are deleted at the end unless you pass `--keep-extracted`. It exits with 0 when done and 1 on an error. The default app Bundle ID is `dev.nishikori.lordran-native`, read from the profile's `bundle_id`; `--app-name` / `--bundle-id` (or `APP_NAME` / `BUNDLE_ID` in Spyder) override the name and ID.
 
-Lordran Native retains the existing `org.nxnative` bundle identifiers so the
-project rename preserves installed app identities and their data directories.
-The clone examples use the existing GitHub repository URL with
-`lordran-native` as the local directory name.
+The CI shell uses the same profile identity. Shell injection inherits the
+matching shell's Bundle ID unless `--bundle-id` is supplied; the generated
+Guest framework always uses `<final-app-bundle-id>.guest`. Both shell production
+and the player-support build command also accept `--bundle-id`.
 
 The packer uses `<NSP folder>/01004AB00A260000_build/`; the manual procedure below uses a separate `<NSP folder>/01004AB00A260000-work/` layout. Their extraction and cache paths differ. Do not use one layout's paths in the other without setting the appropriate overrides.
 

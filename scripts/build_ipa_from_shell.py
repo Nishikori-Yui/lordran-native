@@ -66,6 +66,11 @@ def check_tools(expected_hash=None):
     return dotnet
 
 
+def application_info(info, profile, name, bundle_id=None):
+    identity = profile.bundle_id(info.get("CFBundleIdentifier") if bundle_id is None else bundle_id)
+    return dict(info, CFBundleDisplayName=name, CFBundleIdentifier=identity)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("nsp_dir", type=Path, help="Folder containing the base and update NSP")
@@ -76,6 +81,7 @@ def main():
                              "(default: DM_SPIRV_CROSS_SHA256)")
     parser.add_argument("-p", "--package", help="Profile package version (default: v196608)")
     parser.add_argument("-o", "--out", type=Path, help="Output IPA path")
+    parser.add_argument("--bundle-id", help="Override app identity (default: retain the matching shell's Bundle ID)")
     parser.add_argument("--keep-extracted", action="store_true")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
@@ -96,6 +102,7 @@ def main():
     info, shell_manifest, shell_files = validate_shell(shell, repo, profile)
     # Reject an incomplete toolchain before scanning or extracting private inputs.
     dotnet = check_tools(args.spirv_cross_sha256)
+    app_info = application_info(info, profile, info.get("CFBundleDisplayName", ""), args.bundle_id)
     app, family = source.scan_nsps(nsp_dir)
     if app != profile.title_id:
         raise ValueError(f"Unsupported title ID: {app:016X}")
@@ -167,11 +174,10 @@ def main():
          "import sys; sys.path.insert(0, sys.argv[1]); from guest_dylib import write; "
          "write(sys.argv[2], sys.argv[3], sys.argv[4].split(), sys.argv[5])",
          str(repo / "scripts"), str(patched), str(guest_dir),
-         " ".join(profile.words("modules")), f"org.nxnative.{profile.id.lower()}.guest"],
+         " ".join(profile.words("modules")), app_info["CFBundleIdentifier"] + ".guest"],
         logs / "guest_dylib.log", env)
     app_files = dict(shell_files)
-    app_files["Info.plist"] = plistlib.dumps(dict(
-        plistlib.loads(shell_files["Info.plist"]), CFBundleDisplayName=name))
+    app_files["Info.plist"] = plistlib.dumps(dict(app_info, CFBundleDisplayName=name))
     app_files.update({f"Frameworks/Guest.framework/{path.name}": path.read_bytes()
                       for path in (guest_dir / "Guest.framework").iterdir()})
     root = game_dir / "RomFS"

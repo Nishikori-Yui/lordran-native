@@ -2,7 +2,7 @@
 # Build one unsigned all-in-one IPA: the rewritten modules compiled into the executable, iOS shader libraries, and the game files (RomFS) at DmIOS.app/romfs. At install time a signing tool (AltStore / Sideloadly etc.) swaps in your own certificate and bundle ID.
 # Prerequisites: the rewriter (patched directory) and the iOS shader build (IOSOUT) have been run as in the README; Xcode and xcodegen are installed.
 # Usage: dm/ios/tools/build_ipa.sh [output.ipa]; environment: GAME=game profile (dm/games/<base game title ID>, required), W=the game's work folder (required: <NSP folder>/<title ID>-work, never the home folder), PATCHED / ROMFS / MSL_IOS can each be overridden
-#   The app name is the game name in the base NSP's control data ($W/data/v0/control.nacp, else the one next to the RomFS), the bundle ID is org.nxnative.<base game title ID in lowercase> (DM_DISPLAY_NAME / DM_BUNDLE_ID override them);
+#   The app name comes from the base NSP's control data; bundle_id comes from the game profile (DM_DISPLAY_NAME / DM_BUNDLE_ID override them);
 #   the IPA name, code modules, RomFS marker and shader tables come from the game profile
 #   DM_IOS_TARGET=simulator builds an arm64 Simulator .app.zip instead; MSL_IOS must contain Simulator libraries from build_simulator_shaders.py.
 set -u
@@ -37,7 +37,7 @@ DD=$O/dd
 MODS=$(gp modules); MARKER=$(gp romfs_marker)
 NACP=$W/data/v0/control.nacp; [ -f "$NACP" ] || NACP=$(dirname "$ROMFS")/control.nacp
 [ -n "${DM_DISPLAY_NAME:-}" ] || DM_DISPLAY_NAME=$(python3 "$DM/tools/nacp.py" "$NACP") || die "no game name in $NACP (re-extract with nx_extract, or set DM_DISPLAY_NAME)"
-export LC_ALL=C DM_BUNDLE_ID=${DM_BUNDLE_ID:-org.nxnative.$(echo "$GAME" | tr 'A-Z' 'a-z')} DM_DISPLAY_NAME DM_APP_CATEGORY=$(gp app_category) DM_TEAM_ID=${DM_TEAM_ID:-0000000000}   # placeholder identity: unsigned, the install tool replaces it
+export LC_ALL=C DM_BUNDLE_ID=${DM_BUNDLE_ID:-$(gp bundle_id)} DM_DISPLAY_NAME DM_APP_CATEGORY=$(gp app_category) DM_TEAM_ID=${DM_TEAM_ID:-0000000000}   # placeholder identity: unsigned, the install tool replaces it
 for f in $MODS; do [ -f "$PATCHED/$f.patched.bin" ] && [ -f "$PATCHED/$f.fixups.tsv" ] || die "no rewritten module $PATCHED/$f (run dm/tools/patch_nso.py first)"; done
 [ -e "$ROMFS/$MARKER" ] || die "no RomFS at $ROMFS (missing $MARKER)"
 V=$(sed -n 's/^#define DMSH_CHAIN "\(.*\)"/\1/p' "$GD/dmsh_chain.h")

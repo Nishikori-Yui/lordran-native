@@ -174,6 +174,12 @@ The shell and source checkout must come from the same release. Before building, 
 
 Use your sideloading tool to sign and install the unsigned IPA. The app uses the game's name and icon from the NSP.
 
+The default Bundle ID is `dev.nishikori.lordran-native`, shared by the
+native, Simulator, and CI shell builds. Use `--bundle-id` with either Python
+packer or the support build command to override it; manual builds accept
+`DM_BUNDLE_ID`. Windows injection retains the shell's ID unless overridden,
+and its Guest framework uses `<app-bundle-id>.guest`.
+
 ## Controls
 
 - **Touch:** the left stick moves your character. In the 3D layout, swipe empty screen space to turn the camera; stopping or lifting your finger stops the turn. **Input & controller → Touch camera** provides separate horizontal and vertical inversion switches and sensitivity from 0.25x to 3x (default 1x). These preferences apply immediately to swiping and the virtual right stick, and are saved for the next launch. Buttons are handled separately, and R3 locks on to a target.

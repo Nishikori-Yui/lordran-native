@@ -197,6 +197,7 @@ def verify(path, *, target="device", full_crc=False, match_source=False):
         info = plistlib.loads(read_member(archive, root + "Info.plist"))
         if not isinstance(info, dict):
             raise ValueError("Info.plist must contain an application dictionary")
+        app_identity = g.bundle_id(info.get("CFBundleIdentifier", ""))
         executable = info.get("CFBundleExecutable")
         if not isinstance(executable, str) or "/" in executable or "\\" in executable or executable in ("", ".", ".."):
             raise ValueError("Invalid CFBundleExecutable")
@@ -233,6 +234,9 @@ def verify(path, *, target="device", full_crc=False, match_source=False):
             guest = executable_info(archive, root + "Frameworks/Guest.framework/Guest")
             if guest["target"] != actual:
                 raise ValueError("Guest framework and host executable platforms disagree")
+            guest_info = plistlib.loads(read_member(archive, root + "Frameworks/Guest.framework/Info.plist"))
+            if not isinstance(guest_info, dict) or guest_info.get("CFBundleIdentifier") != app_identity + ".guest":
+                raise ValueError("Guest framework Bundle ID must derive from the app Bundle ID")
         elif match_source:
             raise ValueError("Source matching requires a shell manifest; this native artifact does not provide one")
         keys = shader_keys(g)
@@ -269,7 +273,7 @@ def verify(path, *, target="device", full_crc=False, match_source=False):
             bad = archive.testzip()
             if bad:
                 raise ValueError("Archive CRC failed")
-    return dict(status="artifact-structure-verified", target=actual, executable=binary,
+    return dict(status="artifact-structure-verified", target=actual, bundle_id=app_identity, executable=binary,
                 shader_chain=chain, shaders=len(keys), compiled_shaders=compiled,
                 runtime_compiled_sources=runtime_source, provenance=provenance,
                 archive_crc="passed" if full_crc else "not-checked",
@@ -306,6 +310,8 @@ def build(args):
             command += ["--spirv-cross-sha256", args.spirv_cross_sha256]
     if args.keep_extracted:
         command.append("--keep-extracted")
+    if getattr(args, "bundle_id", None) is not None:
+        command += ["--bundle-id", g.bundle_id(args.bundle_id)]
     if args.dry_run:
         return dict(status="build-plan", command=command, output=str(output),
                     environment="Not checked; no build was started")
@@ -331,6 +337,7 @@ def main(argv=None):
     package.add_argument("--shell", type=Path)
     package.add_argument("-o", "--out", type=Path)
     package.add_argument("-p", "--package")
+    package.add_argument("--bundle-id", help="Override the app identity for native or shell packaging")
     package.add_argument("--spirv-cross-sha256", default=os.environ.get("DM_SPIRV_CROSS_SHA256"))
     package.add_argument("--keep-extracted", action="store_true")
     package.add_argument("--dry-run", action="store_true")

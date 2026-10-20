@@ -4,6 +4,7 @@ title_id	01004AB00A260000
 program_id	01004AB00A260000
 name	DARK SOULS: REMASTERED
 ipa	DarkSoulsRemastered.ipa
+bundle_id	dev.nishikori.lordran-native
 app_category	public.app-category.role-playing-games
 pad_layout	full
 mac_layout	dark_souls_pc

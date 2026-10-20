@@ -98,6 +98,13 @@ The output directory must remain under this checkout's `game/`. The default
 output is `<NSP folder>/DarkSoulsRemastered.ipa`. Do not run two builds against
 the same work folder concurrently.
 
+The default shell Bundle ID is `dev.nishikori.lordran-native`, from
+the game profile. The injector retains the matching shell's ID or accepts
+`--bundle-id` to override it; `Guest.framework` uses the final app ID plus
+`.guest`. Shell production and the support build wrapper also accept
+`--bundle-id`. Download a shell built from this exact source revision rather
+than mixing an older shell with the new packer.
+
 ## Install and first launch
 
 The ZIP downloaded from Actions is only a shell input. Sign and sideload the generated IPA with a tool such as AltStore or Sideloadly. The tool must replace the placeholder signing identity with your own. Because Windows cannot run Apple's Metal compiler, the IPA contains MSL source in place of precompiled libraries. On first use, iOS compiles each shader as it is loaded and caches the result; initial scene loads can take several minutes. Later launches reuse the system cache. This path has not been verified on every iOS device.
