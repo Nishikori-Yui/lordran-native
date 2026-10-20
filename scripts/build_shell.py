@@ -17,11 +17,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work", required=True, type=Path, help="Private work directory under game/")
     parser.add_argument("-o", "--out", type=Path, help="Output shell .zip under game/")
+    parser.add_argument("--bundle-id", help="App bundle ID (default: the profile's bundle_id)")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(repo / "dm/games"))
     import game
     profile = game.load()
+    bundle_id = profile.bundle_id(args.bundle_id)
     work = args.work.resolve()
     output = args.out.resolve() if args.out else work / "LordranNative-shell-build-input.zip"
     private = (repo / "game").resolve()
@@ -55,7 +57,7 @@ def main():
                     str(font_dir / "nintendo_ext.ttf")], check=True)
     (gen / "dm/shell.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     env = dict(os.environ, GAME=profile.id, DM_GAME=profile.id,
-               DM_BUNDLE_ID=f"org.nxnative.{profile.id.lower()}",
+               DM_BUNDLE_ID=bundle_id,
                DM_DISPLAY_NAME="Lordran Native", DM_APP_CATEGORY=profile.get("app_category"),
                DM_TEAM_ID="0000000000", DM_ROOT=str(work), WORK=str(work / "tmp"))
     (work / "tmp").mkdir(exist_ok=True)
@@ -84,6 +86,8 @@ def main():
                              "\n".join(tail)) from error
     app = work / "products/DmIOS.app"
     info = plistlib.loads((app / "Info.plist").read_bytes())
+    if info.get("CFBundleIdentifier") != bundle_id:
+        raise ValueError("Built shell Bundle ID does not match the requested identity")
     if info.get("CFBundleSupportedPlatforms") != ["iPhoneOS"]:
         raise ValueError("Shell executable was not built for iPhoneOS")
     check_c1_table(profile, (app / "dm/c1_full.tsv").read_bytes())

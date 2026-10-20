@@ -16,6 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import player_support as support
 import player_support_common as common
 import shell_common
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "dm/games"))
+from game import Game
 
 
 def executable(target=2, cpu=0x0100000C):
@@ -40,6 +42,7 @@ class SupportTests(unittest.TestCase):
             id=self.game_dir.name, dir=self.game_dir,
             get=values.__getitem__, table=lambda n: self.game_dir / n,
             builds=lambda: {"v0": {"main": "registered"}})
+        self.game.bundle_id = lambda override=None: Game.bundle_id(self.game, override)
         for name in shell_common.SOURCE_PATHS:
             path = self.repo / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -63,6 +66,7 @@ class SupportTests(unittest.TestCase):
         files = {
             "Info.plist": plistlib.dumps(dict(
                 CFBundleExecutable="DmIOS",
+                CFBundleIdentifier="dev.example.game",
                 CFBundleSupportedPlatforms=["iPhoneOS" if target == 2 else "iPhoneSimulator"])),
             "DmIOS": executable(target),
             "romfs/marker.bhd5": b"FAKE_GAME_MARKER",
@@ -76,6 +80,8 @@ class SupportTests(unittest.TestCase):
         if manifest:
             files["dm/shell.json"] = json.dumps(shell_common.make_manifest(self.repo, self.game)).encode()
             files["Frameworks/Guest.framework/Guest"] = executable(target)
+            files["Frameworks/Guest.framework/Info.plist"] = plistlib.dumps(
+                dict(CFBundleIdentifier="dev.example.game.guest"))
         files.update(edits or {})
         path = self.folder / "candidate.ipa"
         with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as archive:
@@ -153,6 +159,12 @@ class SupportTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "manifest schema or source"):
                     support.verify(self.artifact(manifest=True, edits={
                         "dm/shell.json": json.dumps(invalid).encode()}))
+
+    def test_guest_identity_must_follow_the_actual_app_identity(self):
+        with self.assertRaisesRegex(ValueError, "Bundle ID must derive"):
+            support.verify(self.artifact(manifest=True, edits={
+                "Frameworks/Guest.framework/Info.plist": plistlib.dumps(
+                    dict(CFBundleIdentifier="dev.example.other.guest"))}))
 
     def test_duplicate_paths_private_keys_and_oversized_metadata_fail(self):
         for kwargs in (

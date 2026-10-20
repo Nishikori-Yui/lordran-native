@@ -24,7 +24,7 @@ PROD_KEYS = ''                          # path of prod.keys (empty = ask at run 
 PACKAGE = ''                            # version packed into the IPA (empty = the profile's package)
 OUT_IPA = ''                            # output IPA (empty = <the profile's ipa> in the NSP folder)
 APP_NAME = ''                           # app name on the home screen (empty = the game name in the base NSP)
-BUNDLE_ID = ''                          # the app's bundle ID (empty = org.nxnative.<base game title ID in lowercase>)
+BUNDLE_ID = ''                          # the app's bundle ID (empty = the profile's bundle_id)
 KEEP_EXTRACTED = False                  # keep the extracted game files after the IPA is built (saves extraction next time; as big as the game files)
 DM_ENV_FILE = ''                        # optional: environment switches for a diagnostic build (one KEY=VALUE per line)
 
@@ -288,7 +288,7 @@ def parse_args(argv):
     ap.add_argument('-p', '--package', help='打进 IPA 的版本，如 v327680 / v0（缺省 = 游戏档案的 package）| version packed into the IPA, e.g. v327680 / v0 (default: the profile\'s package)')
     ap.add_argument('-o', '--out', help='输出的 IPA（缺省 = NSP 文件夹里的 <档案的 ipa>）| output IPA (default: <the profile\'s ipa> in the NSP folder)')
     ap.add_argument('--app-name', help='主屏上的 App 名（缺省 = 基础版 NSP 里的游戏名）| app name on the home screen (default: the game name in the base NSP)')
-    ap.add_argument('--bundle-id', help='App 的包名（缺省 = org.nxnative.<基础版标题号小写>）| the app\'s bundle ID (default: org.nxnative.<base game title ID in lowercase>)')
+    ap.add_argument('--bundle-id', help="App bundle ID (default: the profile's bundle_id)")
     ap.add_argument('--keep-extracted', action='store_true', help='出包后保留解出的游戏文件 | keep the extracted game files after the IPA is built')
     ap.add_argument('--env-file', help='诊断包的环境开关文件（每行 KEY=VALUE）| environment switches for a diagnostic build (one KEY=VALUE per line)')
     return ap.parse_args(argv)
@@ -310,6 +310,10 @@ def main(args=None):
     g = gamemod.by_title(app)
     if g is None:
         raise BuildError(f'标题 {app:016X} 不是本仓库支持的黑暗之魂：重制版（01004AB00A260000）| title {app:016X} is not the Dark Souls Remastered title supported by this repository (01004AB00A260000)')
+    try:
+        bundle_id = g.bundle_id(args.bundle_id or BUNDLE_ID or None)
+    except ValueError as error:
+        raise BuildError(str(error)) from error
     say(f'游戏档案 | game profile: {g.id}')
     builds, need = g.builds(), g.words('shader_versions')
     pkg_ver = args.package or PACKAGE or g.get('package')
@@ -338,10 +342,9 @@ def main(args=None):
         if u is None and clone is None and can_clone(ex): clone = dirs[ver] / 'RomFS'
     game = dirs[pkg_ver]
     base = next((dirs[v] for v in versions if picks[v][1] is None), dirs[versions[0]])   # the folder the base game was extracted to alone
-    # the app name and bundle ID both come from the base NSP: the game name in its control data, and a bundle ID from its title ID; a setting / the command line overrides them
+    # The name comes from base control data; the identity comes from the profile.
     app_name = args.app_name or APP_NAME or nacp.name(base / 'control.nacp')
     if not app_name: raise BuildError(f'基础版解包里读不出游戏名（{base / "control.nacp"}；旧的解包没存它：删掉 extract/ 重跑，或用 --app-name 指定）| no game name in the base extraction ({base / "control.nacp"}; an older extraction did not save it: delete extract/ and run again, or give --app-name)')
-    bundle_id = args.bundle_id or BUNDLE_ID or f'org.nxnative.{app:016x}'
     say(f'App 名 | app name: {app_name}；包名 | bundle ID: {bundle_id}')
 
     patched = work / f'patched_{pkg_ver}'

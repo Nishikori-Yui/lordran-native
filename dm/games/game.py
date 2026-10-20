@@ -34,6 +34,13 @@ class Game:
     def int(self, key): return int(self.get(key), 0)
     def table(self, name): return self.dir / name
 
+    def bundle_id(self, override=None):
+        """Resolve the app identity shared by native and shell packaging."""
+        value = self.get('bundle_id') if override is None else override
+        if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+', value):
+            raise ValueError('Bundle ID must contain dot-separated ASCII letters, digits, or hyphens')
+        return value
+
     @property
     def title_id(self): return int(self.get('title_id'), 16)
 
