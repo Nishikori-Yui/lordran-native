@@ -45,7 +45,55 @@ a tag push; ordinary commits and pull requests do not trigger it. Workflow
 artifacts are retained for 30 days. For a tag with an existing GitHub Release,
 the workflow also uploads the ZIP to that release.
 
-## 1. Install the tools
+## Quick setup (recommended)
+
+The repository includes `scripts/setup_windows_packaging.ps1` for first-time
+users. It installs the public tools, configures the Visual Studio C++ workload,
+downloads the official zstd command-line tool when it is not already available,
+builds the pinned SPIRV-Cross executable, creates the repository-local Python
+environment, and runs the read-only preflight check. It never downloads or
+opens NSPs, `prod.keys`, or any other private game data.
+
+Run this from the repository root in a normal PowerShell window. The command
+uses a temporary execution-policy bypass for this one invocation; it does not
+change the machine or user policy permanently:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1
+```
+
+The script uses `winget` for Git, Python 3.12, .NET 10, CMake, Ninja, and
+Visual Studio Build Tools. The Visual Studio installer can display a UAC prompt
+and may take several minutes. An Internet connection is required for public
+downloads. At the end, the script prints the SPIRV-Cross executable, its
+SHA-256 file, and the Python interpreter path. Keep those values for the
+packaging commands below. It uses CMake's Visual Studio generator, so this
+automatic route does not require a separate Developer PowerShell window.
+
+The script can be run again safely when the checkout is already prepared. Useful
+options are:
+
+```powershell
+# Verify an existing installation without installing packages or downloading zstd.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -SkipInstall
+
+# Use an existing zstd.exe instead of downloading the pinned portable copy.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -ZstdPath 'C:\tools\zstd.exe'
+
+# Move aside an unexpected SPIRV-Cross directory and clone the pinned source again.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -Force
+```
+
+`-SkipVisualStudio` and `-SkipSpirvCross` are intended for machines that have
+already been prepared manually. The script still verifies the corresponding
+toolchain and saved SPIRV-Cross hash; it does not silently accept an arbitrary
+compiler or executable.
+
+After setup, continue with the shell download and private-input steps in
+section 5. If setup cannot use `winget`, follow the manual installation
+fallback below, then rerun the script with `-SkipInstall`.
+
+## 1. Manual tool installation (fallback)
 
 If Git, Python, or .NET is not installed, the following `winget` commands are
 an optional starting point. Run them in a normal PowerShell window, then close

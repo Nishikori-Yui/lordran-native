@@ -27,7 +27,36 @@ Windows 打包流程不需要 Xcode，可以生成未签名 iOS IPA：
 产物保留 30 天。如果 tag 已经有 GitHub Release，工作流还会将 ZIP 上传到
 该 Release。
 
-## 1. 安装工具
+## 快速配置（推荐）
+
+仓库提供了面向首次使用者的 `scripts/setup_windows_packaging.ps1`。它会安装公开工具，配置 Visual Studio C++ 工作负载；如果系统中没有 `zstd.exe`，还会下载官方 zstd 命令行工具；随后构建指定版本的 SPIRV-Cross、创建仓库内的 Python 环境并执行只读环境检查。它不会下载或打开 NSP、`prod.keys` 或其他私人游戏数据。
+
+在仓库根目录的普通 PowerShell 中执行下面这一条命令。它只对本次调用临时绕过执行策略，不会永久修改用户或系统策略：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1
+```
+
+脚本使用 `winget` 安装 Git、Python 3.12、.NET 10、CMake、Ninja 和 Visual Studio Build Tools。Visual Studio 安装程序可能弹出 UAC 管理员确认，并需要几分钟；公开工具和 SPIRV-Cross 的下载需要联网。脚本结束时会打印 SPIRV-Cross 程序路径、SHA-256 文件和 Python 解释器路径，请保留这些信息供后续打包命令使用。自动流程使用 CMake 的 Visual Studio 生成器，不需要另外打开 Developer PowerShell。
+
+脚本可以安全地再次运行。常用选项如下：
+
+```powershell
+# 只检查已有安装，不通过 winget 安装工具，也不下载 zstd。
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -SkipInstall
+
+# 使用已有的 zstd.exe，不下载脚本提供的便携版本。
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -ZstdPath 'C:\tools\zstd.exe'
+
+# 将不符合要求的 SPIRV-Cross 目录移到备份目录，再重新克隆指定源码。
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -Force
+```
+
+`-SkipVisualStudio` 和 `-SkipSpirvCross` 适用于已经手动配置过对应环境的电脑。脚本仍会检查对应工具链和已保存的 SPIRV-Cross 指纹，不会默默接受任意编译器或程序。
+
+配置完成后，继续执行第 5 节的壳下载和私有输入文件步骤。如果当前电脑无法使用 `winget`，请先按照下面的手动安装备用流程安装工具，再用 `-SkipInstall` 重新运行脚本。
+
+## 1. 手动安装工具（备用流程）
 
 如果还没有 Git、Python 或 .NET，可以先在普通 PowerShell 中执行下面的可选命令。执行完后关闭并重新打开 PowerShell：
 

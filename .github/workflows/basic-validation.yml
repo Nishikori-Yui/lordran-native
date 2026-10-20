@@ -47,6 +47,21 @@ jobs:
           python scripts/player_support.py -h
           python scripts/prepare_issue.py -h
 
+      - name: Parse Windows setup script
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $env:GITHUB_WORKSPACE 'scripts/setup_windows_packaging.ps1'),
+            [ref]$tokens,
+            [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+
       - name: Validate target profile metadata
         run: python scripts/shell_common.py 01004AB00A260000
 

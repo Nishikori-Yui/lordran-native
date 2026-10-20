@@ -12,7 +12,9 @@ Lordran Native 将 **《黑暗之魂：重制版》**（`01004AB00A260000`）原
 
 ## 准备条件
 
-- 一台 Apple 芯片 Mac，安装 Xcode 和 Homebrew，用于构建移植版本。
+- 常规构建路径：一台安装 Xcode 和 Homebrew 的 Apple 芯片 Mac。
+- Windows 实验性壳构建路径：64 位 Windows 10/11，以及包含自动化
+  PowerShell 配置脚本的[Windows 打包说明](docs/windows-packaging.zh-CN.md)。
 - 游戏本体 NSP 和 **1.0.3 更新**（`v196608`）。即使打包本体版本，也需要这两份文件来提取着色器。
 - 你自己的 `prod.keys`。
 - 如需使用 IPA：运行 **iOS / iPadOS 26 或更高版本**的 iPhone 或 iPad，以及侧载工具。
@@ -118,9 +120,17 @@ python3 scripts/build_ipa_from_nsp.py game/01004AB00A260000 -k game/01004AB00A26
 
 ### 在 Windows 上打包（无需 Xcode）
 
-Actions 仅在手动运行或推送 tag 时构建不含游戏内容的未签名 iOS「壳」。从对应的工作流产物或 Release 下载 `LordranNative-shell-build-input.zip`。Windows 需要 Python 3.12 或更高版本、.NET 10 SDK、`zstd`，以及 `spirv-cross` 1.4.357.0（Vulkan SDK 标签 `vulkan-sdk-1.4.357.0`）。把游戏本体 NSP、1.0.3 更新 NSP 和你自己的 `prod.keys` 放在 `game/` 下的私有文件夹中（该目录已被 Git 忽略）。
+这是一条不需要 Xcode 的实验性路径。完整步骤见[Windows 打包说明](docs/windows-packaging.zh-CN.md)，其中提供了一个 PowerShell 脚本：它会安装公开构建依赖、构建指定版本的 SPIRV-Cross、创建仓库内的 Python 环境并执行只读环境检查。脚本不会下载 NSP、密钥或其他私人游戏数据。
 
-先按 [Windows 文档](docs/windows-packaging.zh-CN.md#环境要求)配置指定版本的 SPIRV-Cross，记录 `$spirvCrossSha256`。建议在仓库的私有 `game/` 目录中创建虚拟环境，并直接调用其解释器；这样无需修改 PowerShell 执行策略，也不会把依赖装到其他 Python 环境：
+在仓库根目录的 PowerShell 中直接执行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1
+```
+
+Visual Studio Build Tools 可能会请求管理员确认；脚本还需要联网下载公开安装程序和 SPIRV-Cross。运行结束后会打印后续打包所需的程序路径和 SHA-256。然后从同一个 Release 下载匹配的壳 ZIP，并把游戏本体 NSP、1.0.3 更新 NSP 和自己的 `prod.keys` 放入私有的 `game/01004AB00A260000/` 目录（该目录已被 Git 忽略）。
+
+如果不使用上面的自动配置脚本、而是按照 [Windows 文档](docs/windows-packaging.zh-CN.md#环境要求)的备用流程操作，请先配置指定版本的 SPIRV-Cross 并记录 `$spirvCrossSha256`。建议在仓库的私有 `game/` 目录中创建虚拟环境，并直接调用其解释器；这样无需修改 PowerShell 执行策略，也不会把依赖装到其他 Python 环境：
 
 ```powershell
 py -3 -m venv game/01004AB00A260000/tools-venv
