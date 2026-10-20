@@ -147,6 +147,11 @@ This command writes `game/01004AB00A260000/LordranNative.ipa`. Without `-o`, the
 
 Run `python3 scripts/build_ipa_from_nsp.py -h` for options, including `-o` for the output path and `--app-name` for the home-screen name. See the [development guide](docs/development.md) for version selection and manual Mac builds.
 
+Experimental local static cheats and IPS/IPS32 patches (including a 60 FPS
+candidate) can be selected when building. They default to off and require a
+matching main NSO build ID. Changing the selection requires rebuilding; there
+is no in-game switch yet. See [supported formats and usage](docs/development.md#experimental-static-cheats-and-60-fps-patches).
+
 For an experimental Apple silicon iOS Simulator build, follow the [Simulator build steps](docs/development.md#build-for-ios-simulator-apple-silicon). It produces a separate `.app.zip` rather than a device IPA.
 
 ### Build on Windows without Xcode

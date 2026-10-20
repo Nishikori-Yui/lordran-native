@@ -10,7 +10,7 @@ SOURCE_PATHS = (
     "scripts/build_ipa_from_nsp.py", "scripts/build_ipa_from_shell.py",
     "scripts/build_shell.py", "scripts/guest_dylib.py", "scripts/portable_shaders.py",
     "scripts/shell_common.py",
-    "dm/tools/patch_nso.py", "dm/tools/nso.py", "dm/tools/nacp.py",
+    "dm/tools/patch_nso.py", "dm/tools/cheat_patches.py", "dm/tools/nso.py", "dm/tools/nacp.py",
     "dm/tools/nx_extract/Program.cs", "dm/tools/nx_extract/nx_extract.csproj",
     "dm/tools/make_ext_font.py", "dm/games/game.py",
     "dm/gfx/tools/dmsh_chain.lock", "dm/ios/tools/ios_metal.py", "dm/ios/project.yml",
