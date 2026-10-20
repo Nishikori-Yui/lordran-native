@@ -15,8 +15,16 @@ import struct
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../games'))
+TOOLS = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, TOOLS)
+sys.path.insert(0, os.path.join(TOOLS, '../../games'))
 import game as _game
+
+if sys.platform == 'win32':
+    # Keep progress output and generated tables UTF-8 on Windows locales such
+    # as GBK; the parent packager preserves the complete output in UTF-8 logs.
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 GAME = _game.load()
 GROUPS, NOTE = GAME.pairs('shader_groups'), GAME.get('shader_note')
@@ -252,7 +260,7 @@ def main():
         with open(os.path.join(package_dir, name), 'wb') as output:
             output.write(b''.join(records_for_file))
 
-    with open(mapout, 'w') as output:
+    with open(mapout, 'w', encoding='utf-8', newline='\n') as output:
         output.write(f'# kind: evidence  {NOTE}（RomFS + main 里的 GLSLC）→ 控制段 + 代码区键（dm/gfx/tools/shader_split.py）\n')
         output.write('# 第 5 列记每个键首次出现的位置；本作没有 PC 版配对\n')
         output.write('package\tindex\tstage\tdm_ctl_sha16\tsource\n')
@@ -261,17 +269,17 @@ def main():
 
     manual = GAME.table('shader_facts_manual.tsv')
     if os.path.exists(manual):
-        for line in open(manual):
+        for line in open(manual, encoding='utf-8'):
             if line.strip() and not line.startswith('#'):
                 key, value = line.rstrip('\n').split('\t', 1)
                 facts[key] = {**facts.get(key, {}), **json.loads(value)}
-    with open(factsout, 'w') as output:
+    with open(factsout, 'w', encoding='utf-8', newline='\n') as output:
         output.write('# 翻译查询的作答表（dm/gfx/tools/shader_split.py 生成，勿手改）：键 <TAB> 事实 JSON。本作没有 PC 版配对：只有计算着色器的线程组 / 共享内存（取自控制段），其余查询按翻译器缺省\n')
         for key in sorted(facts):
             output.write(key + '\t' + json.dumps(facts[key], sort_keys=True, separators=(',', ':')) + '\n')
 
     if pairsout:
-        with open(pairsout, 'w') as output:
+        with open(pairsout, 'w', encoding='utf-8', newline='\n') as output:
             output.write('# kind: evidence  BNSH 变体里的顶点 / 像素着色器配对（shader_split.py generated; D2R uses single-stage cover pairs）\n')
             for vertex, pixel in sorted(pairs):
                 output.write(f'{vertex}\t{pixel}\n')

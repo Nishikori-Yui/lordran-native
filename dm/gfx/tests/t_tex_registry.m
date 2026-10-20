@@ -10,10 +10,122 @@ module_t g_mod[MAX_MOD]; int g_nmod;
 void svc_thread_dump(void) {}
 uint64_t now_ns(void) { return bp_now(); }
 
-int main(void) { @autoreleasepool {
+static void test_feedback_pool(void) {
+    __block __weak id probe;
+    void *(*autorelease_raw)(void *) = dlsym(RTLD_DEFAULT, "objc_autorelease");
+    assert(autorelease_raw);
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    dispatch_async(g_feedback_q, ^{
+        id object = [NSObject new];
+        probe = object;
+        autorelease_raw((void *)CFBridgingRetain(object));
+        // This next work item runs after the first item's pool has drained.
+        dispatch_async(g_feedback_q, ^{ dispatch_semaphore_signal(done); });
+    });
+    assert(!dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)));
+    assert(!probe);
+}
+
+static void test_memory_text(void) {
+    char text[32];
+    memset(text, 0xff, sizeof text);
+    assert(mtl_alloc_size_text(123, text, sizeof text) == text);
+#if TARGET_OS_SIMULATOR
+    assert(!strcmp(text, "unavailable"));
+#else
+    assert(!strcmp(text, "123"));
+#endif
+}
+
+static void test_upload_versions(void) {
+    tex_t t = {.magic = MAGIC('T', 'E', 'X', 0), .serial = 70002, .has_layout = 1};
+    t.d = (nvn_texdesc){.width = 16, .height = 16, .depth = 1, .levels = 1,
+        .target = NVN_TEXTURE_TARGET_2D, .format = NVN_FORMAT_RGBA8, .pkg_block_h = 1};
+    nvn_tex_layout(&t.d, &t.L);
+    t.mem = calloc(1, t.L.size); assert(t.mem);
+    mtl_reg_tex(258, &t, NULL);
+    id<MTLBuffer> readback = [g_dev newBufferWithLength:2048 options:MTLResourceStorageModeShared];
+    assert(readback); res_add(readback);
+    mtl_sub_begin();
+    for (int version = 0; version < 2; version++) {
+        memset(t.mem, version ? 0x22 : 0x11, t.L.size);
+        rmu_lock(); g_ser_gen++;
+        id<MTLTexture> texture = tex_by_id(258);
+        assert(texture);
+        enc_b_copy_texture_buffer(blit(), texture, 0, 0, MTLOriginMake(0, 0, 0),
+            MTLSizeMake(16, 16, 1), readback, version * 1024, 64, 1024);
+        rmu_unlock();
+    }
+    uint64_t fence = mtl_sub_commit();
+    assert(mtl_wait(fence, 5000000000ull) && !mtl_last_commit_error());
+    const uint8_t *pixels = readback.contents;
+    for (int i = 0; i < 2048; i++) assert(pixels[i] == (i < 1024 ? 0x11 : 0x22));
+    res_remove(readback);
+    mtl_tex_release(&t);
+    mtl_sub_begin(); fence = mtl_sub_commit();
+    assert(mtl_wait(fence, 5000000000ull));
+    free(t.mem);
+    puts("texture upload: two versions in one submission preserve both GPU readbacks");
+}
+
+static void test_movie_stream(void) {
+    assert(g_nvn_deswz_gpu);
+    tex_t t = {.magic = MAGIC('T', 'E', 'X', 0), .serial = 70003, .has_layout = 1};
+    t.d = (nvn_texdesc){.width = 1920, .height = 1080, .depth = 1, .levels = 1,
+        .target = NVN_TEXTURE_TARGET_2D, .format = NVN_FORMAT_RGBA8, .pkg_block_h = 1};
+    nvn_tex_layout(&t.d, &t.L);
+    size_t size = (t.L.size + getpagesize() - 1) & ~((size_t)getpagesize() - 1);
+    t.mem = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    assert(t.mem != MAP_FAILED);
+    memset(t.mem, 0x55, size);
+    mtl_pool_add(t.mem, size);
+    mtl_reg_tex(259, &t, NULL);
+    NSHashTable *versions = [NSHashTable weakObjectsHashTable];
+    uint64_t settled_bytes = 0;
+    for (int i = 0; i < 512; i++) { @autoreleasepool {
+        mtl_sub_begin();
+        rmu_lock(); g_ser_gen++;
+        id<MTLTexture> texture = tex_by_id(259); assert(texture);
+        [versions addObject:texture];
+        rmu_unlock();
+        uint64_t fence = mtl_sub_commit();
+        assert(mtl_wait(fence, 5000000000ull) && !mtl_last_commit_error());
+        dispatch_sync(g_feedback_q, ^{});
+        assert(versions.allObjects.count <= 2);
+        uint64_t allocated = g_dev.currentAllocatedSize;
+        if (i == 127) settled_bytes = allocated;
+        if (i >= 128) assert(allocated <= settled_bytes + (128ull << 20));
+    } }
+    mtl_tex_release(&t); mtl_pool_del(t.mem);
+    mtl_sub_begin(); uint64_t fence = mtl_sub_commit();
+    assert(mtl_wait(fence, 5000000000ull));
+    dispatch_sync(g_feedback_q, ^{});
+    assert(!serial_get(t.serial));
+    assert(!g_treg[259].view && !g_treg[259].alt);
+    // Completion objects may outlive a fence, but retired storage must not
+    // stay resident or accumulate with the number of uploaded frames.
+    assert(versions.allObjects.count <= 2);
+    for (id texture in versions.allObjects) assert(![g_res_objects containsObject:texture]);
+    assert(!munmap(t.mem, size));
+    puts("movie stream: 512 full-HD GPU uploads, bounded allocations and residency retirement passed");
+}
+
+int main(int argc, char **argv) { @autoreleasepool {
     alarm(30);
     mtl_init();
+    test_memory_text();
+    test_feedback_pool();
+    if (argc == 2 && !strcmp(argv[1], "--pools-only")) {
+        puts("GPU feedback: autoreleased objects are released between work items");
+        return 0;
+    }
+    if (argc == 2 && !strcmp(argv[1], "--movie-stream")) {
+        test_movie_stream();
+        return 0;
+    }
     g_nvn_deswz_gpu = 0;
+    test_upload_versions();
+    if (argc == 2 && !strcmp(argv[1], "--upload-order")) return 0;
     tex_t t = {.magic = MAGIC('T', 'E', 'X', 0), .serial = 70001, .has_layout = 1};
     t.d = (nvn_texdesc){.width = 16, .height = 16, .depth = 1, .levels = 1,
         .target = NVN_TEXTURE_TARGET_2D, .format = NVN_FORMAT_RGBA8, .pkg_block_h = 1};

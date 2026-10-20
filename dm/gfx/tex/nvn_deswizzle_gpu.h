@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #import <Metal/Metal.h>
+#import "../nvn/nvn_sim_metal.h"
 #include "nvn_deswizzle.h"
 
 int nvn_deswz_gpu_init(id<MTLDevice> dev);

@@ -21,7 +21,17 @@ static inline void dm_camera_swipe_move(dm_camera_swipe *s, double x, double y) 
     s->dx += x - s->last_x; s->dy += y - s->last_y;
     s->last_x = x; s->last_y = y;
 }
-static inline void dm_camera_swipe_sample(dm_camera_swipe *s, double dt, int32_t *rx, int32_t *ry) {
+static inline void dm_camera_axis_tune(double x, double y, double sensitivity, int invert_x, int invert_y,
+                                     int32_t *rx, int32_t *ry) {
+    if (!isfinite(sensitivity)) sensitivity = 1;
+    sensitivity = fmax(0.25, fmin(3, sensitivity));
+    x *= sensitivity * (invert_x ? -1 : 1); y *= sensitivity * (invert_y ? -1 : 1);
+    double length = hypot(x, y);
+    if (length > 1) { x /= length; y /= length; }
+    *rx = (int32_t)lround(x * 32767); *ry = (int32_t)lround(y * 32767);
+}
+static inline void dm_camera_swipe_sample_tuned(dm_camera_swipe *s, double dt, double sensitivity,
+                                              int invert_x, int invert_y, int32_t *rx, int32_t *ry) {
     *rx = *ry = 0;
     if (s->active && s->dragging) {
         if (!isfinite(dt) || dt <= 0) dt = 1.0 / 60;
@@ -29,10 +39,11 @@ static inline void dm_camera_swipe_sample(dm_camera_swipe *s, double dt, int32_t
         // 600 points per second reaches full tilt; normalize diagonal swipes
         // together so horizontal and vertical sensitivity remain identical.
         double x = s->dx / (600 * dt), y = -s->dy / (600 * dt);
-        double length = hypot(x, y);
-        if (length > 1) { x /= length; y /= length; }
-        *rx = (int32_t)lround(x * 32767); *ry = (int32_t)lround(y * 32767);
+        dm_camera_axis_tune(x, y, sensitivity, invert_x, invert_y, rx, ry);
     }
     s->dx = s->dy = 0;
+}
+static inline void dm_camera_swipe_sample(dm_camera_swipe *s, double dt, int32_t *rx, int32_t *ry) {
+    dm_camera_swipe_sample_tuned(s, dt, 1, 0, 0, rx, ry);
 }
 static inline void dm_camera_swipe_end(dm_camera_swipe *s) { memset(s, 0, sizeof *s); }

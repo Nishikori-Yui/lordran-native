@@ -36,8 +36,17 @@ class BuildError(Exception):
     pass
 
 
+def console_text(text):
+    """Avoid failing a Windows build when a child emits non-GBK diagnostics."""
+    encoding = getattr(sys.stdout, 'encoding', None) or 'utf-8'
+    try:
+        return text.encode(encoding, errors='replace').decode(encoding, errors='replace')
+    except LookupError:
+        return text.encode('ascii', errors='replace').decode('ascii')
+
+
 def say(msg):
-    print(f'[{time.strftime("%H:%M:%S")}] {msg}', flush=True)
+    print(console_text(f'[{time.strftime("%H:%M:%S")}] {msg}'), flush=True)
 
 
 def in_ipython():   # Spyder (and Jupyter) run this file inside IPython: input works there, and sys.exit must not be called (it piles an error onto the console)
@@ -63,16 +72,18 @@ def run(cmd, log, env=None, cwd=None, quiet=False):
     p = subprocess.Popen(cmd, env=env, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace', bufsize=1)
     if quiet: threading.Thread(target=beat, daemon=True).start()
     try:
-        with open(log, 'w') as f:
+        # Shader extraction emits non-ASCII diagnostics; keep the retained log
+        # portable instead of using the Windows console code page.
+        with open(log, 'w', encoding='utf-8', newline='\n') as f:
             for line in p.stdout:
                 f.write(line); tail.append(line); n[0] += 1
-                if not quiet: print(line, end='', flush=True)
+                if not quiet: print(console_text(line), end='', flush=True)
         p.wait()
     except KeyboardInterrupt:
         p.terminate(); p.wait(); raise
     finally:
         done.set()
-    if quiet: print(''.join(list(tail)[-40 if p.returncode else -12:]), end='', flush=True)
+    if quiet: print(console_text(''.join(list(tail)[-40 if p.returncode else -12:])), end='', flush=True)
     if p.returncode:
         tool = Path(cmd[1] if cmd[0] in (sys.executable, 'bash') else cmd[0]).name
         raise BuildError(f'{tool} 退出码 | exit code {p.returncode}（完整输出 | full output: {log}）')

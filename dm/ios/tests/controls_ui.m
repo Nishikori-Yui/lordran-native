@@ -27,6 +27,9 @@
 - (void)panBall:(UIPanGestureRecognizer *)pan;
 - (void)exportLog;
 - (void)fpsToggled:(UISwitch *)toggle;
+- (void)lookInvertXToggled:(UISwitch *)toggle;
+- (void)lookInvertYToggled:(UISwitch *)toggle;
+- (void)resetTouchCamera;
 @end
 static uint64_t buttons;
 static int32_t axes[4];
@@ -162,18 +165,48 @@ static void runTests(UIViewController *presenter) {
         if (right) assert(axes[2] == 0 && axes[3] == 0);
         end(pad, lt); end(pad, rt); released();
     }
+    // Touch camera preferences affect either right-side mode, while left motion stays normal.
+    for (int mode = 0; mode <= 1; mode++) {
+        pad.profile.leftMode = DmStickSwipe; pad.profile.rightMode = mode;
+        pad.profile.lookSensitivity = 0.5; pad.profile.lookInvertX = pad.profile.lookInvertY = YES;
+        [pad profileChanged]; [pad layoutIfNeeded];
+        CGPoint r = mode ? CGPointMake(510, 150) : [pad controlCenter:DmControlRightStick];
+        TestTouch *left = begin(pad, CGPointMake(340, 150)), *right = begin(pad, r);
+        move(pad, left, CGPointMake(350, 145)); move(pad, right, CGPointMake(r.x + 10, r.y - 5));
+        [pad swipeTick:(id)[TestTick new]];
+        assert(axes[0] > 0 && axes[1] > 0 && axes[2] < 0 && axes[3] < 0);
+        end(pad, left); end(pad, right); released();
+    }
     pad.profile.leftMode = DmStickJoystick; pad.profile.rightMode = DmStickSwipe; [pad profileChanged];
-    [overlay toggleMenu]; [overlay inputSettings]; panelFits(overlay); snapshot(canvas, @"controls-input.png"); [overlay closeMenu];
+    [overlay toggleMenu]; [overlay inputSettings]; panelFits(overlay);
+    UISwitch *inversion = [UISwitch new]; inversion.on = YES;
+    [overlay lookInvertXToggled:inversion]; [overlay lookInvertYToggled:inversion];
+    UISlider *sensitivity = [[overlay valueForKey:@"panel"] viewWithTag:6];
+    assert([sensitivity isKindOfClass:UISlider.class] && sensitivity.minimumValue == 0.25 && sensitivity.maximumValue == 3);
+    sensitivity.value = 1.75; [sensitivity sendActionsForControlEvents:UIControlEventValueChanged];
+    loaded = [DmControlProfile loadWithDefaultFull:YES];
+    assert(fabs(loaded.lookSensitivity - 1.75) < 0.001 && loaded.lookInvertX && loaded.lookInvertY);
+    snapshot(canvas, @"controls-input.png");
+    [overlay resetTouchCamera]; assert(pad.profile.lookSensitivity == 1 && !pad.profile.lookInvertX && !pad.profile.lookInvertY);
+    [overlay closeMenu];
 
     // Snapshot controllers exercise mapping and selection without external hardware.
     GCController *first = [GCController controllerWithExtendedGamepad], *second = [GCController controllerWithExtendedGamepad];
     [pad setValue:@[first, second] forKey:@"controllers"]; [pad selectController:0];
-    assert(pad.hidden); [first.extendedGamepad.buttonA setValue:1]; [first.extendedGamepad.leftThumbstick.xAxis setValue:0.08];
+#if TARGET_OS_SIMULATOR
+    assert(!pad.hidden); // Keep touch controls available alongside Simulator's virtual controller.
+#else
+    assert(pad.hidden);
+#endif
+    [first.extendedGamepad.buttonA setValue:1]; [first.extendedGamepad.leftThumbstick.xAxis setValue:0.08];
     [pad readController]; assert(buttons == DM_BTN_B && axes[0] == 0);
     pad.profile.faceMapping = DmFaceLetters; [pad profileChanged]; [pad readController]; assert(buttons == DM_BTN_A);
     [first.extendedGamepad.buttonMenu setValue:1]; [first.extendedGamepad.leftTrigger setValue:1];
     [first.extendedGamepad.rightThumbstickButton setValue:1]; [first.extendedGamepad.leftThumbstick.xAxis setValue:0.8];
     [pad readController]; assert(buttons & DM_BTN_PLUS); assert(buttons & DM_BTN_ZL); assert(buttons & DM_BTN_RS); assert(axes[0] > 0);
+    pad.profile.lookSensitivity = 0.25; pad.profile.lookInvertX = pad.profile.lookInvertY = YES;
+    [first.extendedGamepad.rightThumbstick.xAxis setValue:0.5]; [first.extendedGamepad.rightThumbstick.yAxis setValue:0.4];
+    [pad readController]; assert(axes[2] > 0 && axes[3] > 0);
     [pad selectController:1]; released();
     [pad setInputSuspended:YES]; [second.extendedGamepad.buttonB setValue:1]; [pad readController]; released();
     [pad setInputSuspended:NO]; assert(buttons != 0);

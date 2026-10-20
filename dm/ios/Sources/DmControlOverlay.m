@@ -6,7 +6,7 @@
 #import <QuartzCore/QuartzCore.h>
 
 enum { PageClosed, PageMenu, PageEditor, PageInput, PageAppearance };
-enum { SliderX, SliderY, SliderScale, SliderAngle, SliderOpacity, SliderDeadzone };
+enum { SliderX, SliderY, SliderScale, SliderAngle, SliderOpacity, SliderDeadzone, SliderLookSensitivity, SliderCount };
 static NSString *const kDockKey = @"DmControlDock.v1";
 static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAppText(english, simplifiedChinese); }
 
@@ -15,8 +15,8 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
     UIView *_panel;
     UIScrollView *_scroll;
     UIStackView *_stack;
-    UISlider *_sliders[6];
-    UILabel *_values[6], *_controllerLabel;
+    UISlider *_sliders[SliderCount];
+    UILabel *_values[SliderCount], *_controllerLabel;
     NSInteger _page, _edge;
     CGFloat _fraction;
     CGPoint _panStart, _panelPanStart;
@@ -169,7 +169,7 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
 - (void)showPage:(NSInteger)page {
     _page = page; _panelMoved = NO; [_panel removeFromSuperview];
     _panel = nil;
-    for (int i = 0; i < 6; i++) { _sliders[i] = nil; _values[i] = nil; }
+    for (int i = 0; i < SliderCount; i++) { _sliders[i] = nil; _values[i] = nil; }
     _selection = nil; _export = nil; _controllerLabel = nil;
     [_confirm removeFromSuperview]; _confirm = nil;
     _ball.hidden = page != PageClosed;
@@ -308,6 +308,12 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
     config = shape.configuration; config.title = [NSString stringWithFormat:@"%@: %@", T(@"Shape", @"形状"), names[s.shape]]; shape.configuration = config;
 }
 - (void)sliderChanged:(UISlider *)slider {
+    if (slider.tag == SliderLookSensitivity) {
+        slider.value = roundf(slider.value * 20) / 20;
+        _gamepad.profile.lookSensitivity = slider.value; [_gamepad profileChanged];
+        [self updateLookSensitivity];
+        return;
+    }
     if (slider.tag == SliderDeadzone) {
         _gamepad.profile.deadzone = slider.value; [_gamepad profileChanged];
         _values[SliderDeadzone].text = [NSString stringWithFormat:T(@"Stick deadzone: %.0f%%", @"摇杆死区：%.0f%%"), slider.value * 100];
@@ -330,6 +336,13 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
         weakSelf.gamepad.profile.rightMode = mode; [weakSelf.gamepad profileChanged];
     }];
     [self addText:T(@"Swipe empty space to move or look. If both sides use swipe, each uses its own half.", @"在空白处滑动以移动或转动视角；两侧都选滑屏时，分别使用左右半屏。") small:YES];
+    [self addText:T(@"Touch camera", @"触屏视角") small:NO];
+    [self addSwitch:T(@"Invert horizontal", @"横轴反转") on:_gamepad.profile.lookInvertX action:@selector(lookInvertXToggled:)];
+    [self addSwitch:T(@"Invert vertical", @"纵轴反转") on:_gamepad.profile.lookInvertY action:@selector(lookInvertYToggled:)];
+    [self addSlider:SliderLookSensitivity title:T(@"Sensitivity", @"灵敏度") min:0.25 max:3 value:_gamepad.profile.lookSensitivity];
+    [self updateLookSensitivity];
+    [self addText:T(@"1x is the default. Higher values turn faster.", @"1 倍为默认值，数值越大转动越快。") small:YES];
+    [self addButton:T(@"Reset touch camera", @"重置触屏视角") symbol:@"arrow.counterclockwise" action:@selector(resetTouchCamera)];
     [self addSwitch:T(@"D-pad & L3/R3", @"十字键与按压键") on:_gamepad.profile.fullLayout action:@selector(layoutToggled:)];
     _controllerLabel = [self addText:_gamepad.controllerStatus small:YES];
     NSArray *controllers = _gamepad.controllerNames;
@@ -343,6 +356,17 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
     _values[SliderDeadzone].text = [NSString stringWithFormat:T(@"Stick deadzone: %.0f%%", @"摇杆死区：%.0f%%"), _gamepad.profile.deadzone * 100];
     [self addSwitch:T(@"Hide touch controls with controller", @"连手柄时隐藏触控") on:_gamepad.profile.hideWithController action:@selector(hideToggled:)];
     [self addText:T(@"Pair a controller in iOS Bluetooth settings. Shoulders, triggers, stick clicks, menu and options are supported when present.", @"在 iOS 蓝牙设置中配对手柄；支持手柄提供的肩键、扳机、摇杆按压、菜单与选项键。") small:YES];
+}
+- (void)updateLookSensitivity {
+    NSString *value = [NSString stringWithFormat:T(@"%.2fx", @"%.2f 倍"), _gamepad.profile.lookSensitivity];
+    _values[SliderLookSensitivity].text = [NSString stringWithFormat:@"%@: %@", T(@"Sensitivity", @"灵敏度"), value];
+    _sliders[SliderLookSensitivity].accessibilityValue = value;
+}
+- (void)lookInvertXToggled:(UISwitch *)toggle { _gamepad.profile.lookInvertX = toggle.on; [_gamepad profileChanged]; }
+- (void)lookInvertYToggled:(UISwitch *)toggle { _gamepad.profile.lookInvertY = toggle.on; [_gamepad profileChanged]; }
+- (void)resetTouchCamera {
+    _gamepad.profile.lookSensitivity = 1; _gamepad.profile.lookInvertX = _gamepad.profile.lookInvertY = NO;
+    [_gamepad profileChanged]; [self showPage:PageInput];
 }
 - (void)layoutToggled:(UISwitch *)toggle { _gamepad.profile.fullLayout = toggle.on; [_gamepad profileChanged]; }
 - (void)hideToggled:(UISwitch *)toggle { _gamepad.profile.hideWithController = toggle.on; [_gamepad profileChanged]; }

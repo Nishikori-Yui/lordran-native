@@ -37,6 +37,9 @@ NSString *DmControlName(NSInteger c) {
         _rightMode = (DmStickMode)number(d[@"right"], DmStickSwipe, 0, 1);
         _faceMapping = (DmFaceMapping)number(d[@"mapping"], DmFacePosition, 0, 2);
         _deadzone = number(d[@"deadzone"], 0.12, 0.05, 0.35);
+        _lookSensitivity = number(d[@"look_sensitivity"], 1, 0.25, 3);
+        _lookInvertX = number(d[@"look_invert_x"], NO, 0, 1) != 0;
+        _lookInvertY = number(d[@"look_invert_y"], NO, 0, 1) != 0;
         _hideWithController = number(d[@"hide"], YES, 0, 1) != 0;
         _fullLayout = number(d[@"full"], full, 0, 1) != 0;
         NSArray *styles = [d[@"styles"] isKindOfClass:NSArray.class] ? d[@"styles"] : @[];
@@ -71,6 +74,8 @@ NSString *DmControlName(NSInteger c) {
         [styles addObject:v];
     }
     return @{@"version": @1, @"styles": styles, @"left": @(_leftMode), @"right": @(_rightMode),
+             @"look_sensitivity": @(number(@(_lookSensitivity), 1, 0.25, 3)),
+             @"look_invert_x": @(_lookInvertX), @"look_invert_y": @(_lookInvertY),
              @"mapping": @(_faceMapping), @"deadzone": @(_deadzone), @"hide": @(_hideWithController), @"full": @(_fullLayout)};
 }
 - (id)copyWithZone:(NSZone *)zone { return [[[self class] allocWithZone:zone] initWithDictionary:self.dictionary defaultFull:_fullLayout]; }

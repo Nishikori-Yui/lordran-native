@@ -55,13 +55,30 @@ This command writes `game/01004AB00A260000/LordranNative.ipa`. Without `-o`, the
 
 Run `python3 scripts/build_ipa_from_nsp.py -h` for options, including `-o` for the output path and `--app-name` for the home-screen name. See the [development guide](docs/development.md) for version selection and manual Mac builds.
 
+For an experimental Apple silicon iOS Simulator build, follow the [Simulator build steps](docs/development.md#build-for-ios-simulator-apple-silicon). It produces a separate `.app.zip` rather than a device IPA.
+
+### Build on Windows without Xcode
+
+GitHub Actions builds an unsigned, game-free iOS shell when run manually or when a tag is pushed. Download `LordranNative-shell-build-input.zip` from the matching workflow run or release, then on Windows install Python 3.12+, the .NET 10 SDK, `zstd`, and `spirv-cross` 1.4.357.0 (Vulkan SDK tag `vulkan-sdk-1.4.357.0`). Put the base game NSP, the 1.0.3 update NSP, and your own `prod.keys` in a private folder under `game/` (that folder is ignored by Git).
+
+Install the Python dependencies and build:
+
+```powershell
+py -3 -m pip install lz4 capstone
+py -3 scripts/build_ipa_from_shell.py game/01004AB00A260000 `
+  --keys game/01004AB00A260000/prod.keys `
+  --shell game/01004AB00A260000/LordranNative-shell-build-input.zip
+```
+
+The shell and source checkout must come from the same release. Before building, follow the [Windows packaging notes](docs/windows-packaging.md) to build the pinned SPIRV-Cross source and record its SHA-256 in `DM_SPIRV_CROSS_SHA256` (or pass `--spirv-cross-sha256`). The script checks the title and registered module builds, rewrites the game modules locally, and creates an unsigned IPA. It does not upload NSPs, keys, extracted files or the finished IPA. This no-Xcode route ships translated Metal source, so the iPhone compiles shaders on first launch; the first visit can take several minutes. The normal Mac route still compiles shaders ahead of time. The shell ZIP is build input, not an installable app; sideload and sign only the resulting IPA.
+
 ### 4. Sideload the IPA
 
 Use your sideloading tool to sign and install the unsigned IPA. The app uses the game's name and icon from the NSP.
 
 ## Controls
 
-- **Touch:** the left stick moves your character. In the 3D layout, swipe empty screen space to turn the camera; stopping or lifting your finger stops the turn. Buttons are handled separately, and R3 locks on to a target.
+- **Touch:** the left stick moves your character. In the 3D layout, swipe empty screen space to turn the camera; stopping or lifting your finger stops the turn. **Input & controller → Touch camera** provides separate horizontal and vertical inversion switches and sensitivity from 0.25x to 3x (default 1x). These preferences apply immediately to swiping and the virtual right stick, and are saved for the next launch. Buttons are handled separately, and R3 locks on to a target.
 - **Floating menu:** tap the semi-transparent edge-docked ball to open controls. It contains the FPS switch, timestamped log export and input settings. In **Edit controls**, drag a framed control to move it, drag its lower-right handle to resize it, and use the centre **Done** button to save. Rotation, opacity and shape are adjusted for the selected control.
 - **Controller:** connecting a physical controller hides the touch controls by default and provides the full button layout. The menu supports controller selection, automatic Nintendo/Xbox face mapping and a configurable stick dead zone.
 - **Mac:** use a DualSense controller, or the PC-style keyboard and mouse mapping. Launch the host with `DM_WINDOW=1` to open a game window.

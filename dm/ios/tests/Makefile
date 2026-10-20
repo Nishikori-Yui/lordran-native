@@ -1,5 +1,10 @@
 OUT ?= ../../../game/01004AB00A260000-work/build/ios-diagnostics-tests
-.PHONY: run ui-build
+.DEFAULT_GOAL := run
+.PHONY: run ui-build simulator-metal-build
+simulator-metal-build: $(OUT)/simulator_metal
+$(OUT)/simulator_metal: simulator_metal.m ../../gfx/nvn/nvn_sim_metal.m ../../gfx/nvn/nvn_sim_metal.h Makefile
+	mkdir -p $(OUT)
+	xcrun --sdk iphonesimulator clang -target arm64-apple-ios26.0-simulator -O1 -g -Wall -Wextra -Wno-protocol -fobjc-arc simulator_metal.m ../../gfx/nvn/nvn_sim_metal.m -framework Foundation -framework Metal -o $@
 run: $(OUT)/diagnostics $(OUT)/camera_swipe $(OUT)/control_profile $(OUT)/pad_axis $(OUT)/app_settings
 	$(OUT)/diagnostics
 	$(OUT)/camera_swipe

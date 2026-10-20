@@ -123,8 +123,8 @@ static class P {
             string cp = cmpDir == null ? null : Path.Combine(cmpDir, rel);
             if (cp != null && File.Exists(cp) && new FileInfo(cp).Length == e.Size && Same(f.Get, cp, e.Size, buf, cb)) {
                 if (File.Exists(op)) File.Delete(op);
-                if (clonefile(cp, op, 0) != 0) throw new IOException($"clonefile {cp} → {op} 失败 | failed: errno {Marshal.GetLastWin32Error()}");
-                cloned++; continue;
+                if (!OperatingSystem.IsWindows() && clonefile(cp, op, 0) == 0) { cloned++; continue; }
+                if (File.Exists(op)) File.Delete(op);
             }
             using var o = File.Create(op);
             for (long off = 0; off < e.Size;) {

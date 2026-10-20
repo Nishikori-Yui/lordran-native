@@ -1,5 +1,30 @@
 [
   {
+    "file": "dm/gfx/nvn/nvn_mtl.m",
+    "source": "if ([name isEqualToString:@\"顶点\"] || [name isEqualToString:@\"vertex\"]) return 0;",
+    "purpose": "Serialized shader-map stage token, not an authored log message"
+  },
+  {
+    "file": "dm/gfx/nvn/nvn_mtl.m",
+    "source": "if ([name isEqualToString:@\"像素\"] || [name isEqualToString:@\"fragment\"]) return 1;",
+    "purpose": "Serialized shader-map stage token, not an authored log message"
+  },
+  {
+    "file": "dm/gfx/nvn/nvn_mtl.m",
+    "source": "if ([name isEqualToString:@\"计算\"] || [name isEqualToString:@\"compute\"]) return 5;",
+    "purpose": "Serialized shader-map stage token, not an authored log message"
+  },
+  {
+    "file": "dm/gfx/nvn/nvn_mtl.m",
+    "source": "if ([name isEqualToString:@\"外壳\"] || [name isEqualToString:@\"tessellation-control\"]) return 3;",
+    "purpose": "Serialized shader-map stage token, not an authored log message"
+  },
+  {
+    "file": "dm/gfx/nvn/nvn_mtl.m",
+    "source": "if ([name isEqualToString:@\"域\"] || [name isEqualToString:@\"tessellation-evaluation\"]) return 4;",
+    "purpose": "Serialized shader-map stage token, not an authored log message"
+  },
+  {
     "file": "dm/host/dm_log.h",
     "source": "if (!strncmp(format, \"【红】\", strlen(\"【红】\"))) { prefix_level = \"ERROR\"; format += strlen(\"【红】\"); }",
     "purpose": "Legacy input marker is consumed, never emitted"
@@ -322,6 +347,46 @@
   {
     "file": "dm/ios/Sources/front_ios.m",
     "source": "UIAlertController *a = [UIAlertController alertControllerWithTitle:@\"存档失败 / Save failed\" message:m preferredStyle:UIAlertControllerStyleAlert];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addText:T(@\"Touch camera\", @\"触屏视角\") small:NO];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addSwitch:T(@\"Invert horizontal\", @\"横轴反转\") on:_gamepad.profile.lookInvertX action:@selector(lookInvertXToggled:)];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addSwitch:T(@\"Invert vertical\", @\"纵轴反转\") on:_gamepad.profile.lookInvertY action:@selector(lookInvertYToggled:)];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addSlider:SliderLookSensitivity title:T(@\"Sensitivity\", @\"灵敏度\") min:0.25 max:3 value:_gamepad.profile.lookSensitivity];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addText:T(@\"1x is the default. Higher values turn faster.\", @\"1 倍为默认值，数值越大转动越快。\") small:YES];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addButton:T(@\"Reset touch camera\", @\"重置触屏视角\") symbol:@\"arrow.counterclockwise\" action:@selector(resetTouchCamera)];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "NSString *value = [NSString stringWithFormat:T(@\"%.2fx\", @\"%.2f 倍\"), _gamepad.profile.lookSensitivity];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "_values[SliderLookSensitivity].text = [NSString stringWithFormat:@\"%@: %@\", T(@\"Sensitivity\", @\"灵敏度\"), value];",
     "purpose": "Localized user interface text"
   }
 ]

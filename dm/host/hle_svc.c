@@ -8,6 +8,7 @@
 #include <sched.h>
 #include <time.h>
 #include <stdatomic.h>
+#include <TargetConditionals.h>
 
 // Reserve one whole block of guest address space, partitioned the Horizon way (address values are the real addresses returned by the host's mmap).
 // It only takes address space, not memory.
@@ -28,7 +29,12 @@ int dm_guest_as_contains(uintptr_t a) { uintptr_t b = (uintptr_t)g_as; return g_
 
 static void mem_init(void) {
     if (g_as) return;
+#if TARGET_OS_SIMULATOR
+    // MTLSimDriver exports zero-copy pools to its GPU service through XPC.
+    g_as = mmap(NULL, RESERVE, PROT_NONE, MAP_SHARED | MAP_ANON, -1, 0);
+#else
     g_as = mmap(NULL, RESERVE, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+#endif
     if (g_as == MAP_FAILED) die("reserve guest AS");
     // Fixed partition (all inside the reserved block): alias 2.875 GB, stack 256 MB, heap the remaining 1.625 GB.
     // In newer SDKs the AddressRegionManager always takes 0x3fe00000 (~1 GB) at the start of the alias region as its node area (sdk 0x134728) before handing out regions; with a 512 MB alias region the very first AllocateAddressRegion fails (0x1803).

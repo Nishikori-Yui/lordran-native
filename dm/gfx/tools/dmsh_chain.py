@@ -34,11 +34,15 @@ def options():
     return 'debug=%s reduced=%s' % (os.environ.get('XLATE_DEBUG', '1') != '0', os.environ.get('XLATE_REDUCED', '1') == '1')
 
 def version():
+    def stable_bytes(path):
+        # Keep the chain ID identical on Windows checkouts with CRLF files.
+        return open(path, 'rb').read().replace(b'\r\n', b'\n')
+
     h = hashlib.sha256()
     for f in FILES:
-        h.update(f.encode() + b'\0' + open(os.path.join(GFX, f), 'rb').read() + b'\0')
+        h.update(f.encode() + b'\0' + stable_bytes(os.path.join(GFX, f)) + b'\0')
     for f in TABLES:
-        h.update(f'game/{f}'.encode() + b'\0' + GAME.table(f).read_bytes() + b'\0')
+        h.update(f'game/{f}'.encode() + b'\0' + stable_bytes(GAME.table(f)) + b'\0')
     h.update(''.join(f'{k}\t{chr(9).join(v)}\n' for k, v in GAME.rows if k.startswith(('nvn_', 'shader_'))).encode())   # 档案里影响出包的键 | the profile keys that affect the build
     h.update(options().encode())
     return h.hexdigest()[:12]
@@ -78,8 +82,9 @@ if __name__ == '__main__':
         for b in bad: print('【红】翻译链工具与锁文件不符：' + b)
         sys.exit(1 if bad else 0)
     elif a == ['--header']:
-        open(HEADER, 'w').write(f'// 生成文件（dm/gfx/tools/dmsh_chain.py --header，游戏 {GAME.id}）：本源码树期望的 B 着色器库翻译链版本（缺省选项）；宿主只加载 <库目录>/b-<V>/\n'
-                                f'#define DMSH_CHAIN "{version()}"\n')
+        with open(HEADER, 'w', encoding='utf-8', newline='\n') as header:
+            header.write(f'// 生成文件（dm/gfx/tools/dmsh_chain.py --header，游戏 {GAME.id}）：本源码树期望的 B 着色器库翻译链版本（缺省选项）；宿主只加载 <库目录>/b-<V>/\n'
+                         f'#define DMSH_CHAIN "{version()}"\n')
         print(version())
     elif not a: print(version())
     else: sys.exit(__doc__ if __doc__ else '用法见文件头')
