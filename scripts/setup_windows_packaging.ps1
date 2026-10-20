@@ -150,12 +150,21 @@ function Ensure-Zstd {
     if ($null -ne $existing) {
         return $existing
     }
+
+    $installRoot = Join-Path $Root "zstd-v$ZstdVersion"
+    $archive = Join-Path $Root "zstd-v$ZstdVersion-win64.zip"
+    if (Test-Path -LiteralPath $installRoot -PathType Container) {
+        $downloaded = Get-ChildItem -LiteralPath $installRoot -Filter 'zstd.exe' -File -Recurse |
+            Select-Object -First 1
+        if ($null -ne $downloaded) {
+            $env:Path = "$(Split-Path $downloaded.FullName);$env:Path"
+            return $downloaded.FullName
+        }
+    }
     if ($SkipInstall) {
         throw 'zstd.exe is missing. Install it or pass -ZstdPath C:\path\to\zstd.exe.'
     }
 
-    $installRoot = Join-Path $Root "zstd-v$ZstdVersion"
-    $archive = Join-Path $Root "zstd-v$ZstdVersion-win64.zip"
     New-Item -ItemType Directory -Force -Path $Root | Out-Null
     $downloaded = $null
     if (Test-Path -LiteralPath $installRoot -PathType Container) {
