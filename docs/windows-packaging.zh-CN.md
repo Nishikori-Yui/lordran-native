@@ -2,103 +2,366 @@
 
 [English](windows-packaging.md)
 
-`LordranNative-shell-build-input.zip` 是不含游戏文件的未签名 iOS 构建输入，里面只有宿主可执行文件、公开的游戏档案表格和字体资源，不是可安装 App。`Build unsigned iOS shell` Actions 工作流仅在手动运行或推送 tag 时触发，并上传保留 30 天的 ZIP 产物；普通提交和 PR 不会触发构建。若 tag 已有对应的 GitHub Release，工作流还会将 ZIP 附加到该 Release。若之后才创建 Release，可在该 tag 上手动重跑工作流以附加壳文件。
+本文档**全部使用 PowerShell 语法**，不是 `cmd.exe`。请在 PowerShell 中逐段复制执行。推荐使用 PowerShell 7；Windows PowerShell 5.1 也支持本文档中的命令。安装工具后请重新打开 PowerShell，让新的 `PATH` 生效。
 
-## 环境要求
+如果你第一次接触这个项目，先了解下面几个文件的含义：
 
-- Windows 10/11 x64、Python 3.12 或更高版本、.NET 10 SDK。
-- 将 `zstd` 加入 `PATH`，用于解压着色器容器。
-- 使用 SPIRV-Cross 上游标签 `vulkan-sdk-1.4.357.0`、提交 `6c09849fe88c48eaed08413aa022aaa136a3a057` 构建的程序。安装 CMake、Ninja 和 C++ 编译器；使用 MSVC 时，在 Visual Studio 的 Developer PowerShell 中执行：
+- **仓库：** 本项目的本地源码副本。本文档默认放在 `C:\src\lordran-native`。
+- **壳 ZIP：** GitHub Actions 生成的公开、无游戏内容的构建输入，包含原生程序和公开资源，但不是可安装 App。
+- **NSP：** 你自己的 Nintendo Switch 游戏包。需要本体和 1.0.3 更新包；仓库不提供这些大文件。
+- **`prod.keys`：** 你自己的密钥文件，用来读取 NSP。不要上传，也不要把内容粘贴到日志或 Issue。
+- **IPA：** 最后生成的未签名 iOS 安装包，安装前必须使用你自己的 Apple 账号签名。
 
-  ```powershell
-  git clone --branch vulkan-sdk-1.4.357.0 --depth 1 https://github.com/KhronosGroup/SPIRV-Cross
-  if ((git -C SPIRV-Cross rev-parse HEAD) -ne "6c09849fe88c48eaed08413aa022aaa136a3a057") { throw "Unexpected SPIRV-Cross source revision" }
-  cmake -S SPIRV-Cross -B SPIRV-Cross/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSPIRV_CROSS_ENABLE_TESTS=OFF "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=$PWD/SPIRV-Cross/build/bin"
-  cmake --build SPIRV-Cross/build --target spirv-cross
-  if ($LASTEXITCODE -ne 0) { throw "SPIRV-Cross build failed" }
-  $spirvCross = (Resolve-Path SPIRV-Cross/build/bin/spirv-cross.exe).Path
-  $spirvCrossSha256 = (Get-FileHash -Algorithm SHA256 $spirvCross).Hash.ToLowerInvariant()
-  $env:Path = "$(Split-Path $spirvCross);$env:Path"
-  $env:DM_SPIRV_CROSS_SHA256 = $spirvCrossSha256
-  ```
+下面的命令按顺序分段执行，建议始终使用同一个 PowerShell 窗口。终端如果显示了 `PS>` 提示符，不要把提示符本身复制进去。
 
-- 游戏本体 NSP、1.0.3 更新 NSP（`v196608`）和你自己的 `prod.keys`。
-- 大约 15 GB 可用空间，用于解包文件、着色器处理和缓存。
+Windows 打包流程不需要 Xcode，可以生成未签名 iOS IPA：
 
-在准备执行构建的同一个 PowerShell 窗口检查工具：
+1. 下载与当前源码版本一致的无游戏壳 ZIP。
+2. 从指定源码构建 Windows 版 SPIRV-Cross，并记录 SHA-256。
+3. 把自己的 NSP 和 `prod.keys` 放入被 Git 忽略的 `game/` 目录。
+4. 执行环境检查、打包和归档校验。
+5. 使用自己的 Apple 签名流程签名并侧载 IPA。
+
+壳 ZIP 只是构建输入，不是可安装 App，也不含游戏文件。GitHub Actions
+工作流仅在手动运行或推送 tag 时构建；普通提交和 PR 不会触发。Actions
+产物保留 30 天。如果 tag 已经有 GitHub Release，工作流还会将 ZIP 上传到
+该 Release。
+
+## 1. 安装工具
+
+如果还没有 Git、Python 或 .NET，可以先在普通 PowerShell 中执行下面的可选命令。执行完后关闭并重新打开 PowerShell：
 
 ```powershell
+winget install --id Git.Git -e
+winget install --id Python.Python.3.12 -e
+winget install --id Microsoft.DotNet.SDK.10 -e
+winget install --id Kitware.CMake -e
+winget install --id Ninja-build.Ninja -e
+```
+
+还需要 `zstd.exe` 和 MSVC C++ 编译器。请安装 Visual Studio 或 Visual Studio Build Tools，并勾选 **使用 C++ 的桌面开发**工作负载；然后安装 Windows 版 zstd，并把包含 `zstd.exe` 的目录加入 `PATH`。如果 `winget` 找不到某个软件，请改用官方安装程序；项目不要求使用特定的软件包管理器。
+
+本文档会用到两种 PowerShell：
+
+- **普通 PowerShell：** 下载仓库、创建 Python 环境和运行打包命令。
+- **Visual Studio Developer PowerShell：** 构建 SPIRV-Cross。请从 Visual Studio 开始菜单文件夹打开它，这样 `cl.exe` 和 Windows SDK 会自动配置好。
+
+## 2. 环境要求
+
+准备一台 64 位 Windows 10/11 电脑，并安装：
+
+- Python 3.12 或更高版本，可通过 `py -3` 调用。
+- .NET 10 SDK。
+- Git、CMake、Ninja 和 MSVC C++ 工具链。最方便的方式是使用
+  **Visual Studio Developer PowerShell**，因为它会自动设置 CMake 所需的编译器环境。
+- 加入 `PATH` 的 `zstd.exe`，用于解压着色器容器。
+- 构建前至少约 15 GB 可用空间；如果要保留解包文件和缓存，建议至少保留 30 GB。
+- 你自己的游戏本体 NSP、1.0.3 更新 NSP（`v196608`）和自己的
+  `prod.keys`。不要把密钥放入 Git、Issue 或日志。
+
+请使用所在环境批准的软件源或官方安装程序安装工具。安装后关闭并重新打开
+PowerShell。在**同一个将要执行构建的 PowerShell 窗口**中检查工具：
+
+```powershell
+$ErrorActionPreference = 'Stop'
 py -3 --version
 dotnet --list-sdks
-spirv-cross --version
+git --version
+cmake --version
+ninja --version
 zstd --version
 ```
 
-建议在已被 Git 忽略的 `game/` 目录下创建 Python 虚拟环境，并直接调用其中的解释器。这样不必修改 PowerShell 执行策略，也不会将依赖安装到其他 Python 环境：
+第一条命令必须显示 Python 3.12 或更高版本；SDK 列表必须包含 .NET 10。
+如果出现「找不到命令」，先修复 `PATH`，不要混用不同 PowerShell 窗口中的工具。
+
+## 3. 下载仓库并设置路径
+
+如果还没有仓库，请在普通 PowerShell 中执行：
 
 ```powershell
-py -3 -m venv game/01004AB00A260000/tools-venv
-$python = (Resolve-Path game/01004AB00A260000/tools-venv/Scripts/python.exe).Path
-& $python -m pip install lz4 capstone fonttools
-& $python scripts/player_support.py doctor --route shell
+New-Item -ItemType Directory -Force -Path 'C:\src' | Out-Null
+Set-Location 'C:\src'
+git clone https://github.com/Nishikori-Yui/lordran-native.git
+Set-Location 'C:\src\lordran-native'
 ```
 
-下载空壳前，doctor 只检查本机工具。取得匹配的空壳后，通过 `--shell` 增加兼容性检查。同一解释器还可在打包前运行 `scripts/player_support.py build ... --dry-run`，打包后运行 `scripts/player_support.py verify <IPA> --full-crc`。这些是结构检查，不代表已运行游戏。
-
-Windows 使用你从指定上游源码构建的可执行文件的完整 SHA-256。可通过 `--spirv-cross-sha256` 传入，也可在构建会话中保留 `DM_SPIRV_CROSS_SHA256`。配置工具链时保存该值，在新会话中恢复；不要从未经信任的替换程序重新计算指纹。此检查用于发现 `PATH` 指向了其他程序或二进制被替换，哈希本身不能证明源码来源。整个流程不需要私有工具链记录。macOS 仍校验仓库锁定的 Mac 二进制指纹；不要把 Windows 哈希写入 `dmsh_chain.lock` 或 `dmsh_chain.h`。
-
-## 构建
-
-源码仓库与壳必须来自同一个 GitHub Release。请把 NSP、密钥、构建中间文件和 IPA 都放在 `game/` 下；该目录已被 Git 忽略。
+如果上面使用的版本是某个指定 Release，请把下面的 `v0.1.0` 替换成对应 tag。尽量使用 Release 版本，因为壳 ZIP 和源码必须来自同一个版本；如果你使用开发分支，也必须确保壳和源码来自同一个 commit。
 
 ```powershell
-& $python scripts/build_ipa_from_shell.py game/01004AB00A260000 `
-  --keys game/01004AB00A260000/prod.keys `
-  --shell game/01004AB00A260000/LordranNative-shell-build-input.zip `
-  --spirv-cross-sha256 $spirvCrossSha256
+git fetch --tags
+git checkout v0.1.0
 ```
 
-打包器会校验壳的源码指纹、游戏档案、着色器链版本和着色器清单，并在读取 NSP 前检查工具链；识别 NSP 标题号与版本，按档案核对改写后的模块构建号，编译仓库内的着色器翻译器，提取和改写所选游戏版本，将全部档案着色器翻译为 MSL，生成 `Guest.framework` 并组装 IPA。开始翻译时还会再次校验工具指纹。中间文件和日志保存在 `<NSP 文件夹>/01004AB00A260000_shell_build/`；成功后会删除解包目录，传入 `--keep-extracted` 则保留。要打包本体版本可加 `-p v0`，但仍须提供档案要求的着色器版本。
-
-常用选项：
+现在设置后续命令使用的路径。第一行只在仓库不位于 `C:\src\lordran-native` 时修改。下面这些变量会被后续命令重复使用，因此可以直接复制后面的代码块。
 
 ```powershell
-# 构建成功后保留解出的 ExeFS/RomFS。
-& $python scripts/build_ipa_from_shell.py game/01004AB00A260000 `
-  --keys game/01004AB00A260000/prod.keys `
-  --shell game/01004AB00A260000/LordranNative-shell-build-input.zip `
-  --keep-extracted
+$ErrorActionPreference = 'Stop'
+Set-Location 'C:\src\lordran-native'
 
-# 打包已登记的本体版本，而不是默认更新版本。
-& $python scripts/build_ipa_from_shell.py game/01004AB00A260000 `
-  --keys game/01004AB00A260000/prod.keys `
-  --shell game/01004AB00A260000/LordranNative-shell-build-input.zip `
-  --package v0 `
-  --out game/01004AB00A260000/DarkSoulsRemastered-v0.ipa
+$Repo = (Get-Location).Path
+$GameDir = Join-Path $Repo 'game\01004AB00A260000'
+$Keys = Join-Path $GameDir 'prod.keys'
+$Shell = Join-Path $GameDir 'LordranNative-shell-build-input.zip'
+$Output = Join-Path $GameDir 'LordranNative-Windows.ipa'
+$BuildWork = Join-Path $GameDir '01004AB00A260000_shell_build'
 
-# 查看全部参数，不会读取游戏文件。
-& $python scripts/build_ipa_from_shell.py -h
+New-Item -ItemType Directory -Force -Path $GameDir | Out-Null
+Write-Host "仓库：$Repo"
+Write-Host "私有游戏目录：$GameDir"
 ```
 
-输出路径必须位于当前仓库的 `game/` 下。默认输出为 `<NSP 文件夹>/DarkSoulsRemastered.ipa`。不要让两个打包进程同时使用同一个工作目录。
+仓库的 `game/` 目录已被 Git 忽略。NSP、密钥、壳 ZIP、解包文件、日志和
+IPA 都应放在这里。打包器会拒绝当前仓库 `game/` 目录之外的输出路径。
 
-空壳默认 Bundle ID 从游戏 profile 读取，为 `dev.nishikori.lordran-native`。注入器继承匹配空壳的 ID，也可用 `--bundle-id` 覆盖；`Guest.framework` 使用最终 App ID 加 `.guest`。空壳生成器和辅助打包命令也支持 `--bundle-id`。请下载与当前源码版本完全匹配的新空壳，不要混用旧空壳和新打包器。
+## 4. 构建指定版本的 SPIRV-Cross
 
-## 安装与首次启动
+Windows 必须使用以下精确版本的 SPIRV-Cross：
 
-从 Actions 下载的 ZIP 只是壳构建输入。请用 AltStore 或 Sideloadly 等工具对最终 IPA 签名和侧载；该工具需要用你自己的身份替换占位签名信息。Windows 无法运行 Apple Metal 编译器，因此 IPA 会将 MSL 源码作为着色器库内容。iOS 首次使用时会逐个编译着色器并缓存；首次加载场景可能要等几分钟。之后的启动会复用系统缓存。此流程尚未在所有 iOS 设备上验证。
+- 标签：`vulkan-sdk-1.4.357.0`
+- 提交：`6c09849fe88c48eaed08413aa022aaa136a3a057`
+
+这一节请在 **Visual Studio Developer PowerShell** 中执行。选择一个空的父目录。
+下面的命令如果发现目录已经存在会主动停止，避免误用未知源码构建。
+
+```powershell
+$ToolRoot = Join-Path $env:USERPROFILE 'src'
+$SpirvCrossRoot = Join-Path $ToolRoot 'SPIRV-Cross'
+$SpirvCrossTag = 'vulkan-sdk-1.4.357.0'
+$SpirvCrossCommit = '6c09849fe88c48eaed08413aa022aaa136a3a057'
+
+New-Item -ItemType Directory -Force -Path $ToolRoot | Out-Null
+if (Test-Path $SpirvCrossRoot) {
+    throw "拒绝复用已有的 SPIRV-Cross 目录：$SpirvCrossRoot"
+}
+
+git clone --branch $SpirvCrossTag --depth 1 `
+    'https://github.com/KhronosGroup/SPIRV-Cross' $SpirvCrossRoot
+
+$ActualCommit = (git -C $SpirvCrossRoot rev-parse HEAD).Trim()
+if ($ActualCommit -ne $SpirvCrossCommit) {
+    throw "SPIRV-Cross 提交不符合要求：$ActualCommit"
+}
+
+$SpirvCrossBuild = Join-Path $SpirvCrossRoot 'build'
+$SpirvCrossBin = Join-Path $SpirvCrossBuild 'bin'
+cmake -S $SpirvCrossRoot -B $SpirvCrossBuild -G Ninja `
+    -DCMAKE_BUILD_TYPE=Release `
+    -DSPIRV_CROSS_ENABLE_TESTS=OFF `
+    "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=$SpirvCrossBin"
+cmake --build $SpirvCrossBuild --target spirv-cross
+
+$SpirvCrossExe = (Resolve-Path (Join-Path $SpirvCrossBin 'spirv-cross.exe')).Path
+$SpirvCrossSha256 = (Get-FileHash -Algorithm SHA256 $SpirvCrossExe).Hash.ToLowerInvariant()
+$env:Path = "$(Split-Path $SpirvCrossExe);$env:Path"
+$env:DM_SPIRV_CROSS_SHA256 = $SpirvCrossSha256
+$SpirvCrossHashFile = Join-Path $SpirvCrossRoot 'spirv-cross.sha256'
+Set-Content -NoNewline -Path $SpirvCrossHashFile -Value $SpirvCrossSha256
+
+Write-Host "SPIRV-Cross：$SpirvCrossExe"
+Write-Host "SPIRV-Cross SHA-256：$SpirvCrossSha256"
+```
+
+如果要新开 PowerShell 窗口，请在执行后续打包命令的窗口中运行下面的代码。
+构建步骤会把指纹保存到本地构建出的程序旁边；下面的代码会读取保存值，并再次校验
+该路径下的程序。不要用未经信任的下载文件替换这两个文件。
+
+```powershell
+$SpirvCrossRoot = Join-Path $env:USERPROFILE 'src\SPIRV-Cross'
+$SpirvCrossExe = Join-Path $SpirvCrossRoot 'build\bin\spirv-cross.exe'
+$SpirvCrossHashFile = Join-Path $SpirvCrossRoot 'spirv-cross.sha256'
+if (-not (Test-Path -LiteralPath $SpirvCrossExe -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $SpirvCrossHashFile -PathType Leaf)) {
+    throw 'SPIRV-Cross 程序或已保存的指纹文件不存在。'
+}
+$SpirvCrossSha256 = (Get-Content -Raw -LiteralPath $SpirvCrossHashFile).Trim().ToLowerInvariant()
+$ActualSpirvCrossSha256 = (Get-FileHash -Algorithm SHA256 $SpirvCrossExe).Hash.ToLowerInvariant()
+if ($ActualSpirvCrossSha256 -ne $SpirvCrossSha256) {
+    throw 'SPIRV-Cross 程序与已保存的 SHA-256 不匹配。'
+}
+$env:Path = "$(Split-Path $SpirvCrossExe);$env:Path"
+$env:DM_SPIRV_CROSS_SHA256 = $SpirvCrossSha256
+Write-Host "已恢复 SPIRV-Cross SHA-256：$SpirvCrossSha256"
+```
+
+哈希检查用于发现 `PATH` 指向了其他程序或程序被替换，但哈希本身不能证明源码来源。
+不要把 Windows 哈希写入 `dmsh_chain.lock` 或 `dmsh_chain.h`；Windows 和 macOS
+编译出的程序指纹不同。
+
+## 5. 放置输入文件并创建 Python 环境
+
+### 下载壳 ZIP
+
+在 GitHub 仓库的 **Releases** 页面打开与上面 checkout 相同的 tag，下载
+`LordranNative-shell-build-input.zip`。如果 Release 中没有该文件，就打开仓库的
+**Actions** 页面，选择 **Build unsigned iOS shell**，进入同一个 tag 的成功运行记录，
+下载名为 `LordranNative-shell-build-input` 的 artifact。
+
+不要使用其他 tag 的壳。壳与源码版本不匹配是构建失败最常见的原因之一。
+
+把壳 ZIP、两个 NSP 和自己的 `prod.keys` 复制到 `$GameDir`。文件名可以不同，但该目录必须包含一个受支持的本体版本及其 `v196608` 更新版本。
+
+检查私有输入是否存在：
+
+```powershell
+$Required = @($Keys, $Shell)
+foreach ($Path in $Required) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "缺少必需文件：$Path"
+    }
+}
+
+Get-ChildItem -LiteralPath $GameDir -File |
+    Select-Object Name, Length, LastWriteTime
+```
+
+创建仓库内的虚拟环境并安装 Python 依赖：
+
+```powershell
+$PythonVenv = Join-Path $GameDir 'tools-venv'
+py -3 -m venv $PythonVenv
+$Python = (Resolve-Path (Join-Path $PythonVenv 'Scripts\python.exe')).Path
+
+& $Python -m pip install --upgrade pip
+& $Python -m pip install lz4 capstone fonttools
+& $Python --version
+```
+
+本次会话中始终使用 `& $Python ...` 调用脚本。这样不需要修改 PowerShell 执行策略，
+也不会把依赖安装到其他 Python 环境。
+
+## 6. 执行构建前检查
+
+先运行 doctor。它会检查本机工具；提供 `--shell` 后，还会检查壳的清单和兼容性数据。
+
+```powershell
+& $Python scripts/player_support.py doctor `
+    --route shell `
+    --shell $Shell `
+    --work-dir $BuildWork `
+    --spirv-cross-sha256 $SpirvCrossSha256
+if ($LASTEXITCODE -ne 0) {
+    throw '环境检查失败；请先修复上面的错误。'
+}
+```
+
+再运行 dry-run。它会检查路径和参数，但不会生成最终 IPA：
+
+```powershell
+& $Python scripts/player_support.py build $GameDir `
+    --keys $Keys `
+    --shell $Shell `
+    --out $Output `
+    --spirv-cross-sha256 $SpirvCrossSha256 `
+    --dry-run
+if ($LASTEXITCODE -ne 0) {
+    throw 'dry-run 失败；请先修复上面的错误。'
+}
+```
+
+## 7. 构建未签名 IPA
+
+只有 doctor 和 dry-run 都成功后，才执行正式构建：
+
+```powershell
+& $Python scripts/player_support.py build $GameDir `
+    --keys $Keys `
+    --shell $Shell `
+    --out $Output `
+    --spirv-cross-sha256 $SpirvCrossSha256
+if ($LASTEXITCODE -ne 0) {
+    throw 'IPA 构建失败；请查看 game 私有目录下的日志。'
+}
+
+Get-Item -LiteralPath $Output | Select-Object FullName, Length, LastWriteTime
+```
+
+打包器会检查壳源码指纹、标题号、档案登记的模块构建号、着色器链、着色器清单和
+SPIRV-Cross 指纹，然后提取并改写选定的游戏版本，将档案着色器翻译为 MSL，生成
+`Guest.framework` 并组装未签名 IPA。日志和中间文件位于 `$BuildWork`。构建成功后
+会删除解包文件，除非使用 `--keep-extracted`。
+
+需要直接调试底层打包器时，可以使用：
+
+```powershell
+& $Python scripts/build_ipa_from_shell.py $GameDir `
+    --keys $Keys `
+    --shell $Shell `
+    --out $Output `
+    --spirv-cross-sha256 $SpirvCrossSha256
+```
+
+不要让两个构建进程同时使用同一个 `$GameDir`。
+
+### 可选命令
+
+构建成功后保留解出的 `ExeFS`/`RomFS`：
+
+```powershell
+& $Python scripts/player_support.py build $GameDir `
+    --keys $Keys `
+    --shell $Shell `
+    --out $Output `
+    --spirv-cross-sha256 $SpirvCrossSha256 `
+    --keep-extracted
+```
+
+打包已登记的本体版本，而不是默认的 `v196608` 更新版本。更新 NSP 仍然需要提供，
+因为它可能用于档案要求的着色器提取和校验：
+
+```powershell
+$BaseOutput = Join-Path $GameDir 'LordranNative-base-v0.ipa'
+& $Python scripts/player_support.py build $GameDir `
+    --keys $Keys `
+    --shell $Shell `
+    --package v0 `
+    --out $BaseOutput `
+    --spirv-cross-sha256 $SpirvCrossSha256
+```
+
+只有在确实需要自定义 App 身份时才使用 `--bundle-id`，并确保它与壳及
+`Guest.framework` 的最终身份保持一致。
+
+## 8. 校验与安装
+
+构建完成后执行归档结构和校验和检查：
+
+```powershell
+& $Python scripts/player_support.py verify $Output `
+    --target device `
+    --full-crc `
+    --match-source
+if ($LASTEXITCODE -ne 0) {
+    throw 'IPA 校验失败。'
+}
+```
+
+这项检查验证归档结构和 CRC，不代表已经完成游戏运行测试。IPA 按设计是未签名的，
+请使用 AltStore、Sideloadly 或其他受支持的工具，用自己的 Apple 身份签名后安装。
+Windows 无法运行 Apple Metal 编译器，因此 IPA 内包含 MSL 源码，iOS 会在首次使用
+时编译着色器。第一次进入场景可能需要几分钟，后续启动会复用系统缓存。
 
 ## 故障排查
 
-- **壳与源码不匹配：** 下载与源码检出版本相同的 Release。
-- **标题号或构建号不受支持：** 使用《黑暗之魂：重制版》本体 NSP 和档案已登记的版本。本仓库只支持标题 `01004AB00A260000`。
-- **缺少工具：** 在同一个 PowerShell 会话中确认 `dotnet`、`spirv-cross`、`zstd` 和选定的 Python 可用，并把 `lz4`、`capstone`、`fonttools` 安装到该 Python 解释器。
-- **SPIRV-Cross 指纹缺失或不符：** 按上面说明从指定上游提交构建，记录完整 SHA-256，通过 `--spirv-cross-sha256` 或 `DM_SPIRV_CROSS_SHA256` 提供，并确认 `Get-Command spirv-cross` 指向该程序。Windows 编译产物与仓库锁定的 Mac 二进制指纹不同，不要因此修改共享锁。
-- **解包失败：** 查看对应的 `nx_extract_build.log` 或 `extract_<version>.log`；确认本体和更新 NSP 完整、密钥是用户自己的有效 `prod.keys`，且磁盘空间足够。不要打印或复制密钥到日志。
-- **模块构建号不匹配：** NSP 版本未登记在 `dm/games/01004AB00A260000/game.tsv`；停止，不要绕过校验。
-- **壳 ZIP 路径缺失或多出文件：** 壳生成端和消费端的白名单采用 fail-closed。添加资源前必须先证明它是公开数据且不含游戏派生或私人内容，不要直接放宽白名单。
-- **IPA 无法安装：** 打包器按设计输出未签名 IPA。使用受支持的侧载工具以用户自己的身份签名；不要添加 CI 签名或提交证书/描述文件。
-- **着色器链不匹配或着色器缺失：** 使用匹配的壳与源码版本，以及上面指定的 SPIRV-Cross 标签；不要混用其他构建的着色器缓存。
-- **首次启动很慢：** 使用源码着色器的 IPA 会如此。首次编译时保持 App 在前台，直到完成。
+- **找不到命令：** 重新打开与构建相同类型的 PowerShell，重新执行第 1 节检查。
+  构建 SPIRV-Cross 时不要混用普通 PowerShell 和 Developer PowerShell。
+- **壳与源码不匹配：** 下载与当前 checkout 相同 Release tag 的壳，不要把 `main`
+  的壳与旧源码混用。
+- **SPIRV-Cross 指纹不符：** 检查 `Get-Command spirv-cross`、`$SpirvCrossExe`
+  和 `$env:DM_SPIRV_CROSS_SHA256`。必要时重新构建指定提交，不要修改仓库着色器锁。
+- **缺少 Python 依赖：** 确认 `$Python` 位于
+  `game/01004AB00A260000/tools-venv` 内，再执行
+  `& $Python -m pip install lz4 capstone fonttools`。
+- **标题号或构建号不受支持：** 使用标题 `01004AB00A260000` 和
+  `dm/games/01004AB00A260000/game.tsv` 中登记的版本，不要绕过检查。
+- **解包失败：** 查看 `$BuildWork` 下的 `nx_extract_build.log` 和
+  `extract_<version>.log`，确认两个 NSP 完整、`prod.keys` 有效且磁盘空间充足。
+  不要打印密钥内容。
+- **壳 ZIP 包含意外文件：** 壳生成端和消费端使用 fail-closed 白名单。不要在未证明
+  资源公开且不含游戏派生或私人数据前放宽白名单。
+- **IPA 无法安装：** 输出是未签名 IPA。请使用自己的侧载工具签名，不要把证书或
+  provisioning profile 加入仓库。
+- **首次启动很慢：** Windows 路线使用源码着色器，首次编译时请保持 App 在前台。
 
-该流程仍属实验性。如果可以使用 Mac/Xcode，建议优先使用常规流程，因为它会在安装前编译好着色器。
+该流程仍属实验性。如果可以使用 Mac/Xcode，建议优先使用常规流程，因为它会在安装
+前预先编译着色器。

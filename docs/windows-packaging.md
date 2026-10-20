@@ -2,124 +2,426 @@
 
 [简体中文](windows-packaging.zh-CN.md)
 
-`LordranNative-shell-build-input.zip` is an unsigned iOS build input with no game files. It contains the host executable, the public game-profile tables and font resources only. It is not an installable app. The `Build unsigned iOS shell` GitHub Actions workflow runs only manually or when a tag is pushed, and uploads the ZIP as a 30-day artifact. Ordinary commits and pull requests do not trigger a build. For a tag with an existing GitHub release, the workflow also attaches the ZIP to that release. If the release is created afterward, rerun the workflow manually on that tag to attach the shell.
+This guide is written for **PowerShell**, not `cmd.exe`. Every command block
+below uses PowerShell syntax. Open a new PowerShell window after installing a
+tool so that `PATH` changes are visible. PowerShell 7 is recommended; Windows
+PowerShell 5.1 also supports the commands in this guide.
 
-## Requirements
+This route creates an unsigned iOS IPA on Windows without Xcode. If you have
+never used this project before, read the short explanation below before
+running commands.
 
-- Windows 10/11 x64, Python 3.12 or later, and .NET 10 SDK.
-- `zstd` on `PATH` for shader-container extraction.
-- SPIRV-Cross built from upstream tag `vulkan-sdk-1.4.357.0`, commit `6c09849fe88c48eaed08413aa022aaa136a3a057`. Install CMake, Ninja, and a C++ compiler. With MSVC, run these commands in Developer PowerShell for Visual Studio:
+### What the files mean
 
-  ```powershell
-  git clone --branch vulkan-sdk-1.4.357.0 --depth 1 https://github.com/KhronosGroup/SPIRV-Cross
-  if ((git -C SPIRV-Cross rev-parse HEAD) -ne "6c09849fe88c48eaed08413aa022aaa136a3a057") { throw "Unexpected SPIRV-Cross source revision" }
-  cmake -S SPIRV-Cross -B SPIRV-Cross/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSPIRV_CROSS_ENABLE_TESTS=OFF "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=$PWD/SPIRV-Cross/build/bin"
-  cmake --build SPIRV-Cross/build --target spirv-cross
-  if ($LASTEXITCODE -ne 0) { throw "SPIRV-Cross build failed" }
-  $spirvCross = (Resolve-Path SPIRV-Cross/build/bin/spirv-cross.exe).Path
-  $spirvCrossSha256 = (Get-FileHash -Algorithm SHA256 $spirvCross).Hash.ToLowerInvariant()
-  $env:Path = "$(Split-Path $spirvCross);$env:Path"
-  $env:DM_SPIRV_CROSS_SHA256 = $spirvCrossSha256
-  ```
+- **Repository:** a local copy of this source code. The commands below assume
+  it is checked out at `C:\src\lordran-native`.
+- **Shell ZIP:** a public, game-free build input produced by GitHub Actions.
+  It contains native app code and public resources, but no game data. It is
+  not an app and cannot be installed directly.
+- **NSP:** your own Nintendo Switch game package. You need the base game and
+  the 1.0.3 update. They are large files and are not included in this
+  repository.
+- **`prod.keys`:** your own key file used to read your NSPs. Never upload it
+  or paste its contents into a report.
+- **IPA:** the unsigned iOS package produced at the end. It must be signed
+  with your own Apple account before installation.
 
-- The base NSP, the 1.0.3 update NSP (`v196608`), and your own `prod.keys`.
-- About 15 GB free for extracted files, shader work and caches.
+The commands are intentionally written as separate PowerShell blocks. Run
+them from top to bottom in one PowerShell window; do not paste the `PS>` prompt
+if your terminal displays one.
 
-Check the tools in the same PowerShell window that will run the build:
+The workflow is:
+
+1. Download a game-free shell ZIP built from the same source revision as this
+   checkout.
+2. Build the pinned Windows SPIRV-Cross executable and record its SHA-256.
+3. Put your own NSP files and `prod.keys` in the ignored `game/` directory.
+4. Run the preflight checks, build the IPA, and verify the archive.
+5. Sign and sideload the IPA with your own Apple signing workflow.
+
+The shell ZIP is only build input. It is not an installable app and contains no
+game files. The GitHub Actions workflow builds it only for a manual dispatch or
+a tag push; ordinary commits and pull requests do not trigger it. Workflow
+artifacts are retained for 30 days. For a tag with an existing GitHub Release,
+the workflow also uploads the ZIP to that release.
+
+## 1. Install the tools
+
+If Git, Python, or .NET is not installed, the following `winget` commands are
+an optional starting point. Run them in a normal PowerShell window, then close
+and reopen PowerShell:
 
 ```powershell
+winget install --id Git.Git -e
+winget install --id Python.Python.3.12 -e
+winget install --id Microsoft.DotNet.SDK.10 -e
+winget install --id Kitware.CMake -e
+winget install --id Ninja-build.Ninja -e
+```
+
+You also need `zstd.exe` and an MSVC C++ compiler. Install Visual Studio or the
+Visual Studio Build Tools with the **Desktop development with C++** workload,
+then install a Windows build of zstd and add the folder containing
+`zstd.exe` to `PATH`. If `winget` cannot find one of these packages, use the
+official installer instead; the project does not require a particular package
+manager.
+
+You will use two kinds of PowerShell window:
+
+- **Normal PowerShell:** clone the repository, create the Python environment,
+  and run the packaging commands.
+- **Developer PowerShell for Visual Studio:** build SPIRV-Cross. Open it from
+  the Visual Studio Start-menu folder so `cl.exe` and the Windows SDK are
+  already configured.
+
+## 2. Requirements
+
+Use a 64-bit Windows 10 or Windows 11 machine with:
+
+- Python 3.12 or later, available as `py -3`.
+- .NET 10 SDK.
+- Git, CMake, Ninja, and an MSVC C++ toolchain. The easiest build shell is
+  **Developer PowerShell for Visual Studio**, because it sets the compiler
+  environment for CMake.
+- `zstd.exe` on `PATH` for shader-container extraction.
+- About 15 GB free before building. Keep at least 30 GB free if you want to
+  retain extracted game data and build caches.
+- Your own base NSP, the 1.0.3 update NSP (`v196608`), and your own
+  `prod.keys`. Do not put keys in Git, issue reports, or logs.
+
+Install the tools using your organization's approved package source or the
+official installers. Close and reopen PowerShell afterward. Confirm the tools
+in the **same PowerShell window** that will run the build:
+
+```powershell
+$ErrorActionPreference = 'Stop'
 py -3 --version
 dotnet --list-sdks
-spirv-cross --version
+git --version
+cmake --version
+ninja --version
 zstd --version
 ```
 
-Create a private Python environment under the ignored `game/` directory and
-invoke its interpreter directly. This avoids changing PowerShell's execution
-policy and keeps Python dependencies out of other installations:
+The first command must report Python 3.12 or newer, and the SDK list must
+contain a .NET 10 SDK. If a command is not recognized, fix `PATH` before
+continuing; do not mix tools from different shells.
+
+## 3. Download the repository and define paths
+
+If you do not already have a checkout, run this in a normal PowerShell window.
+Use a release tag when possible; the shell ZIP and the source checkout must
+come from the same release.
 
 ```powershell
-py -3 -m venv game/01004AB00A260000/tools-venv
-$python = (Resolve-Path game/01004AB00A260000/tools-venv/Scripts/python.exe).Path
-& $python -m pip install lz4 capstone fonttools
-& $python scripts/player_support.py doctor --route shell
+New-Item -ItemType Directory -Force -Path 'C:\src' | Out-Null
+Set-Location 'C:\src'
+git clone https://github.com/Nishikori-Yui/lordran-native.git
+Set-Location 'C:\src\lordran-native'
 ```
 
-Before downloading a shell, the doctor checks local tools only. Once the
-matching shell is available, pass it with `--shell` to include compatibility
-validation. The same interpreter can run `scripts/player_support.py build ...
---dry-run` before packaging and `scripts/player_support.py verify <IPA>
---full-crc` afterward. These are structural checks, not a runtime test.
-
-Windows builds use the full SHA-256 recorded from the executable you built from
-the pinned upstream source. Pass it with `--spirv-cross-sha256`, or retain
-`DM_SPIRV_CROSS_SHA256` in the build session. Save this value when setting up
-the toolchain and restore it in a new session; do not recompute it from an
-untrusted replacement. The check detects a different executable selected by
-`PATH` or a changed binary; the hash alone does not prove its source provenance.
-No private toolchain record is required. macOS builds still enforce the
-committed Mac binary fingerprint. Do not edit `dmsh_chain.lock` or
-`dmsh_chain.h` to substitute a Windows binary hash.
-
-## Build
-
-Use the source checkout from the same GitHub release as the shell. Keep the NSPs, key file, work output and IPA under `game/`; this directory is ignored by Git.
+If you were told to use a particular release tag, replace `v0.1.0` below with
+that tag. If you are following the repository's current development branch,
+keep the checkout and shell from the same commit instead.
 
 ```powershell
-& $python scripts/build_ipa_from_shell.py game/01004AB00A260000 `
-  --keys game/01004AB00A260000/prod.keys `
-  --shell game/01004AB00A260000/LordranNative-shell-build-input.zip `
-  --spirv-cross-sha256 $spirvCrossSha256
+git fetch --tags
+git checkout v0.1.0
 ```
 
-The builder checks the shell's source fingerprint, profile, shader chain and shader inventory before use, and verifies the toolchain before reading the NSPs. It identifies the NSP title IDs and versions, checks rewritten module build IDs against the profile, builds the in-repository shader translator, extracts and rewrites the selected game build, translates all profile shaders to MSL, creates `Guest.framework`, and assembles the IPA. It rechecks the tool fingerprint when translation starts. Intermediates and logs stay in `<NSP folder>/01004AB00A260000_shell_build/`; extraction is deleted after success unless `--keep-extracted` is passed. Add `-p v0` to package the base game after the required shader versions have been extracted.
-
-Useful options:
+Now define the paths used by the rest of this guide. Replace the first path
+only if you cloned the repository somewhere else. These are PowerShell
+variables and are reused by the copyable commands below.
 
 ```powershell
-# Preserve extracted ExeFS/RomFS after a successful build.
-& $python scripts/build_ipa_from_shell.py game/01004AB00A260000 `
-  --keys game/01004AB00A260000/prod.keys `
-  --shell game/01004AB00A260000/LordranNative-shell-build-input.zip `
-  --keep-extracted
+$ErrorActionPreference = 'Stop'
+Set-Location 'C:\src\lordran-native'
 
-# Pack the registered base-game build instead of the default update build.
-& $python scripts/build_ipa_from_shell.py game/01004AB00A260000 `
-  --keys game/01004AB00A260000/prod.keys `
-  --shell game/01004AB00A260000/LordranNative-shell-build-input.zip `
-  --package v0 `
-  --out game/01004AB00A260000/DarkSoulsRemastered-v0.ipa
+$Repo = (Get-Location).Path
+$GameDir = Join-Path $Repo 'game\01004AB00A260000'
+$Keys = Join-Path $GameDir 'prod.keys'
+$Shell = Join-Path $GameDir 'LordranNative-shell-build-input.zip'
+$Output = Join-Path $GameDir 'LordranNative-Windows.ipa'
+$BuildWork = Join-Path $GameDir '01004AB00A260000_shell_build'
 
-# Show every supported option without reading the game files.
-& $python scripts/build_ipa_from_shell.py -h
+New-Item -ItemType Directory -Force -Path $GameDir | Out-Null
+Write-Host "Repository: $Repo"
+Write-Host "Private game directory: $GameDir"
 ```
 
-The output directory must remain under this checkout's `game/`. The default
-output is `<NSP folder>/DarkSoulsRemastered.ipa`. Do not run two builds against
-the same work folder concurrently.
+The repository's `game/` directory is ignored by Git. Keep NSPs, keys, shell
+ZIPs, extracted files, logs, and IPA outputs there. The builder refuses output
+paths outside this checkout's `game/` directory.
 
-The default shell Bundle ID is `dev.nishikori.lordran-native`, from
-the game profile. The injector retains the matching shell's ID or accepts
-`--bundle-id` to override it; `Guest.framework` uses the final app ID plus
-`.guest`. Shell production and the support build wrapper also accept
-`--bundle-id`. Download a shell built from this exact source revision rather
-than mixing an older shell with the new packer.
+## 4. Build pinned SPIRV-Cross
 
-## Install and first launch
+Windows must use SPIRV-Cross built from this exact upstream source:
 
-The ZIP downloaded from Actions is only a shell input. Sign and sideload the generated IPA with a tool such as AltStore or Sideloadly. The tool must replace the placeholder signing identity with your own. Because Windows cannot run Apple's Metal compiler, the IPA contains MSL source in place of precompiled libraries. On first use, iOS compiles each shader as it is loaded and caches the result; initial scene loads can take several minutes. Later launches reuse the system cache. This path has not been verified on every iOS device.
+- Tag: `vulkan-sdk-1.4.357.0`
+- Commit: `6c09849fe88c48eaed08413aa022aaa136a3a057`
+
+Run this section from **Developer PowerShell for Visual Studio**. Choose an
+empty parent directory. The script below deliberately stops if the checkout
+already exists, so it cannot silently build from an unknown source tree.
+
+```powershell
+$ToolRoot = Join-Path $env:USERPROFILE 'src'
+$SpirvCrossRoot = Join-Path $ToolRoot 'SPIRV-Cross'
+$SpirvCrossTag = 'vulkan-sdk-1.4.357.0'
+$SpirvCrossCommit = '6c09849fe88c48eaed08413aa022aaa136a3a057'
+
+New-Item -ItemType Directory -Force -Path $ToolRoot | Out-Null
+if (Test-Path $SpirvCrossRoot) {
+    throw "Refusing to reuse existing SPIRV-Cross checkout: $SpirvCrossRoot"
+}
+
+git clone --branch $SpirvCrossTag --depth 1 `
+    'https://github.com/KhronosGroup/SPIRV-Cross' $SpirvCrossRoot
+
+$ActualCommit = (git -C $SpirvCrossRoot rev-parse HEAD).Trim()
+if ($ActualCommit -ne $SpirvCrossCommit) {
+    throw "Unexpected SPIRV-Cross commit: $ActualCommit"
+}
+
+$SpirvCrossBuild = Join-Path $SpirvCrossRoot 'build'
+$SpirvCrossBin = Join-Path $SpirvCrossBuild 'bin'
+cmake -S $SpirvCrossRoot -B $SpirvCrossBuild -G Ninja `
+    -DCMAKE_BUILD_TYPE=Release `
+    -DSPIRV_CROSS_ENABLE_TESTS=OFF `
+    "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=$SpirvCrossBin"
+cmake --build $SpirvCrossBuild --target spirv-cross
+
+$SpirvCrossExe = (Resolve-Path (Join-Path $SpirvCrossBin 'spirv-cross.exe')).Path
+$SpirvCrossSha256 = (Get-FileHash -Algorithm SHA256 $SpirvCrossExe).Hash.ToLowerInvariant()
+$env:Path = "$(Split-Path $SpirvCrossExe);$env:Path"
+$env:DM_SPIRV_CROSS_SHA256 = $SpirvCrossSha256
+$SpirvCrossHashFile = Join-Path $SpirvCrossRoot 'spirv-cross.sha256'
+Set-Content -NoNewline -Path $SpirvCrossHashFile -Value $SpirvCrossSha256
+
+Write-Host "SPIRV-Cross: $SpirvCrossExe"
+Write-Host "SPIRV-Cross SHA-256: $SpirvCrossSha256"
+```
+
+Save `$SpirvCrossSha256` somewhere private if you will open a new PowerShell
+window. The build block also saves it next to the locally built executable.
+After opening the PowerShell window that will run the packaging commands,
+restore and verify the value with this block. It compares the saved value with
+the executable at the exact path used by the build; do not replace either file
+with an untrusted download.
+
+```powershell
+$SpirvCrossRoot = Join-Path $env:USERPROFILE 'src\SPIRV-Cross'
+$SpirvCrossExe = Join-Path $SpirvCrossRoot 'build\bin\spirv-cross.exe'
+$SpirvCrossHashFile = Join-Path $SpirvCrossRoot 'spirv-cross.sha256'
+if (-not (Test-Path -LiteralPath $SpirvCrossExe -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $SpirvCrossHashFile -PathType Leaf)) {
+    throw 'SPIRV-Cross executable or saved hash is missing.'
+}
+$SpirvCrossSha256 = (Get-Content -Raw -LiteralPath $SpirvCrossHashFile).Trim().ToLowerInvariant()
+$ActualSpirvCrossSha256 = (Get-FileHash -Algorithm SHA256 $SpirvCrossExe).Hash.ToLowerInvariant()
+if ($ActualSpirvCrossSha256 -ne $SpirvCrossSha256) {
+    throw 'SPIRV-Cross executable does not match the saved SHA-256.'
+}
+$env:Path = "$(Split-Path $SpirvCrossExe);$env:Path"
+$env:DM_SPIRV_CROSS_SHA256 = $SpirvCrossSha256
+Write-Host "Restored SPIRV-Cross SHA-256: $SpirvCrossSha256"
+```
+
+The hash detects a different executable selected by `PATH` or a changed binary;
+it does not prove source provenance by itself. Do not write the Windows hash into
+`dmsh_chain.lock` or `dmsh_chain.h`; the Mac and Windows binaries have different
+fingerprints.
+
+## 5. Place inputs and create Python environment
+
+### Download the shell ZIP
+
+On GitHub, open the **Releases** page for the same tag checked out above and
+download `LordranNative-shell-build-input.zip`. If the release does not contain
+it, open the repository's **Actions** tab, select **Build unsigned iOS shell**,
+open a successful run for the same tag, and download the artifact named
+`LordranNative-shell-build-input`.
+
+Do not use a shell from a different tag. A mismatch is one of the most common
+causes of a failed build.
+
+Copy the shell ZIP, the two NSPs, and your own `prod.keys` into `$GameDir`.
+The exact NSP filenames do not matter, but the directory must contain one
+supported base version and its `v196608` update.
+
+Check that the private inputs exist:
+
+```powershell
+$Required = @($Keys, $Shell)
+foreach ($Path in $Required) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Missing required file: $Path"
+    }
+}
+
+Get-ChildItem -LiteralPath $GameDir -File |
+    Select-Object Name, Length, LastWriteTime
+```
+
+Create a repository-local virtual environment and install the Python packages:
+
+```powershell
+$PythonVenv = Join-Path $GameDir 'tools-venv'
+py -3 -m venv $PythonVenv
+$Python = (Resolve-Path (Join-Path $PythonVenv 'Scripts\python.exe')).Path
+
+& $Python -m pip install --upgrade pip
+& $Python -m pip install lz4 capstone fonttools
+& $Python --version
+```
+
+Always invoke the scripts as `& $Python ...` in this session. This avoids
+PowerShell execution-policy issues and prevents packages from being installed
+into another Python installation.
+
+## 6. Run preflight checks
+
+Run the doctor command before building. It checks the local toolchain and, when
+`--shell` is supplied, checks the shell manifest and compatibility data too.
+
+```powershell
+& $Python scripts/player_support.py doctor `
+    --route shell `
+    --shell $Shell `
+    --work-dir $BuildWork `
+    --spirv-cross-sha256 $SpirvCrossSha256
+if ($LASTEXITCODE -ne 0) {
+    throw 'Preflight failed; fix the reported problem before building.'
+}
+```
+
+Then run a dry-run of the support wrapper. This checks the requested paths and
+options without creating the final IPA:
+
+```powershell
+& $Python scripts/player_support.py build $GameDir `
+    --keys $Keys `
+    --shell $Shell `
+    --out $Output `
+    --spirv-cross-sha256 $SpirvCrossSha256 `
+    --dry-run
+if ($LASTEXITCODE -ne 0) {
+    throw 'Dry-run failed; fix the reported problem before building.'
+}
+```
+
+## 7. Build the unsigned IPA
+
+Run this only after the doctor and dry-run succeed:
+
+```powershell
+& $Python scripts/player_support.py build $GameDir `
+    --keys $Keys `
+    --shell $Shell `
+    --out $Output `
+    --spirv-cross-sha256 $SpirvCrossSha256
+if ($LASTEXITCODE -ne 0) {
+    throw 'IPA build failed. Inspect the logs under the private game directory.'
+}
+
+Get-Item -LiteralPath $Output | Select-Object FullName, Length, LastWriteTime
+```
+
+The builder checks the shell source fingerprint, title ID, registered module
+build IDs, shader chain, shader inventory, and SPIRV-Cross fingerprint. It then
+extracts and rewrites the selected game build, translates profile shaders to
+MSL, creates `Guest.framework`, and assembles the unsigned IPA. Logs and
+intermediates are stored below `$BuildWork`. Extracted game files are deleted
+after a successful build unless `--keep-extracted` is used.
+
+The equivalent direct packer command is useful when debugging the wrapper:
+
+```powershell
+& $Python scripts/build_ipa_from_shell.py $GameDir `
+    --keys $Keys `
+    --shell $Shell `
+    --out $Output `
+    --spirv-cross-sha256 $SpirvCrossSha256
+```
+
+Do not run two builds against the same `$GameDir` at the same time.
+
+### Optional build commands
+
+Keep extracted `ExeFS`/`RomFS` data for inspection:
+
+```powershell
+& $Python scripts/player_support.py build $GameDir `
+    --keys $Keys `
+    --shell $Shell `
+    --out $Output `
+    --spirv-cross-sha256 $SpirvCrossSha256 `
+    --keep-extracted
+```
+
+Package the registered base-game profile instead of the default `v196608`
+update. The update NSP is still required for shader extraction and validation:
+
+```powershell
+$BaseOutput = Join-Path $GameDir 'LordranNative-base-v0.ipa'
+& $Python scripts/player_support.py build $GameDir `
+    --keys $Keys `
+    --shell $Shell `
+    --package v0 `
+    --out $BaseOutput `
+    --spirv-cross-sha256 $SpirvCrossSha256
+```
+
+Use `--bundle-id` only when you intentionally need a different app identity.
+Keep it consistent with the shell and the expected `Guest.framework` identity.
+
+## 8. Verify and install
+
+Run the structural archive check after the build:
+
+```powershell
+& $Python scripts/player_support.py verify $Output `
+    --target device `
+    --full-crc `
+    --match-source
+if ($LASTEXITCODE -ne 0) {
+    throw 'IPA verification failed.'
+}
+```
+
+This verifies archive structure and checksums; it is not a gameplay test. The
+IPA is unsigned by design. Use AltStore, Sideloadly, or another supported tool
+to sign it with your own Apple identity and install it on a compatible device.
+Windows cannot run Apple's Metal compiler, so this IPA carries MSL source and
+iOS compiles shaders on first use. The first scene can take several minutes;
+subsequent launches reuse the system cache.
 
 ## Troubleshooting
 
-- **Shell/source mismatch:** download the shell and checkout the same release tag.
-- **Unsupported title or build ID:** use the Dark Souls: Remastered base NSP and a profile-registered version. This repository supports title `01004AB00A260000` only.
-- **Missing tools:** confirm `dotnet`, `spirv-cross`, `zstd`, and the selected Python resolve in the same PowerShell session. Install `lz4`, `capstone`, and `fonttools` into the interpreter used by the command.
-- **SPIRV-Cross fingerprint missing or mismatched:** build the pinned upstream revision, record its full SHA-256 as above, and pass `--spirv-cross-sha256` or set `DM_SPIRV_CROSS_SHA256`. Confirm `Get-Command spirv-cross` resolves to that executable. Windows compiler outputs differ from the committed Mac fingerprint; do not change the shared lock to accommodate them.
-- **Extraction failure:** check the matching `nx_extract_build.log` or `extract_<version>.log`; confirm the base and update NSP are complete, the keys file is the user's own valid `prod.keys`, and there is enough disk space. Never print the keys or copy them into a log.
-- **Module build ID mismatch:** the NSP version is not registered in `dm/games/01004AB00A260000/game.tsv`; stop rather than bypassing the check.
-- **Shell ZIP missing/unexpected paths:** the shell producer allowlist and consumer allowlist intentionally fail closed. Do not broaden either allowlist until proving each new resource is public and contains no game-derived or private data.
-- **IPA will not install:** the packager emits unsigned output by design. Use a supported sideloading workflow to sign it with the user's identity; do not add CI signing or commit certificates/profiles.
-- **Shader chain mismatch or missing shader keys:** use the matching shell/source release and SPIRV-Cross tag above; do not mix cached shader output from another build.
-- **First launch is slow:** this is expected for a source-shader IPA. Keep the app in the foreground until shader compilation finishes.
+- **A command is not recognized:** reopen the same PowerShell type used for the
+  build and rerun the checks in section 1. Do not mix an ordinary PowerShell
+  window with a Developer PowerShell window while building SPIRV-Cross.
+- **Shell/source mismatch:** download the shell from the same release tag as
+  the checkout. Do not mix a shell from `main` with an older source checkout.
+- **SPIRV-Cross fingerprint mismatch:** verify `Get-Command spirv-cross`,
+  `$SpirvCrossExe`, and `$env:DM_SPIRV_CROSS_SHA256`. Rebuild the pinned source
+  if necessary; do not change the repository shader lock.
+- **Missing Python package:** verify that `$Python` points inside
+  `game/01004AB00A260000/tools-venv`, then rerun `& $Python -m pip install
+  lz4 capstone fonttools`.
+- **Unsupported title or build ID:** use title `01004AB00A260000` and a version
+  registered in `dm/games/01004AB00A260000/game.tsv`. Do not bypass the check.
+- **Extraction failure:** inspect `nx_extract_build.log` and
+  `extract_<version>.log` under `$BuildWork`. Confirm both NSPs are complete,
+  `prod.keys` is valid, and enough disk space remains. Never print key values.
+- **Shell ZIP has unexpected files:** the shell producer and consumer use
+  fail-closed allowlists. Do not broaden them without proving the resource is
+  public and contains no game-derived or private data.
+- **IPA does not install:** the output is unsigned. Sign it with your own
+  sideloading tool; do not add certificates or provisioning profiles to the
+  repository.
+- **First launch is slow:** keep the app in the foreground while source shaders
+  compile. This is expected for the Windows route.
 
-This route is experimental. Mac/Xcode remains the recommended path when available because it compiles the shaders before installation.
+This route is experimental. Mac/Xcode remains the recommended path when
+available because it compiles shaders before installation.
