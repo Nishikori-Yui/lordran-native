@@ -75,6 +75,32 @@ resource size, both in MiB; they overlap and must not be added together.
 The resolution is the game's swapchain texture size. The thermal status is
 the system's nominal/fair/serious/critical classification.
 
+## Mac performance panel
+
+`DM_WINDOW=1` also creates a transparent text overlay in the upper-right corner.
+It uses the same `nvn_perf_snapshot` as the iOS HUD and refreshes twice per
+second. Its headline uses actual drawable presentation callbacks; before the
+first presentation it explicitly labels the fallback as `Game FPS`.
+The details show game FPS, delayed GPU time, process physical footprint,
+Metal allocations, swapchain resolution and thermal state. RAM and Metal
+overlap and must not be added together.
+
+`F5` cycles Simple, Detailed and Off (Fn-F5 on keyboards using media keys).
+The native View menu offers the same action and names the current mode.
+The choice persists. There is no frame, background or button: bright green
+numbers and lighter green details use black text shadows for contrast.
+The overlay is not interactive and hit testing passes through it.
+Resizing keeps it anchored in the corner. Command shortcuts pass through the
+game's key monitor; F5 is consumed before game input.
+Updates stop while off, minimized or inactive and resume on activation.
+Windowless runs do not create any AppKit UI or timer.
+
+Run `make -C dm/host/tests mac-perf-test` with access to WindowServer for
+focused metric, menu, mode, hit-testing, color, placement and lifecycle checks, and
+`make -C dm/gfx/tests t_perf && dm/gfx/tests/t_perf` for telemetry semantics.
+The AppKit test uses synthetic active/minimized states; native user input,
+VoiceOver and window behavior still need manual checks.
+
 ## Profile scope
 
 This checkout is dedicated to Dark Souls: Remastered (`01004AB00A260000`). The only

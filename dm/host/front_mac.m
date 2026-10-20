@@ -11,6 +11,7 @@
 #include "../gfx/nvn/nvn_mtl.h"
 #include "front.h"
 #include "hle.h"
+#import "mac_perf_hud.h"
 #include <signal.h>
 
 static CAMetalLayer *g_layer;
@@ -21,6 +22,7 @@ static int g_mouse_left, g_mouse_right, g_mouse_middle;
 static int32_t g_mouse_rx, g_mouse_ry;
 static uint64_t g_mouse_motion_seq;
 static GCController *g_pad_controller;
+static DmMacPerfHUD *g_perf_hud;
 
 void *front_metal_layer(void) { return (__bridge void *)g_layer; }
 static int ds_layout(void) { return !strcmp(DM_GAME_MAC_LAYOUT, "dark_souls_pc"); }
@@ -213,6 +215,7 @@ void front_run(void (*guest)(void)) {
         [win makeKeyAndOrderFront:nil];
         win.initialFirstResponder = v;
         [win makeFirstResponder:v];
+        g_perf_hud = [[DmMacPerfHUD alloc] initWithWindow:win device:g_layer.device];
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
         [nc addObserverForName:GCControllerDidConnectNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
             (void)n; pad_refresh();
@@ -224,6 +227,11 @@ void front_run(void (*guest)(void)) {
         if (!GCController.controllers.count) [GCController startWirelessControllerDiscoveryWithCompletionHandler:nil];
         [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown | NSEventMaskKeyUp handler:^NSEvent *(NSEvent *e) {
             if (!game_key_event(e, win)) return e;   // Keep native text dialogs and other application windows independent
+            if ([g_perf_hud handleKeyEvent:e]) return nil;
+            if (e.modifierFlags & NSEventModifierFlagCommand) {
+                if (e.type == NSEventTypeKeyUp) on_key(e, 0);
+                return e;
+            }
             if (!e.isARepeat) on_key(e, e.type == NSEventTypeKeyDown);
             return nil;   // Swallow it to avoid the system beep
         }];
