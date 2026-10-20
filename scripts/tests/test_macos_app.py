@@ -29,7 +29,7 @@ class MacOSAppTests(unittest.TestCase):
         romfs.mkdir()
         (romfs / self.profile.get("romfs_marker")).write_bytes(b"marker")
         shader_cache = root / "cache"
-        chain = self.profile.table("dmsh_chain.h").read_text().split('"')[1]
+        chain = self.profile.table("dmsh_chain.h").read_text(encoding="utf-8").split('"')[1]
         shader_root = shader_cache / f"b-{chain}"
         shader_root.mkdir(parents=True)
         (shader_root / "shader_b.metallib").write_bytes(b"shader library")
