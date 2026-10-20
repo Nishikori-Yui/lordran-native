@@ -61,7 +61,7 @@ The bundle contains private game data, stays under the ignored `game/`
 directory, and is unsigned. See the [Mac packaging guide](macos-packaging.md)
 for the setup script and launch details.
 
-Everything it writes stays in the NSP folder: intermediate files and logs in `<id>_build/`, the IPA next to the NSPs. The extracted game files are deleted at the end unless you pass `--keep-extracted`. It exits with 0 when done and 1 on an error. The default app Bundle ID is `dev.nishikori.lordran-native`, read from the profile's `bundle_id`; `--app-name` / `--bundle-id` (or `APP_NAME` / `BUNDLE_ID` in Spyder) override the name and ID.
+For an iOS IPA build, intermediate files and logs stay in `<id>_build/` under the NSP folder, and the IPA is written next to the NSPs by default (or to `--out`). For a macOS `.app` build, the bundle is written to `--out` or `LordranNative.app` under `game/`; the launcher keeps saves, temporary files, and logs in `~/Library/Application Support/Lordran Native/`. Extracted game files are deleted after a successful build unless you pass `--keep-extracted`. The script exits with 0 when done and 1 on an error. The default app Bundle ID is `dev.nishikori.lordran-native`, read from the profile's `bundle_id`; `--app-name` / `--bundle-id` (or `APP_NAME` / `BUNDLE_ID` in Spyder) override the name and ID.
 
 The CI shell uses the same profile identity. Shell injection inherits the
 matching shell's Bundle ID unless `--bundle-id` is supplied; the generated

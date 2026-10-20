@@ -29,7 +29,7 @@ docs/
   README.md                       Documentation index
   agents/                         Task-specific agent guidance, loaded via AGENTS.md
   development.md                  Architecture, builds and regression checks
-    macos-packaging.md               Mac setup, iOS IPA and macOS app packaging
+  macos-packaging.md              Mac setup, iOS IPA and macOS app packaging
   windows-packaging.md             Experimental Windows shell-based packaging
   porting/
     README.md                     Porting and debugging overview
