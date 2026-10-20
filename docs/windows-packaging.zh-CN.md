@@ -155,12 +155,35 @@ $SpirvCrossExe = (Resolve-Path (Join-Path $SpirvCrossBin 'spirv-cross.exe')).Pat
 $SpirvCrossSha256 = (Get-FileHash -Algorithm SHA256 $SpirvCrossExe).Hash.ToLowerInvariant()
 $env:Path = "$(Split-Path $SpirvCrossExe);$env:Path"
 $env:DM_SPIRV_CROSS_SHA256 = $SpirvCrossSha256
+$SpirvCrossHashFile = Join-Path $SpirvCrossRoot 'spirv-cross.sha256'
+Set-Content -NoNewline -Path $SpirvCrossHashFile -Value $SpirvCrossSha256
 
 Write-Host "SPIRV-Cross：$SpirvCrossExe"
 Write-Host "SPIRV-Cross SHA-256：$SpirvCrossSha256"
 ```
 
-如果要新开 PowerShell 窗口，请私下保存 `$SpirvCrossSha256`，并重新设置环境变量。
+如果要新开 PowerShell 窗口，请在执行后续打包命令的窗口中运行下面的代码。
+构建步骤会把指纹保存到本地构建出的程序旁边；下面的代码会读取保存值，并再次校验
+该路径下的程序。不要用未经信任的下载文件替换这两个文件。
+
+```powershell
+$SpirvCrossRoot = Join-Path $env:USERPROFILE 'src\SPIRV-Cross'
+$SpirvCrossExe = Join-Path $SpirvCrossRoot 'build\bin\spirv-cross.exe'
+$SpirvCrossHashFile = Join-Path $SpirvCrossRoot 'spirv-cross.sha256'
+if (-not (Test-Path -LiteralPath $SpirvCrossExe -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $SpirvCrossHashFile -PathType Leaf)) {
+    throw 'SPIRV-Cross 程序或已保存的指纹文件不存在。'
+}
+$SpirvCrossSha256 = (Get-Content -Raw -LiteralPath $SpirvCrossHashFile).Trim().ToLowerInvariant()
+$ActualSpirvCrossSha256 = (Get-FileHash -Algorithm SHA256 $SpirvCrossExe).Hash.ToLowerInvariant()
+if ($ActualSpirvCrossSha256 -ne $SpirvCrossSha256) {
+    throw 'SPIRV-Cross 程序与已保存的 SHA-256 不匹配。'
+}
+$env:Path = "$(Split-Path $SpirvCrossExe);$env:Path"
+$env:DM_SPIRV_CROSS_SHA256 = $SpirvCrossSha256
+Write-Host "已恢复 SPIRV-Cross SHA-256：$SpirvCrossSha256"
+```
+
 哈希检查用于发现 `PATH` 指向了其他程序或程序被替换，但哈希本身不能证明源码来源。
 不要把 Windows 哈希写入 `dmsh_chain.lock` 或 `dmsh_chain.h`；Windows 和 macOS
 编译出的程序指纹不同。

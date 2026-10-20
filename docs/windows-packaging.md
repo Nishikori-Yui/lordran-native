@@ -195,16 +195,42 @@ $SpirvCrossExe = (Resolve-Path (Join-Path $SpirvCrossBin 'spirv-cross.exe')).Pat
 $SpirvCrossSha256 = (Get-FileHash -Algorithm SHA256 $SpirvCrossExe).Hash.ToLowerInvariant()
 $env:Path = "$(Split-Path $SpirvCrossExe);$env:Path"
 $env:DM_SPIRV_CROSS_SHA256 = $SpirvCrossSha256
+$SpirvCrossHashFile = Join-Path $SpirvCrossRoot 'spirv-cross.sha256'
+Set-Content -NoNewline -Path $SpirvCrossHashFile -Value $SpirvCrossSha256
 
 Write-Host "SPIRV-Cross: $SpirvCrossExe"
 Write-Host "SPIRV-Cross SHA-256: $SpirvCrossSha256"
 ```
 
 Save `$SpirvCrossSha256` somewhere private if you will open a new PowerShell
-window. The hash detects a different executable selected by `PATH` or a changed
-binary; it does not prove source provenance by itself. Do not write the Windows
-hash into `dmsh_chain.lock` or `dmsh_chain.h`; the Mac and Windows binaries have
-different fingerprints.
+window. The build block also saves it next to the locally built executable.
+After opening the PowerShell window that will run the packaging commands,
+restore and verify the value with this block. It compares the saved value with
+the executable at the exact path used by the build; do not replace either file
+with an untrusted download.
+
+```powershell
+$SpirvCrossRoot = Join-Path $env:USERPROFILE 'src\SPIRV-Cross'
+$SpirvCrossExe = Join-Path $SpirvCrossRoot 'build\bin\spirv-cross.exe'
+$SpirvCrossHashFile = Join-Path $SpirvCrossRoot 'spirv-cross.sha256'
+if (-not (Test-Path -LiteralPath $SpirvCrossExe -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $SpirvCrossHashFile -PathType Leaf)) {
+    throw 'SPIRV-Cross executable or saved hash is missing.'
+}
+$SpirvCrossSha256 = (Get-Content -Raw -LiteralPath $SpirvCrossHashFile).Trim().ToLowerInvariant()
+$ActualSpirvCrossSha256 = (Get-FileHash -Algorithm SHA256 $SpirvCrossExe).Hash.ToLowerInvariant()
+if ($ActualSpirvCrossSha256 -ne $SpirvCrossSha256) {
+    throw 'SPIRV-Cross executable does not match the saved SHA-256.'
+}
+$env:Path = "$(Split-Path $SpirvCrossExe);$env:Path"
+$env:DM_SPIRV_CROSS_SHA256 = $SpirvCrossSha256
+Write-Host "Restored SPIRV-Cross SHA-256: $SpirvCrossSha256"
+```
+
+The hash detects a different executable selected by `PATH` or a changed binary;
+it does not prove source provenance by itself. Do not write the Windows hash into
+`dmsh_chain.lock` or `dmsh_chain.h`; the Mac and Windows binaries have different
+fingerprints.
 
 ## 5. Place inputs and create Python environment
 
