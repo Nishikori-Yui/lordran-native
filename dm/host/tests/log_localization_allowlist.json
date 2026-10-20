@@ -51,6 +51,11 @@
   },
   {
     "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "NSString *headingText = page == PageMenu ? T(@\"Controls\", @\"控制菜单\") : page == PageInput ? T(@\"Input\", @\"输入设置\") :",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
     "source": "_ball.accessibilityHint = T(@\"Tap to open. Drag to dock at an edge.\", @\"点按展开，拖动后吸附屏幕边缘。\");",
     "purpose": "Localized user interface text"
   },
@@ -77,6 +82,26 @@
   {
     "file": "dm/ios/Sources/DmControlOverlay.m",
     "source": "[self addSwitch:T(@\"Show FPS\", @\"显示帧率\") on:self.showsFPS action:@selector(fpsToggled:)];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "page == PageCheats ? T(@\"Cheats\", @\"金手指\") : T(@\"Button appearance\", @\"按键外观\");",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addButton:T(@\"Cheats\", @\"金手指\") symbol:@\"switch.2\" action:@selector(cheats)];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "if (!count) [self addText:T(@\"No switchable cheats are included in this build.\", @\"此版本未包含可即时切换的金手指。\") small:YES];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "                       @\"开关在游玩过程中生效。关闭金手指不会撤销游戏已经保存的变更。\") small:YES];",
     "purpose": "Localized user interface text"
   },
   {
@@ -387,6 +412,61 @@
   {
     "file": "dm/ios/Sources/DmControlOverlay.m",
     "source": "_values[SliderLookSensitivity].text = [NSString stringWithFormat:@\"%@: %@\", T(@\"Sensitivity\", @\"灵敏度\"), value];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/host/cheats_mac.m",
+    "source": "NSTextField *title = [NSTextField labelWithString:[self text:@\"Cheats\" chinese:@\"金手指\"]];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/host/cheats_mac.m",
+    "source": "NSTextField *hint = [NSTextField labelWithString:[self text:@\"F7 Previous   F8 Next   F9 Toggle   F6 Close\"",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/host/cheats_mac.m",
+    "source": "chinese:@\"F7 上一个   F8 下一个   F9 开关   F6 关闭\"]];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/host/cheats_mac.m",
+    "source": "chinese:@\"进入游戏前请保持关闭，进入游戏后再开启。\"]];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/host/cheats_mac.m",
+    "source": "_empty = [NSTextField wrappingLabelWithString:[self text:@\"No switchable cheats are included in this build.\"",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/host/cheats_mac.m",
+    "source": "NSString *cheatsTitle = [self text:@\"Cheats\" chinese:@\"金手指\"];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/host/cheats_mac.m",
+    "source": "_showItem = [[NSMenuItem alloc] initWithTitle:[self text:@\"Show Cheats\" chinese:@\"显示金手指\"] action:@selector(toggleMenu:)",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "@\"进入游戏前请保持关闭，进入游戏后再开启。\") small:YES];",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "toggle.accessibilityValue = enabled ? T(@\"On\", @\"已开启\") : T(@\"Off\", @\"已关闭\");",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "toggle.accessibilityHint = T(@\"Double-tap to toggle this cheat.\", @\"轻点两下切换此金手指。\");",
+    "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/host/cheats_mac.m",
+    "source": "chinese:@\"此版本未包含可即时切换的金手指。\"]];",
     "purpose": "Localized user interface text"
   }
 ]

@@ -40,7 +40,7 @@ csz = struct.unpack_from('<III', d, 0x60)
 # Every jump between the patch area and the code is a B (±128 MB). Above 112 MB, place the patch area before the module so branches remain in range.
 # The patch area then sits FRONT bytes before the module base (PATCH_OFF is negative), and the output file holds only text + ro + data (FILE_IMAGE_LEN) followed by the patch area; the loader supplies zero pages for bss and the key page (IMAGE_SIZE is the whole image).
 # The key page stays after bss (the patch area reaches it through ADRP, ±4 GB). Modules below the limit produce output byte-identical to before
-NEAR_PATCH_OFF = ((((segs[2][1] + segs[2][2] + bss + 0x3FFF) & ~0x3FFF) + 0x4000 + 0xFFFF) & ~0xFFFF)   # where an appended patch area would start (as in the else branch below)
+NEAR_PATCH_OFF = ((((segs[2][1] + segs[2][2] + bss + 0x3FFF) & ~0x3FFF) + (0x8000 if args.runtime_cheats else 0x4000) + 0xFFFF) & ~0xFFFF)
 FAR, FRONT = NEAR_PATCH_OFF > 0x7000000, 0x2000000
 IMG = bytearray(segs[2][1] + segs[2][2] + (0 if FAR else bss))
 for i, (fo, mo, sz) in enumerate(segs):
@@ -50,14 +50,22 @@ for i, (fo, mo, sz) in enumerate(segs):
 TEXT_END = segs[0][2]
 RO_OFF, DATA_OFF = segs[1][1], segs[2][1]
 try:
-    TEXT_END, CHEAT_AUDIT = cheat_patches.apply(IMG, TEXT_END, RO_OFF, d[0x40:0x60].hex(), args)
+    if args.runtime_cheats:
+        TEXT_END, RUNTIME_SITES, CHEAT_AUDIT = cheat_patches.prepare_runtime(IMG, TEXT_END, RO_OFF, d[0x40:0x60].hex(), args)
+    else:
+        TEXT_END, CHEAT_AUDIT = cheat_patches.apply(IMG, TEXT_END, RO_OFF, d[0x40:0x60].hex(), args)
+        RUNTIME_SITES = {}
 except (ValueError, OSError, UnicodeError) as error:
     parser.exit(1, f"User patch rejected: {error}\n")
+CHEAT_COUNT = len(CHEAT_AUDIT.get('groups', []))
+CHEAT_STATE_OFF = ((segs[2][1] + segs[2][2] + bss + 0x3FFF) & ~0x3FFF) if CHEAT_COUNT else 0
 if FAR:
     FILE_IMAGE_LEN = (len(IMG) + 0x3FFF) & ~0x3FFF
-    KEY_PAGE_OFF = (len(IMG) + bss + 0x3FFF) & ~0x3FFF
+    KEY_PAGE_OFF = CHEAT_STATE_OFF + 0x4000 if CHEAT_COUNT else (len(IMG) + bss + 0x3FFF) & ~0x3FFF
     IMAGE_SIZE, PATCH_OFF = KEY_PAGE_OFF + 0x4000, -FRONT
 else:
+    if CHEAT_COUNT:
+        IMG.extend(bytes(CHEAT_STATE_OFF + 0x4000 - len(IMG)))
     KEY_PAGE_OFF = (len(IMG) + 0x3FFF) & ~0x3FFF
     IMG.extend(bytes(0x4000))
     PATCH_OFF = (len(IMG) + 0xFFFF) & ~0xFFFF
@@ -487,6 +495,81 @@ for a in sorted(kinds):
         struct.pack_into('<I', IMG, a, 0xD2A00080 | arg); stat(k); continue
     put_branch(a, st)
 
+def runtime_variant(word, address):
+    ins = dis(word, address)
+    start = here()
+    if word & 0xFFE0001F == 0xD4000001:
+        return site_gate(ins, 'svc', (word >> 5) & 0xFFFF)
+    for opcode, key in ((0xD53BD040, 'KTLS'), (0xD53BD060, 'KTLR')):
+        if word & 0xFFFFFFE0 == opcode: return site_sysreg_read(ins, key)
+    if word & 0xFFFFFFE0 == 0xD51BD040: return site_tpidr_write(ins)
+    for opcode, kind in ((0xD53BE020, 'cntpct'), (0xD53BE040, 'cntvct')):
+        if word & 0xFFFFFFE0 == opcode: return site_gate(ins, kind, word & 31)
+    if has18(ins):
+        if ins.mnemonic in ('adr', 'adrp'): return site_pcrel(ins)
+        if ins.mnemonic in ('cbz', 'cbnz', 'tbz', 'tbnz'): return site_cond(ins)
+        if ins.mnemonic == 'blr': return site_blr(ins)
+        if ins.mnemonic in ('ret', 'br', 'b', 'bl') or (ins.mnemonic == 'ldr' and '[' not in ins.op_str):
+            raise ValueError("Unsupported x18 control flow in runtime patch")
+        return site_sp(ins) if re.match(r'(sp|wsp),', ins.op_str) else site_plain(ins)
+    if word & 0xFFFFFFE0 == 0xD53B0020:
+        emit(0xD2A00080 | (word & 31))
+    elif ins.mnemonic in ('b', 'bl'):
+        if ins.mnemonic == 'bl':
+            emit(ADRP(30, here(), address + 4)); emit(ADDI(30, 30, (address + 4) & 0xFFF))
+        emit(B(here(), ins.operands[-1].imm))
+        return start
+    elif ins.mnemonic.startswith('b.') or ins.mnemonic in ('cbz', 'cbnz', 'tbz', 'tbnz'):
+        mask = 0x3FFF if ins.mnemonic in ('tbz', 'tbnz') else 0x7FFFF
+        emit((word & ~(mask << 5)) | (2 << 5))
+        emit(B(here(), address + 4))
+        emit(B(here(), ins.operands[-1].imm))
+        return start
+    elif ins.mnemonic in ('adr', 'adrp'):
+        if word & 31 == 31: raise ValueError("Runtime ADR/ADRP to xzr is unsupported")
+        target = ins.operands[-1].imm
+        emit(ADRP(word & 31, here(), target))
+        if ins.mnemonic == 'adr': emit(ADDI(word & 31, word & 31, target & 0xFFF))
+    elif ins.mnemonic == 'blr':
+        if ((word >> 5) & 31) == 30: raise ValueError("Runtime BLR through x30 is unsupported")
+        emit(ADRP(30, here(), address + 4)); emit(ADDI(30, 30, (address + 4) & 0xFFF))
+        emit(BR((word >> 5) & 31))
+        return start
+    elif ins.mnemonic.startswith('bl'):
+        raise ValueError("Unsupported runtime branch-and-link instruction")
+    elif word & 0x3B000000 == 0x18000000:  # Literal load or prefetch.
+        opcodes = {0x18: 0xB9400000, 0x58: 0xF9400000, 0x98: 0xB9800000,
+                   0x1C: 0xBD400000, 0x5C: 0xFD400000, 0x9C: 0x3DC00000, 0xD8: 0xF9800000}
+        opcode = opcodes.get(word >> 24)
+        if opcode is None: raise ValueError("Unsupported runtime literal load")
+        scratch, other = pick(regs_in(ins))
+        target = ins.operands[-1].imm
+        emit(STP_PRE(scratch, other, 31, -16)); emit(ADRP(scratch, here(), target))
+        emit(ADDI(scratch, scratch, target & 0xFFF))
+        emit(opcode | (scratch << 5) | (word & 31))
+        emit(LDP_POST(scratch, other, 31, 16))
+    else:
+        emit(word)
+    emit(B(here(), address + 4))
+    return start
+
+try:
+    for address, site in sorted(RUNTIME_SITES.items()):
+        if any(wseg[0].address <= address <= wseg[-1].address for wseg in windows):
+            raise ValueError("Runtime patch overlaps a native x18 rewrite window")
+        original = runtime_variant(site['original'], address)
+        patched = runtime_variant(site['patched'], address)
+        selector = here()
+        emit(STP_PRE(16, 17, 31, -16))
+        emit(ADRP(16, here(), CHEAT_STATE_OFF))
+        emit(0xB9400000 | (site['group'] << 10) | (16 << 5) | 17)
+        emit(0x34000000 | (3 << 5) | 17)  # cbz w17, original restore path
+        emit(LDP_POST(16, 17, 31, 16)); emit(B(here(), patched))
+        emit(LDP_POST(16, 17, 31, 16)); emit(B(here(), original))
+        put_branch(address, selector)
+except (ValueError, AssertionError) as error:
+    parser.exit(1, f"Runtime patch rejected: {error}\n")
+
 os.makedirs(outdir, exist_ok=True)
 P = lambda ext: os.path.join(outdir, f'{NAME}.{ext}')
 if FAR:   # patch area before the base: file = text + ro + data (padded to 16K) + patch area
@@ -501,6 +584,10 @@ with open(os.path.join(outdir, 'build_src.sha256'), 'w') as f:
 with open(P('cheats.json'), 'w', encoding='utf-8') as f:
     json.dump(CHEAT_AUDIT, f, indent=2, ensure_ascii=True)
     f.write('\n')
+with open(P('cheats.tsv'), 'w', encoding='utf-8') as f:
+    f.write(f'# BUILD_ID\t{BUILD_ID}\n')
+    for index, group in enumerate(CHEAT_AUDIT.get('groups', [])):
+        f.write(f'{index}\t{int(group["initial"])}\t{group["name"]}\n')
 # Clear obsolete manifests when reusing an output directory from older tools.
 for ext in ('rules.tsv', 'aim.tsv'):
     if os.path.exists(P(ext)): os.unlink(P(ext))
@@ -509,6 +596,8 @@ with open(P('fixups.tsv'), 'w') as f:
     if FAR: f.write(f'# IMAGE_SIZE\t{IMAGE_SIZE:#x}\n# FILE_IMAGE_LEN\t{FILE_IMAGE_LEN:#x}\n')   # patch area before the base (negative PATCH_OFF): whole image size, length of the image part of the file
     for k in KEY_INDEX: f.write(f'# KEY_{k}_IDX\t{KEY_INDEX[k]}\n')
     f.write(f'# BUILD_ID\t{BUILD_ID}\n')   # the host identifies the build by it: features with hard-coded addresses only run on the build they belong to
+    if CHEAT_COUNT:
+        f.write(f'# CHEAT_STATE_OFF\t{CHEAT_STATE_OFF:#x}\n# CHEAT_COUNT\t{CHEAT_COUNT:#x}\n')
 with open(P('gates.tsv'), 'w') as f:
     for ret, k, arg, orig in gates: f.write(f'{ret:#x}\t{k}\t{arg}\t{orig:#x}\n')
 with open(P('sites.tsv'), 'w') as f:

@@ -9,6 +9,7 @@
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
 #include "hle.h"
+#include "cheats.h"
 #include "../ios/vphone/remap.h"
 
 module_t g_mod[MAX_MOD];
@@ -163,6 +164,11 @@ static void read_layout(module_t *m, const char *dir) {
         else if (!strcmp(key, "RO_OFF")) m->ro_off = v;
         else if (!strcmp(key, "DATA_OFF")) m->data_off = v;
         else if (!strcmp(key, "BUILD_ID")) sscanf(line, "# %*s %32s", m->build_id);
+        else if (!strcmp(key, "CHEAT_STATE_OFF")) m->cheat_state_off = v;
+        else if (!strcmp(key, "CHEAT_COUNT")) {
+            if (v > DM_CHEAT_MAX) die("%s: too many runtime cheat groups", m->name);
+            m->cheat_count = (unsigned)v;
+        }
         else for (int k = 0; k < 8; k++) {
             size_t n = strlen(kn[k]);
             if (!strncmp(key, "KEY_", 4) && !strncmp(key + 4, kn[k], n) && !strcmp(key + 4 + n, "_IDX")) {
@@ -175,6 +181,12 @@ static void read_layout(module_t *m, const char *dir) {
         die("%s: incompatible rewriter output; regenerate using the current dm/PRODUCT version", path);
     if (m->patch_off < 0 && (!m->image_size || !m->file_image_len || m->file_image_len % 0x4000 || m->patch_off % 0x4000 || m->key_page_off + m->key_page_size > m->image_size))
         die("%s: patch area precedes module base, but IMAGE_SIZE/FILE_IMAGE_LEN is missing or invalid", path);
+    if (m->cheat_state_off || m->cheat_count) {
+        if (strcmp(m->name, "main") || !m->cheat_count || m->cheat_state_off % 0x4000 ||
+            m->cheat_state_off < m->data_off || m->cheat_state_off >= m->key_page_off ||
+            m->key_page_off - m->cheat_state_off != 0x4000)
+            die("%s: invalid runtime cheat state layout", m->name);
+    }
 }
 
 static void install_key_page(module_t *m) {
@@ -419,6 +431,15 @@ void load_modules(const char *dir, const char **names, int n) {
     force_init();
     t = now_ns(); for (int i = 0; i < g_nmod; i++) relocate(&g_mod[i]); tr = now_ns() - t;
     force_check();
+    for (int i = 0; i < g_nmod; i++) {
+        module_t *m = &g_mod[i];
+        if (!m->cheat_count) continue;
+        if (m->cheat_state_off > m->size || m->size - m->cheat_state_off < 0x4000)
+            die("%s: runtime cheat state is outside the module", m->name);
+        char manifest[1024]; snprintf(manifest, sizeof manifest, "%s/%s.cheats.tsv", dir, m->name);
+        if (!dm_cheats_load((uint32_t *)(m->base + m->cheat_state_off), m->cheat_count, m->build_id, manifest))
+            die("%s: invalid runtime cheat manifest", m->name);
+    }
     { void hlecount_seal(void); hlecount_seal(); }   // DM_HLECOUNT: relocation done, seal the counting stub pages as read-only executable
     if (getenv("DM_SYMCHECK")) LOG("Symbol verification: lookups=%lu hash_linear_mismatches=%lu", g_symchk_n, g_symchk_bad);
     if (g_flag.bootprof) LOG("Module load timings: map_ms=%.1f dynamic_parse_ms=%.1f gates_ms=%.1f relocations_overrides_ms=%.1f total_ms=%.1f",

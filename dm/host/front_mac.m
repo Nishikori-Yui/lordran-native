@@ -12,6 +12,7 @@
 #include "front.h"
 #include "hle.h"
 #import "perf_hud_mac.h"
+#import "cheats_mac.h"
 #include <signal.h>
 
 static CAMetalLayer *g_layer;
@@ -23,6 +24,7 @@ static int32_t g_mouse_rx, g_mouse_ry;
 static uint64_t g_mouse_motion_seq;
 static GCController *g_pad_controller;
 static DmMacPerfHUD *g_perf_hud;
+static DmMacCheats *g_cheats;
 
 void *front_metal_layer(void) { return (__bridge void *)g_layer; }
 static int ds_layout(void) { return !strcmp(DM_GAME_MAC_LAYOUT, "dark_souls_pc"); }
@@ -216,6 +218,7 @@ void front_run(void (*guest)(void)) {
         win.initialFirstResponder = v;
         [win makeFirstResponder:v];
         g_perf_hud = [[DmMacPerfHUD alloc] initWithWindow:win device:g_layer.device];
+        g_cheats = [[DmMacCheats alloc] initWithWindow:win];
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
         [nc addObserverForName:GCControllerDidConnectNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
             (void)n; pad_refresh();
@@ -228,6 +231,7 @@ void front_run(void (*guest)(void)) {
         [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown | NSEventMaskKeyUp handler:^NSEvent *(NSEvent *e) {
             if (!game_key_event(e, win)) return e;   // Keep native text dialogs and other application windows independent
             if ([g_perf_hud handleKeyEvent:e]) return nil;
+            if ([g_cheats handleKeyEvent:e]) return nil;
             if (e.modifierFlags & NSEventModifierFlagCommand) {
                 if (e.type == NSEventTypeKeyUp) on_key(e, 0);
                 return e;

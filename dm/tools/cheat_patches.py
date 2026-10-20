@@ -13,6 +13,8 @@ def add_arguments(parser):
                         help="Enable one exact [section name]; repeat to select more (default: none)")
     parser.add_argument("--ips", action="append", default=[], type=Path, metavar="FILE",
                         help="Import a build-ID-named IPS/IPS32 ExeFS patch; repeat for more")
+    parser.add_argument("--runtime-cheats", action="store_true",
+                        help="Compile imported groups for live switching; all start off unless selected with --cheat")
 
 
 def arguments(args):
@@ -24,6 +26,8 @@ def arguments(args):
         result += ["--cheat", name]
     for path in args.ips:
         result += ["--ips", str(path)]
+    if getattr(args, "runtime_cheats", False):
+        result += ["--runtime-cheats"]
     return result
 
 
@@ -152,6 +156,71 @@ def apply(image, text_end, ro_off, build_id, args):
     for address, value in writes.items():
         image[address] = value
     return extent, dict(schema=1, build_id=build_id, enabled=audit, bytes_written=len(writes))
+
+
+def prepare_runtime(image, text_end, ro_off, build_id, args):
+    """Keep original instructions and compile every imported group, initially off."""
+    groups = []
+    selected = set(args.cheat)
+    if args.cheat_file:
+        check_build(args.cheat_file, build_id)
+        data = args.cheat_file.read_bytes()
+        parsed = parse_sections(data.decode("utf-8-sig"))
+        sha = hashlib.sha256(data).hexdigest()
+        for name, rows in parsed.items():
+            groups.append(dict(name=name, initial=name in selected, sha256=sha, writes=static_writes(rows)))
+    for path in args.ips:
+        check_build(path, build_id)
+        data = path.read_bytes()
+        groups.append(dict(name=f"IPS: {path.stem}", initial=f"IPS: {path.stem}" in selected,
+                           sha256=hashlib.sha256(data).hexdigest(), writes=ips_writes(data)))
+    names = [group["name"] for group in groups]
+    if len(set(names)) != len(names):
+        raise ValueError("Runtime cheat group names must be unique")
+    unknown = selected - set(names)
+    if unknown:
+        raise ValueError(f"Unknown runtime cheat group: {sorted(unknown)!r}")
+    if not 1 <= len(groups) <= 256:
+        raise ValueError("Runtime cheats require between 1 and 256 imported groups")
+
+    occupied, sites, payload = {}, {}, {}
+    extent = text_end
+    for index, group in enumerate(groups):
+        name = group["name"]
+        if len(name.encode("utf-8")) > 511 or any(ord(c) < 32 or ord(c) == 127 for c in name):
+            raise ValueError("Runtime cheat names must be at most 511 UTF-8 bytes without control characters")
+        words = {}
+        for offset, data in group.pop("writes"):
+            if offset % 4 or len(data) % 4:
+                raise ValueError("Runtime code patches require aligned whole instructions")
+            if offset < 0x100 or offset + len(data) > min(ro_off, len(image)):
+                raise ValueError("Runtime patches must target main text or its padding before rodata")
+            for pos in range(0, len(data), 4):
+                address, word = offset + pos, data[pos:pos + 4]
+                if address in words and words[address] != word:
+                    raise ValueError(f"Conflicting runtime writes at main+{address:#x}")
+                words[address] = word
+        for address, word in words.items():
+            if address in occupied:
+                raise ValueError("Runtime groups must not overlap; import only one copy of a patch")
+            occupied[address] = index
+            if address >= text_end:
+                if image[address:address + 4] != bytes(4):
+                    raise ValueError("Runtime payload must occupy unused zero-filled text padding")
+                payload[address] = word
+                extent = max(extent, address + 4)
+            else:
+                if address + 4 > text_end:
+                    raise ValueError("Runtime instruction crosses the original text boundary")
+                sites[address] = dict(group=index, original=struct.unpack_from("<I", image, address)[0],
+                                      patched=struct.unpack("<I", word)[0])
+        if not any(site["group"] == index for site in sites.values()):
+            raise ValueError("Each runtime group needs an instruction in original text to switch")
+    # Payload stays resident so disabling a group cannot invalidate in-flight calls.
+    for address, word in payload.items():
+        image[address:address + 4] = word
+    audit = dict(schema=2, build_id=build_id, runtime=True, groups=groups, bytes_written=len(occupied) * 4)
+    return extent, sites, audit
 
 
 def main():
