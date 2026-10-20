@@ -68,7 +68,7 @@ The important keys in `game.tsv` are:
 
 | Key | Meaning |
 |---|---|
-| `title_id`, `program_id`, `name`, `ipa`, `app_category` | Target title identity and app metadata |
+| `title_id`, `program_id`, `name`, `ipa`, `bundle_id`, `app_category` | Target title identity and app metadata; `bundle_id` is the default application identity shared by all packers |
 | `build` | supported version, display version and module build IDs |
 | `package`, `shader_versions`, `modules`, `romfs_marker` | package selection, shader inputs, module load order and extraction marker |
 | `mem_reserve`, `mem_alias`, `mem_stack`, `app_pool` | guest address-space partition and application pool |

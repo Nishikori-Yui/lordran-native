@@ -137,6 +137,8 @@ $python = (Resolve-Path game/01004AB00A260000/tools-venv/Scripts/python.exe).Pat
 
 使用你的侧载工具签名并安装未签名 IPA。App 会采用 NSP 中的游戏名称和图标。
 
+默认 Bundle ID 为 `dev.nishikori.lordran-native`，原生打包、Simulator 和 CI 空壳使用同一默认值。两个 Python 打包器及辅助打包命令均可用 `--bundle-id` 覆盖，手动构建可设置 `DM_BUNDLE_ID`。Windows 注入默认继承空壳的 ID，Guest framework 使用 `<app-bundle-id>.guest`。
+
 ## 操作方式
 
 - **触屏：** 左摇杆控制移动。3D 布局下，在屏幕空白处滑动可转动视角，手指停下或抬起即停止。**触控与手柄 → 触屏视角** 中可分别设置横轴、纵轴反转，并将灵敏度调整为 0.25～3 倍，默认 1 倍。这些设置同时作用于滑屏和右侧虚拟摇杆，立即生效，并在下次启动时保留。按钮触摸独立处理，R3 用于锁定目标。
