@@ -47,6 +47,25 @@ def safe_shell(shell):
     return info, manifest, payload
 
 
+def validate_shell(shell, repo, profile):
+    info, manifest, files = safe_shell(shell)
+    check_manifest(manifest, repo, profile)
+    check_c1_table(profile, files["dm/c1_full.tsv"])
+    if info.get("CFBundleSupportedPlatforms") != ["iPhoneOS"]:
+        raise ValueError("The input shell is not an iPhoneOS build")
+    return info, manifest, files
+
+
+def check_tools(expected_hash=None):
+    dotnet = shutil.which("dotnet")
+    if not dotnet:
+        raise ValueError("Install the .NET 10 SDK and add dotnet to PATH")
+    if not shutil.which("zstd"):
+        raise ValueError("Install zstd and add it to PATH")
+    verify_spirv_cross(expected_hash)
+    return dotnet
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("nsp_dir", type=Path, help="Folder containing the base and update NSP")
@@ -74,18 +93,9 @@ def main():
         parser.error("NSP folder, prod.keys, or shell file does not exist")
     if any(not path.is_relative_to(private) for path in (nsp_dir, keys, shell, output)):
         parser.error("NSP folder, keys, shell, and output IPA must remain under this repository's game/ directory")
-    info, shell_manifest, shell_files = safe_shell(shell)
-    check_manifest(shell_manifest, repo, profile)
-    check_c1_table(profile, shell_files["dm/c1_full.tsv"])
-    if info.get("CFBundleSupportedPlatforms") != ["iPhoneOS"]:
-        raise ValueError("The input shell is not an iPhoneOS build")
+    info, shell_manifest, shell_files = validate_shell(shell, repo, profile)
     # Reject an incomplete toolchain before scanning or extracting private inputs.
-    dotnet = shutil.which("dotnet")
-    if not dotnet:
-        parser.error("Install the .NET 10 SDK and add dotnet to PATH")
-    if not shutil.which("zstd"):
-        parser.error("Install zstd and add it to PATH")
-    verify_spirv_cross(args.spirv_cross_sha256)
+    dotnet = check_tools(args.spirv_cross_sha256)
     app, family = source.scan_nsps(nsp_dir)
     if app != profile.title_id:
         raise ValueError(f"Unsupported title ID: {app:016X}")
