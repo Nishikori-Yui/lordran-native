@@ -941,7 +941,7 @@ static void serial_del(uint64_t k) { pthread_mutex_lock(&g_smu); id old = hm_get
 @implementation NvPkg
 - (void)dealloc { res_remove(tex); }
 @end
-static uint64_t g_pkg_uploads, g_pkg_reuploads, g_pkg_inplace_reuploads, g_pkg_miss;
+static uint64_t g_pkg_uploads, g_pkg_reuploads, g_pkg_miss;
 static uint64_t g_pfv_upgrades;
 // DM_NVN_DIRTYCHECK=1 (diagnostic, compared against ground truth): fully hash the pool content on every use; changed but not detected by dirty-page tracking = a missed detection
 static int dirtycheck(void) { static int v = -1; if (v < 0) v = getenv("DM_NVN_DIRTYCHECK") != NULL; return v; }
@@ -1234,10 +1234,10 @@ static void up_blit_add(id<MTLBuffer> src, size_t off, size_t row, size_t image,
     g_up_blits[g_nup_blits++] = (up_blit){src, off, row, image, size, dst, slice, level};
 }
 
-static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture> reuse);
-static id<MTLTexture> pkg_upload(const tex_t *t, uint64_t *stamp, id<MTLTexture> reuse) {
+static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp);
+static id<MTLTexture> pkg_upload(const tex_t *t, uint64_t *stamp) {
     struct timespec a, b; clock_gettime(CLOCK_MONOTONIC, &a);
-    id<MTLTexture> r = pkg_upload_(t, stamp, reuse);
+    id<MTLTexture> r = pkg_upload_(t, stamp);
     clock_gettime(CLOCK_MONOTONIC, &b); uint64_t d_ = (uint64_t)((b.tv_sec - a.tv_sec) * 1000000000ll + b.tv_nsec - a.tv_nsec);
     atomic_fetch_add(&g_upload_ns, d_); g_up_total_ns += d_;
     return r;
@@ -1247,23 +1247,15 @@ uint64_t mtl_upload_gpu_ns_take(void) { return atomic_exchange(&g_upload_gpu_ns,
 void mtl_create_stats(uint64_t *lib, uint64_t *pso) { *lib = g_bp_lib_n; *pso = g_bp_pso_n; }
 void mtl_create_ns(uint64_t *lib_ns, uint64_t *pso_ns) { *lib_ns = g_bp_lib_ns; *pso_ns = g_bp_pso_ns; }   // Cumulative time spent synchronously creating shader libraries / pipelines on the spot (the long-frame log takes the per-frame difference)
 uint64_t mtl_upload_bytes(void) { return g_bp_up_bytes; }   // Cumulative texture upload bytes
-static int pkg_texture_matches(id<MTLTexture> mt, MTLTextureDescriptor *d) {
-    return mt && mt.pixelFormat == d.pixelFormat && mt.textureType == d.textureType &&
-           mt.width == d.width && mt.height == d.height && mt.depth == d.depth &&
-           mt.arrayLength == d.arrayLength && mt.mipmapLevelCount == d.mipmapLevelCount &&
-           mt.sampleCount == d.sampleCount && mt.usage == d.usage;
-}
-static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture> reuse) {
+static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp) {
     MTLTextureDescriptor *d = tex_desc(t, 1);
     if (!d) return nil;
-    // Reuse streamed textures when their shape is stable. Replacing a large
-    // private texture on every dirty-page upload creates avoidable allocator
-    // churn during movies and long sessions.
-    int in_place = pkg_texture_matches(reuse, d);
-    id<MTLTexture> mt = in_place ? reuse : [g_dev newTextureWithDescriptor:d];
+    // Uploads commit before the replay buffer. Earlier draws in that replay
+    // must keep their old contents even if this serial is uploaded again.
+    id<MTLTexture> mt = [g_dev newTextureWithDescriptor:d];
     if (!mt) { RED_ONCE(2, "Failed to create MTLTexture: size=%ux%u format=%#x target=%d", t->d.width, t->d.height, t->d.format, t->d.target); return nil; }
     if (g_allocprof > 0) { static int n; if (n++ < 30 || n % 500 == 0) MLOG("Texture created: source=%s index=%d serial=%llu size=%ux%ux%u format=%#x target=%d levels=%u storage=%p", __func__, n, (unsigned long long)t->serial, t->d.width, t->d.height, t->d.depth, t->d.format, t->d.target, t->d.levels, (void *)t->mem); }
-    if (!in_place) res_add(mt);   // Metal 4 does not make resources resident automatically; a missed registration = GPU address page fault
+    res_add(mt);   // Metal 4 does not make resources resident automatically; a missed registration = GPU address page fault
     nvn_dirty_protect(t->mem, t->L.size);
     *stamp = nvn_dirty_now();
     int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
@@ -1472,22 +1464,19 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
                     DM_LOG_ERROR("metal", "Dirty-page tracker missed texture content change: serial=%llu", t->serial);
                 return pk->tex;
             }
-            uint64_t st; id<MTLTexture> old = pk->tex;
-            id<MTLTexture> nt = pkg_upload(t, &st, old);   // Reuse stable streamed textures; replace only when the descriptor changes
+            uint64_t st;
+            id<MTLTexture> nt = pkg_upload(t, &st);
             if (nt) {
-                if (nt != old) {
-                    pk->tex = nt; defer_obj_release(old); g_ser_gen++;
-                    // A registered texture ID may still own a view of the old
-                    // package texture. Drop it when storage is replaced.
-                    treg_drop_serial(t->serial);
-                } else g_pkg_inplace_reuploads++;
+                id<MTLTexture> old = pk->tex;
+                pk->tex = nt; defer_obj_release(old); g_ser_gen++;
+                treg_drop_serial(t->serial);
                 pk->stamp = st; pk->seen = nvn_dirty_now(); g_pkg_reuploads++;
                 if (dirtycheck()) pk->hash = full_hash(t->mem, t->L.size);
             }
             return pk->tex;
         }
         pk = [NvPkg new];
-        pk->tex = pkg_upload(t, &pk->stamp, nil);
+        pk->tex = pkg_upload(t, &pk->stamp);
         if (!pk->tex) return nil;
         pk->seen = nvn_dirty_now(); g_pkg_uploads++; if (dirtycheck()) pk->hash = full_hash(t->mem, t->L.size);
         serial_put(t->serial, pk);
@@ -1593,7 +1582,7 @@ void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
 #if TARGET_OS_IPHONE
     snprintf(avail, sizeof avail, "%llu MB", (unsigned long long)(os_proc_available_memory() >> 20));
 #endif
-    MLOG("Memory through frame %llu: resident_mb=%llu metal_allocated_mb=%s deferred_objects=%lu residency_objects=%lu textures=%lu texture_memory_mb=%s buffers=%lu buffer_memory_mb=%s serial_objects=%u serial_textures=%u serial_texture_memory_mb=%s cached_views=%u serial_view_evictions=%llu pools=%d resident_pools=%d/%d pool_mb=%llu/%llu peak_pools=%d pool_capacity=%d retired_live_pools=%lu/%llu_MB shared_textures=%u pool_texture_evictions=%llu reuploads=%llu in_place_reuploads=%llu arena_blocks_created=%llu system_headroom=%s", frame, rss_mb, gpu_text, nd, nr, nrt, texture_text, nrb, buffer_text, ns, serial_tex, serial_texture_text, view_nonnull, (unsigned long long)g_treg_serial_drops, pool_live, pool_res, pres, pool_res_bytes, pool_bytes, peak, cap, dead_n, dead_mb, ashared, (unsigned long long)g_alias_evicted, (unsigned long long)g_pkg_reuploads, (unsigned long long)g_pkg_inplace_reuploads, (unsigned long long)g_arena_made, avail);
+    MLOG("Memory through frame %llu: resident_mb=%llu metal_allocated_mb=%s deferred_objects=%lu residency_objects=%lu textures=%lu texture_memory_mb=%s buffers=%lu buffer_memory_mb=%s serial_objects=%u serial_textures=%u serial_texture_memory_mb=%s cached_views=%u serial_view_evictions=%llu pools=%d resident_pools=%d/%d pool_mb=%llu/%llu peak_pools=%d pool_capacity=%d retired_live_pools=%lu/%llu_MB shared_textures=%u pool_texture_evictions=%llu reuploads=%llu arena_blocks_created=%llu system_headroom=%s", frame, rss_mb, gpu_text, nd, nr, nrt, texture_text, nrb, buffer_text, ns, serial_tex, serial_texture_text, view_nonnull, (unsigned long long)g_treg_serial_drops, pool_live, pool_res, pres, pool_res_bytes, pool_bytes, peak, cap, dead_n, dead_mb, ashared, (unsigned long long)g_alias_evicted, (unsigned long long)g_pkg_reuploads, (unsigned long long)g_arena_made, avail);
     if (g_allocprof > 0) { char ab[256]; int o = 0; for (int i = 0; i < g_alloc_n && o < 200; i++) o += snprintf(ab + o, sizeof ab - o, " #%d %llu MB", i, (unsigned long long)(g_alloc4[i].allocatedSize >> 20));
         for (int i = 0; i < 3 && o < 240; i++) o += snprintf(ab + o, sizeof ab - o, " upload%d=%llu present%d=%llu", i, (unsigned long long)(g_up_alloc4[i].allocatedSize >> 20), i, (unsigned long long)(g_present_alloc4[i].allocatedSize >> 20));
         MLOG("Command allocator usage: %s", ab);

@@ -26,6 +26,37 @@ static void test_feedback_pool(void) {
     assert(!probe);
 }
 
+static void test_upload_versions(void) {
+    tex_t t = {.magic = MAGIC('T', 'E', 'X', 0), .serial = 70002, .has_layout = 1};
+    t.d = (nvn_texdesc){.width = 16, .height = 16, .depth = 1, .levels = 1,
+        .target = NVN_TEXTURE_TARGET_2D, .format = NVN_FORMAT_RGBA8, .pkg_block_h = 1};
+    nvn_tex_layout(&t.d, &t.L);
+    t.mem = calloc(1, t.L.size); assert(t.mem);
+    mtl_reg_tex(258, &t, NULL);
+    id<MTLBuffer> readback = [g_dev newBufferWithLength:2048 options:MTLResourceStorageModeShared];
+    assert(readback); res_add(readback);
+    mtl_sub_begin();
+    for (int version = 0; version < 2; version++) {
+        memset(t.mem, version ? 0x22 : 0x11, t.L.size);
+        rmu_lock(); g_ser_gen++;
+        id<MTLTexture> texture = tex_by_id(258);
+        assert(texture);
+        enc_b_copy_texture_buffer(blit(), texture, 0, 0, MTLOriginMake(0, 0, 0),
+            MTLSizeMake(16, 16, 1), readback, version * 1024, 64, 1024);
+        rmu_unlock();
+    }
+    uint64_t fence = mtl_sub_commit();
+    assert(mtl_wait(fence, 5000000000ull) && !mtl_last_commit_error());
+    const uint8_t *pixels = readback.contents;
+    for (int i = 0; i < 2048; i++) assert(pixels[i] == (i < 1024 ? 0x11 : 0x22));
+    res_remove(readback);
+    mtl_tex_release(&t);
+    mtl_sub_begin(); fence = mtl_sub_commit();
+    assert(mtl_wait(fence, 5000000000ull));
+    free(t.mem);
+    puts("texture upload: two versions in one submission preserve both GPU readbacks");
+}
+
 int main(int argc, char **argv) { @autoreleasepool {
     alarm(30);
     mtl_init();
@@ -35,6 +66,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         return 0;
     }
     g_nvn_deswz_gpu = 0;
+    test_upload_versions();
     tex_t t = {.magic = MAGIC('T', 'E', 'X', 0), .serial = 70001, .has_layout = 1};
     t.d = (nvn_texdesc){.width = 16, .height = 16, .depth = 1, .levels = 1,
         .target = NVN_TEXTURE_TARGET_2D, .format = NVN_FORMAT_RGBA8, .pkg_block_h = 1};
