@@ -347,8 +347,8 @@ if ($SkipInstall) {
 Write-Step 'Checking the required public tools'
 $git = Get-Executable 'git.exe'
 if ($null -eq $git) { throw 'git.exe is missing. Install Git and reopen PowerShell.' }
-$pythonCommand = Get-PythonCommand
-if ($null -eq $pythonCommand) { throw 'Python 3.12+ is missing. Install it and reopen PowerShell.' }
+$pythonCommand = @(Get-PythonCommand)
+if ($pythonCommand.Count -eq 0) { throw 'Python 3.12+ is missing. Install it and reopen PowerShell.' }
 $pythonVersion = Get-PythonVersion $pythonCommand
 if ($pythonVersion -lt [version]'3.12') {
     throw "Python 3.12 or newer is required; found $pythonVersion."
