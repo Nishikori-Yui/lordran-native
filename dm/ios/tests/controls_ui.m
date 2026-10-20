@@ -1,11 +1,16 @@
 // Standalone simulator harness: no host, game files, signing, or IPA installation.
 #import "../Sources/DmGamepad.h"
 #import "../Sources/DmControlOverlay.h"
+#import "../Sources/DmAppSettings.h"
 #import <GameController/GameController.h>
 #import <QuartzCore/QuartzCore.h>
 #include "../../host/dm_input.h"
+#include "../../host/cheats.h"
+#include "../../host/gen/01004AB00A260000/game_profile.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 #undef assert
 #define assert(condition) do { if (!(condition)) @throw [NSException exceptionWithName:@"TestFailure" reason:[NSString stringWithFormat:@"%s:%d: %s", __FILE__, __LINE__, #condition] userInfo:nil]; } while (0)
@@ -23,6 +28,8 @@
 - (void)saveEdits;
 - (void)cancelEdits;
 - (void)inputSettings;
+- (void)cheats;
+- (void)back;
 - (void)sliderChanged:(UISlider *)slider;
 - (void)panBall:(UIPanGestureRecognizer *)pan;
 - (void)exportLog;
@@ -34,6 +41,7 @@
 static uint64_t buttons;
 static int32_t axes[4];
 static UIButton *exportAnchor;
+static uint32_t cheatFlags[2];
 void dm_input_set(uint64_t b, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
     buttons = b; axes[0] = lx; axes[1] = ly; axes[2] = rx; axes[3] = ry;
 }
@@ -92,13 +100,41 @@ static void panelFits(DmControlOverlay *overlay) {
     [panel layoutIfNeeded];
     assert(scroll.contentSize.height > 100 && scroll.contentSize.width >= panel.bounds.size.width - 1);
     assert(!panel.hasAmbiguousLayout);
-    assert(CGColorGetAlpha(panel.backgroundColor.CGColor) > 0 && CGColorGetAlpha(panel.backgroundColor.CGColor) < 1);
+    assert(CGColorGetAlpha(panel.backgroundColor.CGColor) == 0);
+}
+static UIButton *buttonWithTag(UIView *view, NSInteger tag) {
+    if ([view isKindOfClass:UIButton.class] && view.tag == tag) return (UIButton *)view;
+    for (UIView *child in view.subviews) {
+        UIButton *found = buttonWithTag(child, tag);
+        if (found) return found;
+    }
+    return nil;
+}
+static BOOL containsLabel(UIView *view, NSString *text) {
+    if ([view isKindOfClass:UILabel.class] && [((UILabel *)view).text isEqualToString:text]) return YES;
+    for (UIView *child in view.subviews) if (containsLabel(child, text)) return YES;
+    return NO;
 }
 static void runTests(UIViewController *presenter) {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     [defaults removeObjectForKey:@"DmControlProfile.v1"];
     [defaults removeObjectForKey:@"DmControlDock.v1"];
     [defaults removeObjectForKey:@"DmPadLayout"];
+    [defaults setObject:@"en-US" forKey:DmAppLanguageKey];
+    DmAppApplyStartupSettings();
+    const struct { const char *id, *version; } builds[] = {DM_GAME_DISPLAY_VERSIONS};
+    char manifest[] = "/tmp/dm-ios-cheats-XXXXXX";
+    int manifestFD = mkstemp(manifest); assert(manifestFD >= 0); close(manifestFD);
+    FILE *manifestFile = fopen(manifest, "w"); assert(manifestFile);
+    fprintf(manifestFile, "# BUILD_ID\t%s\n0\t0\t60 FPS\n1\t0\t示例//Example\n", builds[0].id);
+    fclose(manifestFile);
+    assert(dm_cheats_load(cheatFlags, 2, builds[0].id, manifest));
+    unlink(manifest);
+    setenv("DM_LANG", "en-US", 1);
+    assert(!strcmp(dm_cheat_name(1), "Example"));
+    setenv("DM_LANG", "zh-Hans", 1);
+    assert(!strcmp(dm_cheat_name(1), "示例"));
+    DmAppApplyStartupSettings();
     UIView *canvas = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 844, 390)];
     CAGradientLayer *gradient = [CAGradientLayer layer]; gradient.frame = canvas.bounds;
     gradient.colors = @[(id)[UIColor colorWithRed:0.32 green:0.22 blue:0.1 alpha:1].CGColor,
@@ -119,6 +155,34 @@ static void runTests(UIViewController *presenter) {
     UISwitch *fps = [UISwitch new]; fps.on = YES; [overlay fpsToggled:fps];
     assert(showsFPS && overlay.showsFPS && [defaults boolForKey:@"DmShowFPS"]);
     fps.on = NO; [overlay fpsToggled:fps]; assert(!showsFPS && !overlay.showsFPS);
+    [overlay cheats]; panelFits(overlay);
+    UIView *cheatPanel = [overlay valueForKey:@"panel"];
+    CGRect safe = CGRectInset(UIEdgeInsetsInsetRect(overlay.bounds, overlay.safeAreaInsets), 8, 8);
+    CGFloat hudReserve = MIN(120, MAX(0, safe.size.height - 120));
+    assert(CGRectGetMinY(cheatPanel.frame) >= CGRectGetMinY(safe) + hudReserve - 1);
+    assert(CGRectGetMaxY(cheatPanel.frame) <= CGRectGetMaxY(safe) + 1);
+    assert(containsLabel(cheatPanel, @"Keep cheats off before entering the game. Enable them after gameplay starts."));
+    assert(containsLabel(cheatPanel, @"Changes apply during play. Disabling a cheat does not undo changes already saved by the game."));
+    UIButton *secondCheat = buttonWithTag(cheatPanel, 1);
+    assert([secondCheat.accessibilityLabel isEqualToString:@"Example"]);
+    snapshot(cheatPanel, @"controls-cheats-en.png");
+    UIButton *cheat = buttonWithTag([overlay valueForKey:@"panel"], 0);
+    assert(cheat && [cheat.accessibilityLabel isEqualToString:@"60 FPS"] &&
+           [cheat.accessibilityValue isEqualToString:@"Off"] && !dm_cheat_enabled(0));
+    [cheat sendActionsForControlEvents:UIControlEventTouchUpInside];
+    assert(dm_cheat_enabled(0) && cheatFlags[0] == 1);
+    assert([cheat.accessibilityValue isEqualToString:@"On"]);
+    [defaults setObject:@"zh-Hans" forKey:DmAppLanguageKey];
+    DmAppApplyStartupSettings();
+    [overlay cheats]; panelFits(overlay);
+    cheatPanel = [overlay valueForKey:@"panel"];
+    assert(containsLabel(cheatPanel, @"进入游戏前请保持关闭，进入游戏后再开启。"));
+    assert(containsLabel(cheatPanel, @"开关在游玩过程中生效。关闭金手指不会撤销游戏已经保存的变更。"));
+    assert([buttonWithTag(cheatPanel, 1).accessibilityLabel isEqualToString:@"示例"]);
+    snapshot(cheatPanel, @"controls-cheats-zh.png");
+    [defaults setObject:@"en-US" forKey:DmAppLanguageKey];
+    DmAppApplyStartupSettings();
+    [overlay back]; panelFits(overlay);
     UIButton *exportButton = [overlay valueForKey:@"export"];
     assert(exportButton && !exportButton.hidden);
     [overlay exportLog]; assert(exportAnchor == exportButton && exportButton.window);
@@ -228,7 +292,13 @@ static void runTests(UIViewController *presenter) {
     assert(hypot(restoredBall.center.x - ball.center.x, restoredBall.center.y - ball.center.y) < 1);
     pad.frame = overlay.frame = CGRectMake(0, 0, 667, 375);
     [pad setNeedsLayout]; [overlay setNeedsLayout]; [pad layoutIfNeeded]; [overlay layoutIfNeeded];
-    [overlay toggleMenu]; panelFits(overlay); assert(ball.hidden); [overlay editControls];
+    [overlay cheats]; panelFits(overlay);
+    safe = CGRectInset(UIEdgeInsetsInsetRect(overlay.bounds, overlay.safeAreaInsets), 8, 8);
+    hudReserve = MIN(120, MAX(0, safe.size.height - 120));
+    cheatPanel = [overlay valueForKey:@"panel"];
+    assert(CGRectGetMinY(cheatPanel.frame) >= CGRectGetMinY(safe) + hudReserve - 1);
+    assert(CGRectGetMaxY(cheatPanel.frame) <= CGRectGetMaxY(safe) + 1);
+    [overlay closeMenu]; [overlay toggleMenu]; panelFits(overlay); assert(ball.hidden); [overlay editControls];
     assert(ball.hidden && [overlay valueForKey:@"panel"] == nil);
     snapshot(canvas, @"controls-editor-narrow.png"); [overlay cancelEdits]; [overlay closeMenu];
     released();

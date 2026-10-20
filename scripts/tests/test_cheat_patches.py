@@ -130,15 +130,72 @@ class CheatPatchTests(unittest.TestCase):
     def test_packer_forwards_patches_only_to_main(self):
         profile = type("Profile", (), {"words": lambda _, key: ["main", "sdk"]})()
         args = native.parse_args(["--cheat-file", str(self.file), "--cheat", "Example",
-                                  "--ips", str(self.root / "example.ips")])
+                                  "--ips", str(self.root / "example.ips"), "--runtime-cheats"])
         output = self.root / "patched"
         output.mkdir()
         (output / "old").touch()
         with patch.object(native, "run") as run, patch.object(native, "say"):
             native.rewrite("python", ROOT, self.root, output, {}, self.root, profile, args)
-        self.assertEqual(run.call_args_list[0].args[0][-6:], cheats.arguments(args))
+        forwarded = cheats.arguments(args)
+        self.assertEqual(run.call_args_list[0].args[0][-len(forwarded):], forwarded)
+        self.assertIn("--runtime-cheats", run.call_args_list[0].args[0])
         self.assertEqual(len(run.call_args_list[1].args[0]), 5)
         self.assertFalse((output / "old").exists())
+
+    def test_runtime_groups_default_off_preserve_original_instructions(self):
+        self.file.write_text("[One]\n04000000 00000200 D503201F\n"
+                             "[Two]\n04000000 00000204 D65F03C0\n", encoding="utf-8")
+        image = bytearray(0x800)
+        image[0x200:0x208] = bytes.fromhex("080040f9080440f9")
+        original = bytes(image)
+        end, sites, audit = cheats.prepare_runtime(
+            image, 0x400, 0x500, BUILD, options("--cheat-file", str(self.file), "--runtime-cheats"))
+        self.assertEqual(end, 0x400)
+        self.assertEqual(image, original)
+        self.assertEqual([g["initial"] for g in audit["groups"]], [False, False])
+        self.assertEqual(sites[0x200]["original"], 0xF9400008)
+        self.assertEqual(sites[0x200]["patched"], 0xD503201F)
+        self.assertEqual(sites[0x204]["group"], 1)
+
+    def test_runtime_payload_stays_resident_and_selection_is_explicit(self):
+        self.file.write_text("[Payload]\n04000000 00000200 140000A0\n"
+                             "04000000 00000480 D65F03C0\n", encoding="utf-8")
+        image = bytearray(0x800)
+        end, _, audit = cheats.prepare_runtime(image, 0x400, 0x500, BUILD,
+            options("--cheat-file", str(self.file), "--cheat", "Payload", "--runtime-cheats"))
+        self.assertEqual(end, 0x484)
+        self.assertEqual(image[0x480:0x484], struct.pack("<I", 0xD65F03C0))
+        self.assertEqual(image[0x200:0x204], bytes(4))
+        self.assertTrue(audit["groups"][0]["initial"])
+
+    def test_runtime_initial_selection_includes_ips_group_names(self):
+        self.file.write_text("[One]\n04000000 00000200 D503201F\n"
+                             "[Two]\n04000000 00000204 D65F03C0\n", encoding="utf-8")
+        ips_path = self.root / (BUILD[:32] + ".ips")
+        ips_path.write_bytes(ips(offset=0x208))
+        args = options("--cheat-file", str(self.file), "--runtime-cheats", "--cheat", "One",
+                       "--ips", str(ips_path), "--cheat", f"IPS: {ips_path.stem}")
+        _, _, audit = cheats.prepare_runtime(bytearray(0x800), 0x400, 0x500, BUILD, args)
+        self.assertEqual([g["initial"] for g in audit["groups"]], [True, False, True])
+        with self.assertRaisesRegex(ValueError, "Unknown runtime cheat group"):
+            cheats.prepare_runtime(bytearray(0x800), 0x400, 0x500, BUILD,
+                                   options("--runtime-cheats", "--ips", str(ips_path), "--cheat", "Missing"))
+
+    def test_runtime_rejects_overlap_data_only_and_invalid_late_input_atomically(self):
+        texts = (
+            "[A]\n04000000 00000200 D503201F\n[B]\n04000000 00000200 D503201F\n",
+            "[A]\n04000000 00000480 D65F03C0\n",
+            "[A]\n04000000 00000200 D503201F\n04000000 00000480 D65F03C0\n"
+            "[B]\n04000000 00000600 D503201F\n",
+            "[A\tname]\n04000000 00000200 D503201F\n",
+        )
+        for text in texts:
+            self.file.write_text(text, encoding="utf-8")
+            image = bytearray(0x800)
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                cheats.prepare_runtime(image, 0x400, 0x500, BUILD,
+                    options("--cheat-file", str(self.file), "--runtime-cheats"))
+            self.assertEqual(image, bytes(0x800))
 
 
 if __name__ == "__main__":

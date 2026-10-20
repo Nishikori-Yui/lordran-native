@@ -3,9 +3,10 @@
 #import "DmGamepad.h"
 #import "DmDiagnostics.h"
 #import "DmAppSettings.h"
+#include "../../host/cheats.h"
 #import <QuartzCore/QuartzCore.h>
 
-enum { PageClosed, PageMenu, PageEditor, PageInput, PageAppearance };
+enum { PageClosed, PageMenu, PageEditor, PageInput, PageAppearance, PageCheats };
 enum { SliderX, SliderY, SliderScale, SliderAngle, SliderOpacity, SliderDeadzone, SliderLookSensitivity, SliderCount };
 static NSString *const kDockKey = @"DmControlDock.v1";
 static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAppText(english, simplifiedChinese); }
@@ -50,7 +51,7 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
     _gamepad.selectionChanged = nil; _gamepad = gamepad;
     __weak DmControlOverlay *weakSelf = self;
     gamepad.selectionChanged = ^{ [weakSelf updateEditor]; };
-    if (_page == PageMenu || _page == PageInput || _page == PageAppearance) [self showPage:_page];
+    if (_page == PageMenu || _page == PageInput || _page == PageAppearance || _page == PageCheats) [self showPage:_page];
 }
 - (CGRect)dockRect { return CGRectInset(UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets), 24, 24); }
 - (void)placeBall {
@@ -69,18 +70,25 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
     }
     if (!_panel) return;
     CGRect safe = CGRectInset(UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets), 8, 8);
-    CGFloat width = MIN(_page == PageEditor || _page == PageInput ? 310 : 290, safe.size.width);
+    CGRect panelSafe = safe;
+    if (_page == PageCheats) {
+        CGFloat topReserve = MIN(120, MAX(0, safe.size.height - 120));
+        panelSafe.origin.y += topReserve;
+        panelSafe.size.height -= topReserve;
+    }
+    CGFloat preferredWidth = _page == PageEditor || _page == PageInput ? 310 : (_page == PageCheats ? 340 : 290);
+    CGFloat width = MIN(preferredWidth, panelSafe.size.width);
     CGSize content = [_stack systemLayoutSizeFittingSize:CGSizeMake(width - 24, UILayoutFittingCompressedSize.height)
         withHorizontalFittingPriority:UILayoutPriorityRequired verticalFittingPriority:UILayoutPriorityFittingSizeLevel];
-    CGFloat height = MIN(content.height + 24, safe.size.height);
+    CGFloat height = MIN(content.height + 24, panelSafe.size.height);
     CGPoint origin;
     if (_panelMoved) origin = _panel.frame.origin;
     else {
-        origin.x = _ball.center.x < CGRectGetMidX(safe) ? CGRectGetMaxX(_ball.frame) + 8 : CGRectGetMinX(_ball.frame) - 8 - width;
+        origin.x = _ball.center.x < CGRectGetMidX(panelSafe) ? CGRectGetMaxX(_ball.frame) + 8 : CGRectGetMinX(_ball.frame) - 8 - width;
         origin.y = _ball.center.y - 24;
     }
-    origin.x = fmax(CGRectGetMinX(safe), fmin(CGRectGetMaxX(safe) - width, origin.x));
-    origin.y = fmax(CGRectGetMinY(safe), fmin(CGRectGetMaxY(safe) - height, origin.y));
+    origin.x = fmax(CGRectGetMinX(panelSafe), fmin(CGRectGetMaxX(panelSafe) - width, origin.x));
+    origin.y = fmax(CGRectGetMinY(panelSafe), fmin(CGRectGetMaxY(panelSafe) - height, origin.y));
     _panel.frame = CGRectMake(origin.x, origin.y, width, height); _scroll.frame = _panel.bounds;
 }
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
@@ -129,13 +137,14 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
     UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
     UIButtonConfiguration *c = UIButtonConfiguration.tintedButtonConfiguration;
     c.title = title; if (symbol) c.image = [UIImage systemImageNamed:symbol]; c.imagePadding = 8;
-    c.baseForegroundColor = UIColor.whiteColor; c.baseBackgroundColor = [UIColor colorWithWhite:1 alpha:0.1];
+    c.baseForegroundColor = [UIColor colorWithRed:0.55 green:1.0 blue:0.12 alpha:1.0];
+    c.baseBackgroundColor = UIColor.clearColor;
     c.titleLineBreakMode = NSLineBreakByWordWrapping; button.configuration = c;
     [button.heightAnchor constraintGreaterThanOrEqualToConstant:44].active = YES;
     if (action) [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
     [_stack addArrangedSubview:button]; return button;
 }
-- (void)addSwitch:(NSString *)title on:(BOOL)on action:(SEL)action {
+- (UISwitch *)addSwitch:(NSString *)title on:(BOOL)on action:(SEL)action {
     UILabel *label = [UILabel new]; label.text = title; label.numberOfLines = 0;
     label.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline]; label.adjustsFontForContentSizeCategory = YES;
     UISwitch *toggle = [UISwitch new]; toggle.on = on; toggle.accessibilityLabel = title;
@@ -144,6 +153,7 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
     UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[label, toggle]];
     row.alignment = UIStackViewAlignmentCenter; row.spacing = 8; [_stack addArrangedSubview:row];
     [row.heightAnchor constraintGreaterThanOrEqualToConstant:44].active = YES;
+    return toggle;
 }
 - (void)addSlider:(NSInteger)tag title:(NSString *)title min:(float)low max:(float)high value:(float)value {
     _values[tag] = [self addText:title small:YES];
@@ -181,8 +191,8 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
         [self setNeedsLayout]; [self layoutIfNeeded];
         return;
     }
-    _panel = [UIView new]; _panel.backgroundColor = [UIColor colorWithWhite:0.055 alpha:0.78];
-    _panel.layer.cornerRadius = 18; _panel.layer.borderWidth = 0.5; _panel.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.3].CGColor;
+    _panel = [UIView new]; _panel.backgroundColor = UIColor.clearColor;
+    _panel.layer.cornerRadius = 0; _panel.layer.borderWidth = 0;
     _panel.clipsToBounds = YES; [self insertSubview:_panel belowSubview:_ball];
     _scroll = [UIScrollView new]; _scroll.alwaysBounceVertical = YES; [_panel addSubview:_scroll];
     _stack = [UIStackView new]; _stack.axis = UILayoutConstraintAxisVertical; _stack.spacing = 8;
@@ -194,12 +204,15 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
         [_stack.bottomAnchor constraintEqualToAnchor:_scroll.contentLayoutGuide.bottomAnchor constant:-12],
         [_stack.widthAnchor constraintEqualToAnchor:_scroll.frameLayoutGuide.widthAnchor constant:-24]
     ]];
-    NSString *headingText = page == PageMenu ? T(@"Controls", @"控制菜单") : page == PageInput ? T(@"Input", @"输入设置") : T(@"Button appearance", @"按键外观");
+    NSString *headingText = page == PageMenu ? T(@"Controls", @"控制菜单") : page == PageInput ? T(@"Input", @"输入设置") :
+        page == PageCheats ? T(@"Cheats", @"金手指") : T(@"Button appearance", @"按键外观");
     UILabel *heading = [self addText:headingText small:NO];
+    heading.textColor = [UIColor colorWithRed:0.55 green:1.0 blue:0.12 alpha:1.0];
     heading.userInteractionEnabled = YES;
     [heading addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(panPanel:)]];
     [_gamepad setInputSuspended:YES];
-    if (page == PageMenu) [self buildMenu]; else if (page == PageInput) [self buildInput]; else [self buildAppearance];
+    if (page == PageMenu) [self buildMenu]; else if (page == PageInput) [self buildInput];
+    else if (page == PageCheats) [self buildCheats]; else [self buildAppearance];
     _ball.accessibilityValue = T(@"Open", @"已展开");
     [self setNeedsLayout]; [self layoutIfNeeded];
 }
@@ -207,6 +220,7 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
     [self addButton:T(@"Edit controls", @"调整按键") symbol:@"hand.draw" action:@selector(editControls)].enabled = _gamepad != nil;
     [self addButton:T(@"Button appearance", @"按键外观") symbol:@"paintbrush" action:@selector(buttonAppearance)].enabled = _gamepad != nil;
     [self addSwitch:T(@"Show FPS", @"显示帧率") on:self.showsFPS action:@selector(fpsToggled:)];
+    [self addButton:T(@"Cheats", @"金手指") symbol:@"switch.2" action:@selector(cheats)];
     _export = [self addButton:T(@"Export log", @"导出日志") symbol:@"square.and.arrow.up" action:@selector(exportLog)];
     __weak DmControlOverlay *weakSelf = self;
     NSArray *languages = DmAppUsesChinese() ? @[@"英语", @"简体中文"] : @[@"English", @"Simplified Chinese"];
@@ -233,6 +247,47 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
 - (void)editControls { [_gamepad beginEditingControls]; [self showPage:PageEditor]; }
 - (void)inputSettings { [self showPage:PageInput]; }
 - (void)buttonAppearance { [self showPage:PageAppearance]; }
+- (void)cheats { [self showPage:PageCheats]; }
+- (void)buildCheats {
+    unsigned count = dm_cheat_count();
+    if (!count) [self addText:T(@"No switchable cheats are included in this build.", @"此版本未包含可即时切换的金手指。") small:YES];
+    else {
+        UILabel *warning = [self addText:T(@"Keep cheats off before entering the game. Enable them after gameplay starts.",
+                                           @"进入游戏前请保持关闭，进入游戏后再开启。") small:YES];
+        warning.textColor = [UIColor colorWithRed:0.55 green:1.0 blue:0.12 alpha:1.0];
+        [self addText:T(@"Changes apply during play. Disabling a cheat does not undo changes already saved by the game.",
+                       @"开关在游玩过程中生效。关闭金手指不会撤销游戏已经保存的变更。") small:YES];
+        for (unsigned i = 0; i < count; i++) {
+            UILabel *name = [UILabel new]; name.text = @(dm_cheat_name(i));
+            name.numberOfLines = 1; name.lineBreakMode = NSLineBreakByTruncatingTail;
+            name.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
+            name.adjustsFontForContentSizeCategory = YES; name.textColor = UIColor.whiteColor;
+            UIButton *toggle = [UIButton buttonWithType:UIButtonTypeSystem]; toggle.tag = i;
+            toggle.accessibilityLabel = name.text;
+            [toggle addTarget:self action:@selector(cheatToggled:) forControlEvents:UIControlEventTouchUpInside];
+            UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[name, toggle]];
+            row.axis = UILayoutConstraintAxisHorizontal; row.alignment = UIStackViewAlignmentCenter; row.spacing = 8;
+            [name setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+            [toggle setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+            [toggle.widthAnchor constraintEqualToConstant:44].active = YES;
+            [row.heightAnchor constraintGreaterThanOrEqualToConstant:44].active = YES;
+            [_stack addArrangedSubview:row];
+            [self updateCheatToggle:toggle enabled:dm_cheat_enabled(i)];
+        }
+    }
+    [self addButton:T(@"Back", @"返回") symbol:@"chevron.left" action:@selector(back)];
+}
+- (void)updateCheatToggle:(UIButton *)toggle enabled:(BOOL)enabled {
+    UIImage *image = [UIImage systemImageNamed:enabled ? @"circle.fill" : @"circle"];
+    [toggle setImage:image forState:UIControlStateNormal];
+    toggle.tintColor = enabled ? [UIColor colorWithRed:0.55 green:1.0 blue:0.12 alpha:1.0] : [UIColor colorWithWhite:1 alpha:0.55];
+    toggle.accessibilityValue = enabled ? T(@"On", @"已开启") : T(@"Off", @"已关闭");
+    toggle.accessibilityHint = T(@"Double-tap to toggle this cheat.", @"轻点两下切换此金手指。");
+}
+- (void)cheatToggled:(UIButton *)toggle {
+    BOOL enabled = !dm_cheat_enabled((unsigned)toggle.tag);
+    if (dm_cheat_set((unsigned)toggle.tag, enabled)) [self updateCheatToggle:toggle enabled:enabled];
+}
 - (void)back { [self showPage:PageMenu]; }
 - (void)buildEditor {
     // Do not build a floating inspector here. The game view is the editor surface.

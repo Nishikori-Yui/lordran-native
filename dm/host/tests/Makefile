@@ -6,13 +6,13 @@ endif
 B = build
 GAME_H = ../gen/$(GAME)/game_profile.h
 GINC = -I../gen/$(GAME) -I../../games/$(GAME)
-TESTS = t_padmap t_touch t_oe t_fs t_thread_leak t_fs_case t_audio t_audio_spsc t_swkbd t_altstack t_condvar t_condvar_old t_time t_log_timestamp t_log t_crash_log
+TESTS = t_padmap t_touch t_oe t_fs t_thread_leak t_fs_case t_audio t_audio_spsc t_swkbd t_altstack t_condvar t_condvar_old t_time t_log_timestamp t_log t_crash_log t_cheats
 .DEFAULT_GOAL := run
-.PHONY: mac-perf-test
-mac-perf-test: $(B)/t_mac_perf_hud
-	$(B)/t_mac_perf_hud
-$(B)/t_mac_perf_hud: t_mac_perf_hud.m ../perf_hud_mac.m ../perf_hud_mac.h ../../gfx/nvn/nvn_perf.c ../../gfx/nvn/nvn_perf.h | $(B)
-	clang -O1 -g -Wall -Wextra -Werror -fobjc-arc -o $@ t_mac_perf_hud.m ../perf_hud_mac.m ../../gfx/nvn/nvn_perf.c -framework Cocoa -framework Metal -framework QuartzCore
+.PHONY: mac-cheats-test
+mac-cheats-test: $(B)/t_cheats_mac
+	$(B)/t_cheats_mac
+$(B)/t_cheats_mac: t_cheats_mac.m ../cheats_mac.m ../cheats_mac.h ../cheats.c ../cheats.h $(GAME_H) | $(B)
+	clang -O1 -g -Wall -Wextra -Werror -fobjc-arc $(GINC) -o $@ t_cheats_mac.m ../cheats_mac.m ../cheats.c -framework Cocoa -framework QuartzCore
 MOVIE_B = ../../../game/$(GAME)-work/build/movie-tests
 movie-avc-build: $(MOVIE_B)/t_movie_avc $(MOVIE_B)/t_movie_sps
 $(MOVIE_B):
@@ -31,6 +31,7 @@ $(addprefix $(B)/,$(TESTS)) $(B)/t_audio_spsc_tsan: Makefile $(GAME_H) ../dm_log
 $(GAME_H): ../../games/$(GAME)/game.tsv ../../games/game.py
 	$(MAKE) -C .. GAME=$(GAME) game_profile
 run: $(addprefix $(B)/,$(TESTS))
+	$(B)/t_cheats
 	$(B)/t_touch
 	$(B)/t_oe 2>/dev/null
 	$(B)/t_fs 2>/dev/null
@@ -56,6 +57,8 @@ $(B)/t_log: t_log.c ../dm_log.h ../dm_log_timestamp.h | $(B)
 	clang -O1 -g -Wall -Wextra -Werror -o $@ t_log.c
 $(B)/t_log_timestamp: t_log_timestamp.c ../dm_log_timestamp.h | $(B)
 	clang -O1 -g -Wall -Wextra -Werror -o $@ t_log_timestamp.c
+$(B)/t_cheats: t_cheats.c ../cheats.c ../cheats.h $(GAME_H) | $(B)
+	clang -O1 -g -Wall -Wextra -Werror $(GINC) -o $@ t_cheats.c ../cheats.c
 $(B)/t_padmap: t_padmap.c ../dm_padmap.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -o $@ t_padmap.c
 $(B)/t_touch: t_touch.c ../hle_touch.c ../front.h ../dm.h | $(B)

@@ -195,7 +195,7 @@ def main():
     app_files["dm/font/nintendo_ext.ttf"] = shell_files["dm/font/nintendo_ext.ttf"]
     app_files["dm/font/standard.ttf"] = shell_files["dm/font/standard.ttf"]
     for name in profile.words("modules"):
-        for suffix in ("fixups.tsv", "gates.tsv", "params.tsv", "cuts.tsv", "obs.tsv"):
+        for suffix in ("fixups.tsv", "gates.tsv", "params.tsv", "cuts.tsv", "obs.tsv", "cheats.tsv"):
             path = patched / f"{name}.{suffix}"
             if path.is_file():
                 app_files[f"dm/{path.name}"] = path

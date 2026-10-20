@@ -85,6 +85,19 @@ include any translated suffix after `//`. A file alone enables nothing and is
 rejected; every enabled section must be selected explicitly. Unsupported
 sections can be listed but cannot be selected.
 
+To include switchable groups instead, add `--runtime-cheats`. All imported
+Atmosphere sections and IPS/IPS32 files are then included but start disabled;
+repeat `--cheat 'Section name'` to choose any groups that should start enabled.
+An IPS group is named `IPS: <filename without extension>`. On iOS, open the
+floating menu and choose **Cheats**. On Mac, press F6 to show or hide the
+non-activating cheat panel, F7/F8 to move through the list, and F9 to toggle
+the selected group. These function keys are consumed by the app rather than
+sent to the game. Some Mac keyboards require Fn-F6 through Fn-F9.
+
+The local Atmosphere file already includes the same 60 FPS writes as the
+NXGraphicsPatches IPS32 candidate. Import one source for that patch, not both;
+overlapping runtime groups are rejected.
+
 Alternatively, pass `--ips game/patches/<build-id>.ips` to import a local
 ExeFS IPS or IPS32 patch. This includes the Dark Souls 1.0.3 candidate from
 [NXGraphicsPatches](https://github.com/masagrator/NXGraphicsPatches/tree/master/Dark%20Souls/1.0.3).
@@ -116,12 +129,12 @@ the build ID, selected section names, input hashes and unique byte count; the
 audit contains no input paths or patch bytes. It stays in the private rewrite
 output directory.
 
-Selection is fixed in the generated module images. Rebuild from the original
-NSOs without `--cheat-file`, `--cheat` or `--ips` to disable all patches, then
-replace the module directory or reinstall the unsigned IPA. Restarting the same
-build or editing `Documents/env.txt` does not change the selection. There is no
-runtime or floating-menu switch yet. Patches can change what the game writes
-to its save; use a separate save copy for testing.
+Static selections are fixed in the generated module images. Rebuild from the
+original NSOs without `--cheat-file`, `--cheat` or `--ips` to disable all
+patches, then replace the module directory or reinstall the unsigned IPA.
+Runtime groups can be switched in memory during play; disabling a group does
+not undo changes already made to game state or saves. Use a separate save copy
+for testing.
 
 The 60 FPS candidate is experimental. Successful parsing, rewriting or a
 60 FPS display does not establish correct game speed, animation, audio,
