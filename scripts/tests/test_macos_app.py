@@ -1,4 +1,5 @@
 """macOS app bundling keeps the executable and game resources self-contained."""
+import os
 import plistlib
 import sys
 import tempfile
@@ -59,7 +60,10 @@ class MacOSAppTests(unittest.TestCase):
             self.assertEqual(info["CFBundleExecutable"], "LordranNativeLauncher")
             self.assertEqual(info["CFBundleDisplayName"], "Synthetic Game")
             self.assertTrue((output / "Contents/MacOS/dmhost").is_file())
-            self.assertTrue((output / "Contents/MacOS/LordranNativeLauncher").stat().st_mode & 0o111)
+            launcher = output / "Contents/MacOS/LordranNativeLauncher"
+            self.assertTrue(launcher.is_file())
+            if os.name != "nt":
+                self.assertTrue(launcher.stat().st_mode & 0o111)
             self.assertTrue((output / "Contents/Resources/game/RomFS" /
                              self.profile.get("romfs_marker")).is_file())
             self.assertTrue((output / "Contents/Resources/dm/pso_manifest.tsv").is_file())
