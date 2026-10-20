@@ -75,7 +75,8 @@ static void test_movie_stream(void) {
         .target = NVN_TEXTURE_TARGET_2D, .format = NVN_FORMAT_RGBA8, .pkg_block_h = 1};
     nvn_tex_layout(&t.d, &t.L);
     size_t size = (t.L.size + getpagesize() - 1) & ~((size_t)getpagesize() - 1);
-    assert(!posix_memalign((void **)&t.mem, getpagesize(), size));
+    t.mem = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    assert(t.mem != MAP_FAILED);
     memset(t.mem, 0x55, size);
     mtl_pool_add(t.mem, size);
     mtl_reg_tex(259, &t, NULL);
@@ -105,7 +106,7 @@ static void test_movie_stream(void) {
     // stay resident or accumulate with the number of uploaded frames.
     assert(versions.allObjects.count <= 2);
     for (id texture in versions.allObjects) assert(![g_res_objects containsObject:texture]);
-    free(t.mem);
+    assert(!munmap(t.mem, size));
     puts("movie stream: 512 full-HD GPU uploads, bounded allocations and residency retirement passed");
 }
 
@@ -124,6 +125,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     }
     g_nvn_deswz_gpu = 0;
     test_upload_versions();
+    if (argc == 2 && !strcmp(argv[1], "--upload-order")) return 0;
     tex_t t = {.magic = MAGIC('T', 'E', 'X', 0), .serial = 70001, .has_layout = 1};
     t.d = (nvn_texdesc){.width = 16, .height = 16, .depth = 1, .levels = 1,
         .target = NVN_TEXTURE_TARGET_2D, .format = NVN_FORMAT_RGBA8, .pkg_block_h = 1};
