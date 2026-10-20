@@ -8,6 +8,11 @@ GAME_H = ../gen/$(GAME)/game_profile.h
 GINC = -I../gen/$(GAME) -I../../games/$(GAME)
 TESTS = t_padmap t_touch t_oe t_fs t_thread_leak t_fs_case t_audio t_audio_spsc t_swkbd t_altstack t_condvar t_condvar_old t_time t_log_timestamp t_log t_crash_log
 .DEFAULT_GOAL := run
+.PHONY: mac-perf-test
+mac-perf-test: $(B)/t_mac_perf_hud
+	$(B)/t_mac_perf_hud
+$(B)/t_mac_perf_hud: t_mac_perf_hud.m ../perf_hud_mac.m ../perf_hud_mac.h ../../gfx/nvn/nvn_perf.c ../../gfx/nvn/nvn_perf.h | $(B)
+	clang -O1 -g -Wall -Wextra -Werror -fobjc-arc -o $@ t_mac_perf_hud.m ../perf_hud_mac.m ../../gfx/nvn/nvn_perf.c -framework Cocoa -framework Metal -framework QuartzCore
 MOVIE_B = ../../../game/$(GAME)-work/build/movie-tests
 movie-avc-build: $(MOVIE_B)/t_movie_avc $(MOVIE_B)/t_movie_sps
 $(MOVIE_B):

@@ -200,6 +200,12 @@ The menu owns the language, operation mode and performance-panel settings; do no
 
 The performance panel shows displayed FPS and frame time. Tap it to expand or collapse game FPS, GPU time, memory, resolution and thermal status.
 
+On Mac, fluorescent green performance text appears directly in the upper-right
+corner, with no background or buttons. Press **F5** to cycle
+**Simple → Detailed → Off**; some Mac keyboards require **Fn-F5**.
+The same action is available in the **View** menu. The mode is saved.
+The text does not intercept mouse or keyboard input.
+
 Saves are in `save/`. Before reinstalling, back up `save/` and `pso_user.tsv`: some sideloading tools create a new app data folder. Restore both to retain your saves and pipeline prewarm list.
 
 The first visit to a scene can stutter while Metal compiles new pipelines. The app records them in `pso_user.tsv` for prewarming on later launches.
