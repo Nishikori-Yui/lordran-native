@@ -17,6 +17,8 @@
 # printed.
 import collections, ctypes, getpass, os, re, shutil, struct, subprocess, sys, tempfile, threading, time, zlib
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'dm/tools'))
+import cheat_patches
 
 # ---- Settings ----
 NSP_DIR = ''                            # folder holding the NSPs (empty = ask at run time)
@@ -235,11 +237,13 @@ def check_build(d, name, g):   # every module's build ID must be the one registe
         if got != bid: raise BuildError(f'{m} 构建号 {got} 不是游戏档案 {g.id} 登记的 {name}（{bid}）| {m} build ID {got} is not the {name} registered in game profile {g.id} ({bid})')
 
 
-def rewrite(py, repo, exe_dir, out, env, logs, g):
+def rewrite(py, repo, exe_dir, out, env, logs, g, patches=None):
     tmp = out.with_name(out.name + '.partial'); rmtree(tmp); tmp.mkdir(parents=True)
     for m in g.words('modules'):
         say(f'改写 {m} | rewriting {m}')
-        run([py, repo / 'dm/tools/patch_nso.py', exe_dir / m, tmp, m], logs / f'rewrite_{m}.log', env=dict(env, DM_RULESET='native'))
+        run([py, repo / 'dm/tools/patch_nso.py', exe_dir / m, tmp, m] +
+            (cheat_patches.arguments(patches) if m == 'main' and patches else []),
+            logs / f'rewrite_{m}.log', env=dict(env, DM_RULESET='native'))
     swap_in(tmp, out)
 
 
@@ -291,6 +295,7 @@ def parse_args(argv):
     ap.add_argument('--bundle-id', help="App bundle ID (default: the profile's bundle_id)")
     ap.add_argument('--keep-extracted', action='store_true', help='出包后保留解出的游戏文件 | keep the extracted game files after the IPA is built')
     ap.add_argument('--env-file', help='诊断包的环境开关文件（每行 KEY=VALUE）| environment switches for a diagnostic build (one KEY=VALUE per line)')
+    cheat_patches.add_arguments(ap)
     return ap.parse_args(argv)
 
 
@@ -348,7 +353,7 @@ def main(args=None):
     say(f'App 名 | app name: {app_name}；包名 | bundle ID: {bundle_id}')
 
     patched = work / f'patched_{pkg_ver}'
-    rewrite(py, repo, game / 'ExeFS', patched, env, logs, g)
+    rewrite(py, repo, game / 'ExeFS', patched, env, logs, g, args)
     sh = work / 'shader'
     split_shaders(py, repo, [dirs[v] / 'RomFS' for v in need], [dirs[v] / 'ExeFS/main' for v in need], sh / 'pkg', env, logs, g)
     ios = build_shaders(py, repo, sh, xlate, env, logs, g)

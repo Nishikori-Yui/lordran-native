@@ -14,6 +14,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from shell_common import check_c1_table, check_manifest, chain_id, shader_keys
 from portable_shaders import verify_spirv_cross
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dm/tools"))
+import cheat_patches
 
 
 def run(command, log, env=None, cwd=None):
@@ -83,6 +85,7 @@ def main():
     parser.add_argument("-o", "--out", type=Path, help="Output IPA path")
     parser.add_argument("--bundle-id", help="Override app identity (default: retain the matching shell's Bundle ID)")
     parser.add_argument("--keep-extracted", action="store_true")
+    cheat_patches.add_arguments(parser)
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(repo / "dm/games"))
@@ -149,7 +152,7 @@ def main():
     if not name:
         raise ValueError("Could not read the game name from base control.nacp")
     patched = work / f"patched_{package}"
-    source.rewrite(sys.executable, repo, game_dir / "ExeFS", patched, env, logs, profile)
+    source.rewrite(sys.executable, repo, game_dir / "ExeFS", patched, env, logs, profile, args)
     shaders = work / "shader"
     source.split_shaders(sys.executable, repo,
                          [dirs[v] / "RomFS" for v in profile.words("shader_versions")],

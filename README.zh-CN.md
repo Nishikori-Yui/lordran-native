@@ -110,6 +110,10 @@ python3 scripts/build_ipa_from_nsp.py game/01004AB00A260000 -k game/01004AB00A26
 
 运行 `python3 scripts/build_ipa_from_nsp.py -h` 可查看选项，包括用 `-o` 指定输出路径、用 `--app-name` 指定主屏幕名称。版本选择和 Mac 手动构建步骤见[开发文档](docs/development.md)。
 
+构建时可实验性地选择本地静态金手指和 IPS/IPS32 补丁（包括 60 FPS 候选）。
+默认全部关闭，且必须匹配 main NSO 构建 ID。更改选择需要重新构建，目前没有游戏内开关。
+支持的格式和使用方法见[开发文档](docs/development.md#experimental-static-cheats-and-60-fps-patches)。
+
 如需在 Apple 芯片 Mac 上构建实验性的 iOS 模拟器版本，请参照[模拟器构建步骤](docs/development.md#build-for-ios-simulator-apple-silicon)。此版本输出独立的 `.app.zip`，与真机 IPA 分开。
 
 ### 在 Windows 上打包（无需 Xcode）

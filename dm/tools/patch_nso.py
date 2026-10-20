@@ -7,12 +7,21 @@
 #   svc #n, mrs cntpct_el0 → host gate (gate address taken from thread slot KGATE; once in C, gates.tsv is looked up by return point)
 # The key page only stores "actual key number × 8" at the end of the data segment, and patch code fetches thread slots indirectly through the key page: the loader may use any key number.
 # Output: <name>.patched.bin (key page and patch area appended after the image at PATCH_OFF; when that would start beyond 112 MB the patch area sits before the base, see FAR), <name>.fixups.tsv (layout and key page index header), <name>.gates.tsv, <name>.sites.tsv, <name>.cuts.tsv, <name>.obs.tsv
-import struct, re, sys, os
+import argparse, json, struct, re, sys, os
 from itertools import combinations
 import lz4.block
 from capstone import *
+import cheat_patches
 
-src, outdir, NAME = sys.argv[1], sys.argv[2], sys.argv[3]
+parser = argparse.ArgumentParser(description="Rewrite a registered Dark Souls NSO for Apple platforms.")
+parser.add_argument("src")
+parser.add_argument("outdir")
+parser.add_argument("module")
+cheat_patches.add_arguments(parser)
+args = parser.parse_args()
+src, outdir, NAME = args.src, args.outdir, args.module
+if NAME != "main" and cheat_patches.arguments(args):
+    parser.error("User patches are only supported for the main module")
 d = open(src, 'rb').read()
 assert d[:4] == b'NSO0'
 # Check the build before decompressing or allocating its image.
@@ -40,6 +49,10 @@ for i, (fo, mo, sz) in enumerate(segs):
     IMG[mo:mo + sz] = raw
 TEXT_END = segs[0][2]
 RO_OFF, DATA_OFF = segs[1][1], segs[2][1]
+try:
+    TEXT_END, CHEAT_AUDIT = cheat_patches.apply(IMG, TEXT_END, RO_OFF, d[0x40:0x60].hex(), args)
+except (ValueError, OSError, UnicodeError) as error:
+    parser.exit(1, f"User patch rejected: {error}\n")
 if FAR:
     FILE_IMAGE_LEN = (len(IMG) + 0x3FFF) & ~0x3FFF
     KEY_PAGE_OFF = (len(IMG) + bss + 0x3FFF) & ~0x3FFF
@@ -484,6 +497,10 @@ else:
 import hashlib
 with open(os.path.join(outdir, 'build_src.sha256'), 'w') as f:
     f.write(hashlib.sha256(open(os.path.abspath(__file__), 'rb').read()).hexdigest() + '  patch_nso.py\n')
+    f.write(hashlib.sha256(open(cheat_patches.__file__, 'rb').read()).hexdigest() + '  cheat_patches.py\n')
+with open(P('cheats.json'), 'w', encoding='utf-8') as f:
+    json.dump(CHEAT_AUDIT, f, indent=2, ensure_ascii=True)
+    f.write('\n')
 # Clear obsolete manifests when reusing an output directory from older tools.
 for ext in ('rules.tsv', 'aim.tsv'):
     if os.path.exists(P(ext)): os.unlink(P(ext))

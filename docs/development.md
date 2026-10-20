@@ -10,7 +10,7 @@ and [support skill](../skills/lordran-native-support/SKILL.md).
 
 | Part | Responsibility |
 |---|---|
-| Rewriter (`dm/tools/patch_nso.py`, `DM_RULESET=native`) | Rewrites kernel-dependent instructions in the registered module builds for the target title. No game-specific code cuts, observation gates or resolution patches are applied |
+| Rewriter (`dm/tools/patch_nso.py`, `DM_RULESET=native`) | Rewrites kernel-dependent instructions in the registered module builds for the target title. User-selected static code patches are applied before rewriting; none are enabled by default. No built-in game-specific code cuts, observation gates or resolution patches are applied |
 | Host (`dm/host`) | Provides Horizon kernel and system services: threads, synchronization, memory, transactional saves, HID, audio, movies, software keyboard, focus and lifecycle |
 | Graphics (`dm/gfx`) | Implements NVN on Metal. `shader_split.py` extracts the target title's BNSH / GLSLC shader corpus for offline translation and compilation into the profile cache |
 | Audio | AudioOut and the SDK audio renderer are hosted in-process. Output goes through Core Audio (default on iOS, `DM_AUDIO=1` on the Mac) |
@@ -60,6 +60,73 @@ and the player-support build command also accept `--bundle-id`.
 The packer uses `<NSP folder>/01004AB00A260000_build/`; the manual procedure below uses a separate `<NSP folder>/01004AB00A260000-work/` layout. Their extraction and cache paths differ. Do not use one layout's paths in the other without setting the appropriate overrides.
 
 On the device, diagnostic environment switches go in `Documents/env.txt` (one `KEY=VALUE` per line), and game files are also accepted at `Documents/romfs`. Language, operation mode and the performance panel are owned by the in-game floating menu; language and operation mode changes restart the app.
+
+## Experimental static cheats and 60 FPS patches
+
+The rewriter and both NSP packagers accept user-supplied static code patches.
+Nothing is enabled or downloaded automatically. Keep patch files and build
+outputs under `game/`. Patch files are not part of the repository.
+
+List a local Atmosphere text file before selecting sections:
+
+```sh
+python3 dm/tools/cheat_patches.py game/cheats/<title-id>/cheats/<build-id>.txt
+```
+
+Pass the file and each exact section name to `scripts/build_ipa_from_nsp.py`
+or `scripts/build_ipa_from_shell.py`, in addition to their normal arguments:
+
+```sh
+--cheat-file game/cheats/<title-id>/cheats/<build-id>.txt --cheat '60 FPS'
+```
+
+Repeat `--cheat 'Section name'` to enable additional sections. Section names
+include any translated suffix after `//`. A file alone enables nothing and is
+rejected; every enabled section must be selected explicitly. Unsupported
+sections can be listed but cannot be selected.
+
+Alternatively, pass `--ips game/patches/<build-id>.ips` to import a local
+ExeFS IPS or IPS32 patch. This includes the Dark Souls 1.0.3 candidate from
+[NXGraphicsPatches](https://github.com/masagrator/NXGraphicsPatches/tree/master/Dark%20Souls/1.0.3).
+Its IPS32 records specify NSO offsets including the `0x100` header, which the
+importer subtracts before writing the decompressed image. Identical overlapping
+writes are accepted; conflicting bytes reject the complete selection.
+No third-party patch bytes are bundled.
+
+For a manual Mac build, append the same options to the `main` invocation of
+`dm/tools/patch_nso.py`; rewrite the other modules without patch options.
+Each patch filename must be the main NSO build ID: the first 8 bytes (16 hex
+digits), first 16 bytes (32 hex digits), or full 32 bytes (64 hex digits).
+The NSO must also match a build registered in the game's profile. A filename
+match identifies the intended version; it does not verify the patch author's
+claims or the behavior of the resulting game.
+
+The initial supported cheat opcode is `04000000 AAAAAAAA VVVVVVVV`: one
+aligned, little-endian 32-bit write relative to `main`. Writes must target
+executable text or its padding before rodata, excluding the first `0x100`
+bytes. Code injected into that padding extends the native instruction scan.
+IPS imports have the same address limits. Pointer chains, conditions, button
+activators, master codes, data/heap writes, and periodic runtime execution are
+unsupported. All selected writes are validated before any are applied.
+
+Patches run before native instruction rewriting, so injected code receives
+the same kernel adaptation as the original text. The original NSO is not
+modified. Each rewritten module gets a local `<module>.cheats.json` audit with
+the build ID, selected section names, input hashes and unique byte count; the
+audit contains no input paths or patch bytes. It stays in the private rewrite
+output directory.
+
+Selection is fixed in the generated module images. Rebuild from the original
+NSOs without `--cheat-file`, `--cheat` or `--ips` to disable all patches, then
+replace the module directory or reinstall the unsigned IPA. Restarting the same
+build or editing `Documents/env.txt` does not change the selection. There is no
+runtime or floating-menu switch yet. Patches can change what the game writes
+to its save; use a separate save copy for testing.
+
+The 60 FPS candidate is experimental. Successful parsing, rewriting or a
+60 FPS display does not establish correct game speed, animation, audio,
+frame pacing, thermal behavior or stability. Gameplay and physical-device
+acceptance remain tracked separately in issues #8 and #9.
 
 ## iOS performance panel
 
