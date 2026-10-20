@@ -13,12 +13,42 @@ Lordran Native 将 **《黑暗之魂：重制版》**（`01004AB00A260000`）原
 ## 准备条件
 
 - 常规构建路径：一台安装 Xcode 和 Homebrew 的 Apple 芯片 Mac。
+  [Mac 打包说明](docs/macos-packaging.zh-CN.md)提供了一键环境配置脚本，可生成
+  iOS IPA 或本地 macOS App。
 - Windows 实验性壳构建路径：64 位 Windows 10/11，以及包含自动化
   PowerShell 配置脚本的[Windows 打包说明](docs/windows-packaging.zh-CN.md)。
 - 游戏本体 NSP 和 **1.0.3 更新**（`v196608`）。即使打包本体版本，也需要这两份文件来提取着色器。
 - 你自己的 `prod.keys`。
 - 如需使用 IPA：运行 **iOS / iPadOS 26 或更高版本**的 iPhone 或 iPad，以及侧载工具。
 - 空闲磁盘空间约为 NSP 总大小的两倍，再加 10 GB。
+
+## Mac 一键配置
+
+请先从 Mac App Store 安装 Xcode，并安装 Homebrew。在仓库根目录执行下面的命令，即可安装其余公开工具并检查环境；该命令不会读取游戏文件：
+
+```bash
+bash scripts/setup_macos_packaging.sh --target setup-only
+```
+
+如需一次完成配置并构建未签名 iOS IPA：
+
+```bash
+bash scripts/setup_macos_packaging.sh \
+  --target ipa \
+  --nsp-dir "$PWD/game/01004AB00A260000" \
+  --keys "$PWD/game/01004AB00A260000/prod.keys"
+```
+
+如需改为构建本地 macOS `.app`，更换目标参数：
+
+```bash
+bash scripts/setup_macos_packaging.sh \
+  --target macos-app \
+  --nsp-dir "$PWD/game/01004AB00A260000" \
+  --keys "$PWD/game/01004AB00A260000/prod.keys"
+```
+
+构建前请把自己的游戏本体 NSP、`v196608` 更新 NSP 和 `prod.keys` 放入私有目录 `game/01004AB00A260000/`。脚本只安装公开工具，不会下载游戏文件或密钥。Xcode 要求、产物位置、存档、覆盖已有 App 和故障排查见 [Mac 打包说明](docs/macos-packaging.zh-CN.md)。
 
 ## 让 agent 帮你完成
 

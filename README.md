@@ -13,6 +13,8 @@ You need your own game NSPs and `prod.keys`. The repository contains no game fil
 ## Requirements
 
 - For the standard build route: an Apple silicon Mac with Xcode and Homebrew.
+  The [Mac packaging guide](docs/macos-packaging.md) includes a setup script
+  for building an iOS IPA or a local macOS app.
 - For the experimental Windows shell route: 64-bit Windows 10/11 and the
   [Windows packaging guide](docs/windows-packaging.md), which includes an
   automated PowerShell setup script.
@@ -20,6 +22,40 @@ You need your own game NSPs and `prod.keys`. The repository contains no game fil
 - Your own `prod.keys`.
 - For the IPA: an iPhone or iPad running **iOS / iPadOS 26 or later**, and a sideloading tool.
 - Free disk space of roughly twice the total NSP size plus 10 GB.
+
+## One-command Mac setup
+
+Install Xcode from the Mac App Store and Homebrew first. From the repository
+root, this command installs the remaining public tools and checks the
+environment without reading any game files:
+
+```bash
+bash scripts/setup_macos_packaging.sh --target setup-only
+```
+
+To configure the environment and build an unsigned iOS IPA in one run:
+
+```bash
+bash scripts/setup_macos_packaging.sh \
+  --target ipa \
+  --nsp-dir "$PWD/game/01004AB00A260000" \
+  --keys "$PWD/game/01004AB00A260000/prod.keys"
+```
+
+To build a local macOS `.app` instead, change the target:
+
+```bash
+bash scripts/setup_macos_packaging.sh \
+  --target macos-app \
+  --nsp-dir "$PWD/game/01004AB00A260000" \
+  --keys "$PWD/game/01004AB00A260000/prod.keys"
+```
+
+Put your own base-game NSP, `v196608` update NSP, and `prod.keys` under the
+private `game/01004AB00A260000/` folder before building. The script installs
+public tools only; it never downloads game files or keys. See the
+[Mac packaging guide](docs/macos-packaging.md) for Xcode requirements, output
+locations, savedata, replacement, and troubleshooting.
 
 ## Let an agent help
 
