@@ -10,9 +10,30 @@ module_t g_mod[MAX_MOD]; int g_nmod;
 void svc_thread_dump(void) {}
 uint64_t now_ns(void) { return bp_now(); }
 
-int main(void) { @autoreleasepool {
+static void test_feedback_pool(void) {
+    __block __weak id probe;
+    void *(*autorelease_raw)(void *) = dlsym(RTLD_DEFAULT, "objc_autorelease");
+    assert(autorelease_raw);
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    dispatch_async(g_feedback_q, ^{
+        id object = [NSObject new];
+        probe = object;
+        autorelease_raw((void *)CFBridgingRetain(object));
+        // This next work item runs after the first item's pool has drained.
+        dispatch_async(g_feedback_q, ^{ dispatch_semaphore_signal(done); });
+    });
+    assert(!dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)));
+    assert(!probe);
+}
+
+int main(int argc, char **argv) { @autoreleasepool {
     alarm(30);
     mtl_init();
+    test_feedback_pool();
+    if (argc == 2 && !strcmp(argv[1], "--pools-only")) {
+        puts("GPU feedback: autoreleased objects are released between work items");
+        return 0;
+    }
     g_nvn_deswz_gpu = 0;
     tex_t t = {.magic = MAGIC('T', 'E', 'X', 0), .serial = 70001, .has_layout = 1};
     t.d = (nvn_texdesc){.width = 16, .height = 16, .depth = 1, .levels = 1,

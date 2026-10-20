@@ -302,6 +302,8 @@ void mtl_init(void) {
 #endif
     { void crash_set_wait_dump(void (*fn)(void)); void mtl_wait_state_dump(void); crash_set_wait_dump(mtl_wait_state_dump); }
     dispatch_queue_attr_t feedback_attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0);
+    // GPU feedback can autorelease retired resources on this long-lived queue.
+    feedback_attr = dispatch_queue_attr_make_with_autorelease_frequency(feedback_attr, DISPATCH_AUTORELEASE_FREQUENCY_WORK_ITEM);
     g_feedback_q = dispatch_queue_create("dm.nvn.mtl4-feedback", feedback_attr);
     MTL4CommandQueueDescriptor *q4d = [MTL4CommandQueueDescriptor new]; q4d.feedbackQueue = g_feedback_q;
     g_q4 = dm_m4_queue(g_dev, q4d, &re);
@@ -523,6 +525,8 @@ static int tbdr_on(void);
 
 static uint64_t g_sub_serial;   // Submission index (used by the parallel precompile's 'predict only once per submission')
 void mtl_sub_begin(void) {
+    if (g_sub_pool) MDIE("Recursive command submission");
+    g_sub_pool = objc_autoreleasePoolPush();
     mtl_init(); g_sub_serial++;
     if (tbdr_on() == 0 && g_ruler_pending) { g_ruler_truth = 0; g_ruler_pending = 0; MLOG("Ruler benchmark switched to measured mode"); }
     defer_drain();
@@ -531,7 +535,6 @@ void mtl_sub_begin(void) {
     if (g_cb) MDIE("Recursive command submission");
     g_sub_thread = pthread_self(); atomic_store(&g_sub_thread_set, 1);
     atomic_store(&g_last_commit_error, 0);
-    g_sub_pool = objc_autoreleasePoolPush();
     g_cb = dm_m4_buffer(g_dev);
     // Do not wait for the GPU mid-frame (hot real device: with a fixed rotation of 3, when the GPU cannot keep up every frame blocks here, and the submit thread runs at low frequency after waking, instruction count −18% but CPU time +49%):
     // pick an allocator the GPU has finished with; if all are in use create a new one; only at the cap wait for the oldest one. How far ahead it runs is bounded by the wait where the game acquires the swapchain texture, same as the old interface.

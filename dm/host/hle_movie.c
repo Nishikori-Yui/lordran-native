@@ -397,6 +397,8 @@ static void md_close(mdec_t *d) {
     if (d->vb) { stb_vorbis_close(d->vb); d->vb = NULL; }
     if (d->aac) { AudioConverterDispose(d->aac); d->aac = NULL; }
 }
+void *objc_autoreleasePoolPush(void);
+void objc_autoreleasePoolPop(void *);
 static void *md_worker(void *arg) {
     mdec_t *d = arg;
     pthread_setname_np("dm movie decoder");
@@ -405,6 +407,9 @@ static void *md_worker(void *arg) {
         while (d->job == MDJ_NONE) pthread_cond_wait(&d->wcv, &d->wmu);
         int job = d->job;
         pthread_mutex_unlock(&d->wmu);
+        // VideoToolbox and AudioToolbox may autorelease intermediate objects.
+        // A plain pthread has no run-loop pool to drain them between packets.
+        void *pool = objc_autoreleasePoolPush();
         if (job == MDJ_DECODE || job == MDJ_RECEIVE) {
             d->jerr = 0;
             uint64_t t0 = now_ns();
@@ -414,6 +419,7 @@ static void *md_worker(void *arg) {
             uint64_t dt = now_ns() - t0; d->dec_n++; d->dec_ns += dt; if (dt > d->dec_max) d->dec_max = dt;
         }
         else md_close(d);
+        objc_autoreleasePoolPop(pool);
         pthread_mutex_lock(&d->wmu);
         d->job = MDJ_NONE; pthread_cond_broadcast(&d->wcv);
         if (job == MDJ_QUIT) break;
