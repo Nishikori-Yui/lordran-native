@@ -26,6 +26,17 @@ static void test_feedback_pool(void) {
     assert(!probe);
 }
 
+static void test_memory_text(void) {
+    char text[32];
+    memset(text, 0xff, sizeof text);
+    assert(mtl_alloc_size_text(123, text, sizeof text) == text);
+#if TARGET_OS_SIMULATOR
+    assert(!strcmp(text, "unavailable"));
+#else
+    assert(!strcmp(text, "123"));
+#endif
+}
+
 static void test_upload_versions(void) {
     tex_t t = {.magic = MAGIC('T', 'E', 'X', 0), .serial = 70002, .has_layout = 1};
     t.d = (nvn_texdesc){.width = 16, .height = 16, .depth = 1, .levels = 1,
@@ -101,6 +112,7 @@ static void test_movie_stream(void) {
 int main(int argc, char **argv) { @autoreleasepool {
     alarm(30);
     mtl_init();
+    test_memory_text();
     test_feedback_pool();
     if (argc == 2 && !strcmp(argv[1], "--pools-only")) {
         puts("GPU feedback: autoreleased objects are released between work items");

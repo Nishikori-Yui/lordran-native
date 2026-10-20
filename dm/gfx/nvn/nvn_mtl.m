@@ -139,12 +139,12 @@ static int g_res_check_on;
 // Simulator Metal reports zero for allocation-size APIs; do not present that as a real zero-byte allocation.
 static const char *mtl_alloc_size_text(uint64_t value, char *buffer, size_t capacity) {
 #if TARGET_OS_SIMULATOR
-    (void)value; (void)buffer; (void)capacity;
-    return "unavailable";
+    (void)value;
+    snprintf(buffer, capacity, "unavailable");
 #else
     snprintf(buffer, capacity, "%llu", (unsigned long long)value);
-    return buffer;
 #endif
+    return buffer;
 }
 static void res_check(id r, const char *what, int reg) {
     static int nbad;
@@ -1579,7 +1579,9 @@ void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
     dead_mb >>= 20; pool_bytes >>= 20; pool_res_bytes >>= 20;
     // os_proc_available_memory: how far this process is from being terminated by the system for memory, iOS only (from d2r-mobile 704147218); the Mac writes 「无」(none). On a phone, a crash with no log is most likely this number reaching 0
     char avail[32] = "none";
-#if TARGET_OS_IPHONE
+#if TARGET_OS_SIMULATOR
+    snprintf(avail, sizeof avail, "unavailable");
+#elif TARGET_OS_IPHONE
     snprintf(avail, sizeof avail, "%llu MB", (unsigned long long)(os_proc_available_memory() >> 20));
 #endif
     MLOG("Memory through frame %llu: resident_mb=%llu metal_allocated_mb=%s deferred_objects=%lu residency_objects=%lu textures=%lu texture_memory_mb=%s buffers=%lu buffer_memory_mb=%s serial_objects=%u serial_textures=%u serial_texture_memory_mb=%s cached_views=%u serial_view_evictions=%llu pools=%d resident_pools=%d/%d pool_mb=%llu/%llu peak_pools=%d pool_capacity=%d retired_live_pools=%lu/%llu_MB shared_textures=%u pool_texture_evictions=%llu reuploads=%llu arena_blocks_created=%llu system_headroom=%s", frame, rss_mb, gpu_text, nd, nr, nrt, texture_text, nrb, buffer_text, ns, serial_tex, serial_texture_text, view_nonnull, (unsigned long long)g_treg_serial_drops, pool_live, pool_res, pres, pool_res_bytes, pool_bytes, peak, cap, dead_n, dead_mb, ashared, (unsigned long long)g_alias_evicted, (unsigned long long)g_pkg_reuploads, (unsigned long long)g_arena_made, avail);
