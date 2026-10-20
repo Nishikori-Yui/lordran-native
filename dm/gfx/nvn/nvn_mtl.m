@@ -1523,7 +1523,7 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
 }
 // Memory readout line (always on, low frequency, capped): resident memory, GPU allocated, deferred-release queue, residency set object count, registered memory pools / peak / tracking table capacity, cumulative texture re-uploads.
 // Purpose: pin down "crashes with no log". The system gives no notice before killing a process for memory, so only readouts left beforehand can show which number kept climbing.
-// Called by the frame hook every 300 frames; printed only when resident or GPU allocated changed by ≥ 64 MB since the last line, otherwise one line every 3000 frames; capped at 400 lines per game. All integers (the frame hook runs on the guest thread's small stack, so no floating-point formatting)
+// Called by the frame hook every 60 frames; printed only when resident or GPU allocated changed by ≥ 64 MB since the last line, otherwise one line every 3000 frames; capped at 400 lines per game. All integers (the frame hook runs on the guest thread's small stack, so no floating-point formatting)
 void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
     static unsigned long long last_rss, last_gpu, last_frame; static int lines;
     unsigned long long gpu = (unsigned long long)(g_dev.currentAllocatedSize >> 20);
@@ -1583,6 +1583,16 @@ void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
     snprintf(avail, sizeof avail, "%llu MB", (unsigned long long)(os_proc_available_memory() >> 20));
 #endif
     MLOG("Memory through frame %llu: resident_mb=%llu metal_allocated_mb=%s deferred_objects=%lu residency_objects=%lu textures=%lu texture_memory_mb=%s buffers=%lu buffer_memory_mb=%s serial_objects=%u serial_textures=%u serial_texture_memory_mb=%s cached_views=%u serial_view_evictions=%llu pools=%d resident_pools=%d/%d pool_mb=%llu/%llu peak_pools=%d pool_capacity=%d retired_live_pools=%lu/%llu_MB shared_textures=%u pool_texture_evictions=%llu reuploads=%llu arena_blocks_created=%llu system_headroom=%s", frame, rss_mb, gpu_text, nd, nr, nrt, texture_text, nrb, buffer_text, ns, serial_tex, serial_texture_text, view_nonnull, (unsigned long long)g_treg_serial_drops, pool_live, pool_res, pres, pool_res_bytes, pool_bytes, peak, cap, dead_n, dead_mb, ashared, (unsigned long long)g_alias_evicted, (unsigned long long)g_pkg_reuploads, (unsigned long long)g_arena_made, avail);
+    uint64_t main_bytes = 0, upload_bytes = 0, present_bytes = 0, completed;
+    for (int i = 0; i < g_alloc_n; i++) main_bytes += g_alloc4[i].allocatedSize;
+    for (int i = 0; i < 3; i++) { upload_bytes += g_up_alloc4[i].allocatedSize; present_bytes += g_present_alloc4[i].allocatedSize; }
+    pthread_mutex_lock(&g_mu); completed = g_done; pthread_mutex_unlock(&g_mu);
+    char main_text[32], upload_text[32], present_text[32];
+    MLOG("GPU command memory: main_mb=%s upload_mb=%s present_mb=%s allocator_count=%d submitted_fence=%llu completed_fence=%llu pending_upload_batches=%d",
+         mtl_alloc_size_text(main_bytes >> 20, main_text, sizeof main_text),
+         mtl_alloc_size_text(upload_bytes >> 20, upload_text, sizeof upload_text),
+         mtl_alloc_size_text(present_bytes >> 20, present_text, sizeof present_text),
+         g_alloc_n, (unsigned long long)g_fence, (unsigned long long)completed, atomic_load(&g_up_pending));
     if (g_allocprof > 0) { char ab[256]; int o = 0; for (int i = 0; i < g_alloc_n && o < 200; i++) o += snprintf(ab + o, sizeof ab - o, " #%d %llu MB", i, (unsigned long long)(g_alloc4[i].allocatedSize >> 20));
         for (int i = 0; i < 3 && o < 240; i++) o += snprintf(ab + o, sizeof ab - o, " upload%d=%llu present%d=%llu", i, (unsigned long long)(g_up_alloc4[i].allocatedSize >> 20), i, (unsigned long long)(g_present_alloc4[i].allocatedSize >> 20));
         MLOG("Command allocator usage: %s", ab);
