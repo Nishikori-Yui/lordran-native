@@ -1,4 +1,4 @@
-#import "mac_perf_hud.h"
+#import "perf_hud_mac.h"
 #import <QuartzCore/QuartzCore.h>
 #include <mach/mach.h>
 #include "../gfx/nvn/nvn_perf.h"

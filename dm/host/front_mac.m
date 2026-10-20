@@ -11,7 +11,7 @@
 #include "../gfx/nvn/nvn_mtl.h"
 #include "front.h"
 #include "hle.h"
-#import "mac_perf_hud.h"
+#import "perf_hud_mac.h"
 #include <signal.h>
 
 static CAMetalLayer *g_layer;

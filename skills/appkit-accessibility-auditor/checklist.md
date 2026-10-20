@@ -1,6 +1,6 @@
 # Mac performance text accessibility verification
 
-Scope: `dm/host/mac_perf_hud.m` and the key monitor in `front_mac.m`.
+Scope: `dm/host/perf_hud_mac.m` and the key monitor in `front_mac.m`.
 
 ## Findings and implemented fixes
 
