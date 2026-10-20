@@ -9,6 +9,7 @@ version is [README.zh-CN.md](../README.zh-CN.md).
 | If you want to... | Start here |
 |---|---|
 | Build and use the app | [Root README](../README.md) |
+| Prepare packaging or diagnostic feedback with an agent | [Player support skill](../skills/lordran-native-support/SKILL.md) and its linked guides |
 | Package on Windows without Xcode, or have an agent execute/debug that route | [Windows packaging and agent runbook](windows-packaging.md) |
 | Understand the architecture or build manually | [Development guide](development.md) |
 | Extract files and bring up the host | [Porting guide](porting/README.md) |
@@ -22,6 +23,7 @@ version is [README.zh-CN.md](../README.zh-CN.md).
 ```text
 README.md                         Player-facing English entry point
 README.zh-CN.md                   Player-facing Chinese entry point
+skills/lordran-native-support/    Agent entry point for player setup and feedback
 docs/
   README.md                       Documentation index
   agents/                         Task-specific agent guidance, loaded via AGENTS.md

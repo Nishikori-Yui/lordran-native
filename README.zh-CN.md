@@ -18,6 +18,59 @@ Lordran Native 将 **《黑暗之魂：重制版》**（`01004AB00A260000`）原
 - 如需使用 IPA：运行 **iOS / iPadOS 26 或更高版本**的 iPhone 或 iPad，以及侧载工具。
 - 空闲磁盘空间约为 NSP 总大小的两倍，再加 10 GB。
 
+## 让 agent 帮你完成
+
+如果你使用能读取本机文件、执行命令的 Codex、Claude Code 等 agent，可以复制下面的提示。[玩家辅助 skill](skills/lordran-native-support/SKILL.md) 会按任务选择现有文档和工具，直接读取即可使用；也可以通过 agent 支持的方式安装。请使用同一仓库版本的 skill，并告诉 agent 你正在使用的本地 checkout 或 Release。
+
+**准备环境并打包：**
+
+```text
+请帮助我在这台 macOS 或 Windows 电脑上准备 Lordran Native 环境。读取
+https://raw.githubusercontent.com/Nishikori-Yui/lordran-native/main/skills/lordran-native-support/SKILL.md
+并遵循其中链接的适用仓库文档。检查已经安装的工具，协助补齐缺少的依赖，
+准备好之后，用匹配的源码和空壳打包我拥有的本地游戏输入。
+游戏文件和密钥保留在本机。遇到管理员确认或需要手动安装 SDK 的步骤时，
+请告诉我具体操作并等待。验证未签名产物，说明实际完成了哪些检查。
+```
+
+**整理问题反馈：**
+
+```text
+请根据我提供的诊断报告和复现描述，整理 Lordran Native 的问题反馈。读取
+https://raw.githubusercontent.com/Nishikori-Yui/lordran-native/main/skills/lordran-native-support/SKILL.md
+以及其中链接的当前 issue 模板。检查并脱敏相关证据，未证实的信息标为未知，
+给我一份可以预览、直接粘贴的 Markdown；如有匹配的现有 issue，也请提出。
+这次只整理反馈，发布或开始修改代码之前请先询问。
+```
+
+整理反馈不需要 GitHub 登录或构建环境。没有本地 checkout 时，agent 也可以读取公开模板，在对话中生成草稿。分享前请核对脱敏内容。
+
+### 本地辅助命令
+
+在 checkout 中可以使用下列 Python 命令执行检查。Windows 将 `python3` 换成 `py -3`，或直接使用虚拟环境的 Python 路径。它们复用现有打包器和模板。
+
+```sh
+# 检查工具，不安装软件，也不提取游戏输入。
+python3 scripts/player_support.py doctor
+
+# 在 game/ 下生成带时间戳的反馈草稿和日志摘录。
+python3 scripts/prepare_issue.py "诊断报告的路径.txt" --symptom "描述遇到的问题" --step "描述触发问题的操作"
+
+# 查看打包命令，暂不执行。
+python3 scripts/player_support.py build game/01004AB00A260000 --keys game/01004AB00A260000/prod.keys --dry-run
+
+# 检查实机 IPA，不安装也不运行。
+python3 scripts/player_support.py verify game/01004AB00A260000/LordranNative.ipa
+```
+
+准备好后移除 `--dry-run`，工具会在环境检查通过后调用现有打包器，并检查生成的归档。Windows 还需要 `--shell` 和[Windows 文档](docs/windows-packaging.zh-CN.md)中的工具指纹。辅助打包默认采用带时间戳的文件名；如果明确指定的输出文件已存在，需要先确认覆盖，再使用 `--replace`。
+
+Doctor 会报告缺少的依赖、提取工具项目所需的 SDK、profile/chain 一致性及可用磁盘空间。用 `doctor --route shell --shell <匹配的空壳.zip>` 可以同时执行空壳消费端的兼容性检查；下载空壳前检查环境时可以省略 `--shell`。它不会安装软件或验证密钥文件内容。
+
+归档检查覆盖 arm64 平台、App 结构、游戏数据标记、shader 清单及反射 chain，区分空壳输入、实机 IPA 和 Simulator 归档；后者需指定 `--target simulator`。可选的 `--full-crc` 会读取所有归档成员检查 CRC；`--match-source` 还要求归档包含与当前 checkout 完全匹配的空壳 manifest。默认不比对源码指纹，不据此认定签名有效或游戏已通过运行验证。
+
+性能报告使用 `--kind performance`。已知时可填写 `--expected`、`--actual`、`--frequency`，或多次使用 `--step`；仅在独立确认源码版本后填写 `--build`。工具保留当前与历史日志的区别，并将元数据标明为导出快照。它不改动原报告、不发布 issue，也不发起网络请求。可选的 `--issues-json <文件>` 可读取本地 `gh issue list --state all --json number,title,state --limit 100` 快照，给出供核对的标题匹配候选；标题匹配不等于已经确认重复。`--out-dir` 可以指定 `game/` 下的其他私有输出目录。
+
 ## 构建未签名 IPA
 
 ### 1. 安装构建工具
@@ -27,10 +80,12 @@ git clone https://github.com/Nishikori-Yui/lordran-native.git lordran-native
 cd lordran-native
 brew install xcodegen zstd spirv-cross
 brew install --cask dotnet-sdk
-python3 -m pip install lz4 capstone fonttools
+python3 -m venv game/01004AB00A260000/tools-venv
+source game/01004AB00A260000/tools-venv/bin/activate
+python -m pip install lz4 capstone fonttools
 ```
 
-构建还需要 .NET 10 SDK 和 Xcode 的 Metal 编译器。如果 Python 要求使用虚拟环境，请在虚拟环境中安装 Python 依赖，并使用该环境执行后续构建命令。
+构建还需要 .NET 10 SDK 和 Xcode 的 Metal 编译器。若包管理器安装了不同主版本的 SDK，请按 doctor 报告安装与项目要求匹配的 SDK；保留其他仍在使用的 SDK。后续检查和构建都使用虚拟环境中的 Python。
 
 ### 2. 准备游戏文件
 
@@ -61,14 +116,20 @@ python3 scripts/build_ipa_from_nsp.py game/01004AB00A260000 -k game/01004AB00A26
 
 Actions 仅在手动运行或推送 tag 时构建不含游戏内容的未签名 iOS「壳」。从对应的工作流产物或 Release 下载 `LordranNative-shell-build-input.zip`。Windows 需要 Python 3.12 或更高版本、.NET 10 SDK、`zstd`，以及 `spirv-cross` 1.4.357.0（Vulkan SDK 标签 `vulkan-sdk-1.4.357.0`）。把游戏本体 NSP、1.0.3 更新 NSP 和你自己的 `prod.keys` 放在 `game/` 下的私有文件夹中（该目录已被 Git 忽略）。
 
-安装 Python 依赖并运行：
+先按 [Windows 文档](docs/windows-packaging.zh-CN.md#环境要求)配置指定版本的 SPIRV-Cross，记录 `$spirvCrossSha256`。建议在仓库的私有 `game/` 目录中创建虚拟环境，并直接调用其解释器；这样无需修改 PowerShell 执行策略，也不会把依赖装到其他 Python 环境：
 
 ```powershell
-py -3 -m pip install lz4 capstone
-py -3 scripts/build_ipa_from_shell.py game/01004AB00A260000 `
+py -3 -m venv game/01004AB00A260000/tools-venv
+$python = (Resolve-Path game/01004AB00A260000/tools-venv/Scripts/python.exe).Path
+& $python -m pip install lz4 capstone fonttools
+& $python scripts/player_support.py doctor --route shell
+& $python scripts/build_ipa_from_shell.py game/01004AB00A260000 `
   --keys game/01004AB00A260000/prod.keys `
-  --shell game/01004AB00A260000/LordranNative-shell-build-input.zip
+  --shell game/01004AB00A260000/LordranNative-shell-build-input.zip `
+  --spirv-cross-sha256 $spirvCrossSha256
 ```
+
+下载空壳后，用同一解释器运行 `scripts/player_support.py doctor --route shell --shell <匹配的壳.zip>`。也可以先用 `scripts/player_support.py build ... --dry-run` 预览，再执行构建；使用 `verify <IPA> --full-crc` 检查归档。命令选项和校验边界见上方「本地辅助命令」及 [Windows 打包说明](docs/windows-packaging.zh-CN.md)。
 
 壳和源码必须来自同一个 Release。构建前先按 [Windows 打包说明](docs/windows-packaging.zh-CN.md) 从指定源码构建 SPIRV-Cross，并将其 SHA-256 保存到 `DM_SPIRV_CROSS_SHA256`，或通过 `--spirv-cross-sha256` 传入。脚本会校验游戏标题及档案登记的模块构建号，在本机改写游戏模块并生成未签名 IPA。NSP、密钥、解包文件和生成的 IPA 都不会上传。此无 Xcode 流程会把着色器源码放进 IPA，首次启动时由 iPhone 编译；首次进入场景可能需要等待数分钟。Mac 的常规流程仍会预先编译着色器。壳 ZIP 只是打包输入，不是可安装 App；请对最终生成的 IPA 进行签名和侧载。
 
@@ -106,6 +167,8 @@ py -3 scripts/build_ipa_from_shell.py game/01004AB00A260000 `
 前台运行异常中断后，下次启动会先提供诊断导出入口，再启动游戏。报告包含本次和上次运行日志、设备与 GPU 信息、性能快照，每份日志最多保留末尾 8 MiB。报告不包含存档、游戏文件或系统崩溃报告。
 
 也可以直接从应用文件夹中获取 `log.txt` 和 `log.prev.txt`。新日志使用精确到毫秒的 UTC 时间戳，旧版本保留的日志维持原文。构建失败时，请查看 NSP 旁的 `01004AB00A260000_build/logs/`。
+
+可以把诊断报告和复现步骤交给 agent，按[反馈提示](#让-agent-帮你完成)生成可复制的 issue 草稿，也可以自行填写模板。不要把完整私有日志放进公开 issue；本地工具生成的草稿和摘录仍需你检查，因为自动脱敏无法识别所有私人信息或自定义凭据。
 
 ## 已知限制
 

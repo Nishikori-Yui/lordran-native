@@ -18,6 +18,93 @@ You need your own game NSPs and `prod.keys`. The repository contains no game fil
 - For the IPA: an iPhone or iPad running **iOS / iPadOS 26 or later**, and a sideloading tool.
 - Free disk space of roughly twice the total NSP size plus 10 GB.
 
+## Let an agent help
+
+If you use Codex, Claude Code, or another agent with access to local files and
+commands, copy one of these prompts. The [player support skill](skills/lordran-native-support/SKILL.md)
+selects the existing guides and tools for your task. It can be read directly;
+installing it through your agent's supported skill installer is optional. Use
+the skill folder from the same repository revision, and let the agent know
+which local checkout or release you are using.
+
+**Prepare the environment and package:**
+
+```text
+Help me set up Lordran Native on this macOS or Windows computer. Read
+https://raw.githubusercontent.com/Nishikori-Yui/lordran-native/main/skills/lordran-native-support/SKILL.md
+and follow the applicable repository documents it links. Check the tools
+already installed, help prepare the missing dependencies, and package my
+owned local game inputs with the matching source and shell when ready.
+Keep game files and keys local. Tell me the exact action when a step needs
+administrator approval or manual SDK installation, and wait for me.
+Verify the unsigned output and report which checks actually passed.
+```
+
+**Prepare a bug report:**
+
+```text
+Help me prepare feedback for Lordran Native from my attached diagnostic
+report and reproduction description. Read
+https://raw.githubusercontent.com/Nishikori-Yui/lordran-native/main/skills/lordran-native-support/SKILL.md
+and the current issue template it links. Review and sanitize relevant
+evidence, keep unverified facts marked as unknown, and give me Markdown
+that I can preview and paste. Suggest an existing issue if one matches.
+Prepare feedback only; ask before publishing or starting a code fix.
+```
+
+The feedback task does not require a GitHub login or a build environment.
+Without a checkout, the agent can read the public template and prepare the
+draft in the conversation. Review any redactions before sharing.
+
+### Local support commands
+
+From a checkout, these Python commands provide reproducible checks. On Windows
+use `py -3`, or the virtual environment's Python executable, in place of
+`python3`. They use the existing packers and templates.
+
+```sh
+# Inspect tools without installing anything or extracting game inputs.
+python3 scripts/player_support.py doctor
+
+# Create timestamped draft and excerpt files under game/.
+python3 scripts/prepare_issue.py "path/to/diagnostic-report.txt" --symptom "Describe the problem" --step "Describe the triggering action"
+
+# Show a packaging command without starting it.
+python3 scripts/player_support.py build game/01004AB00A260000 --keys game/01004AB00A260000/prod.keys --dry-run
+
+# Check a device IPA without installing or running it.
+python3 scripts/player_support.py verify game/01004AB00A260000/LordranNative.ipa
+```
+
+Remove `--dry-run` to run the existing packer after the environment checks;
+successful packaging is followed by archive inspection. Windows builds require
+`--shell` and the tool fingerprint from the [Windows guide](docs/windows-packaging.md).
+The default support-build output is timestamped; an explicit existing output
+requires approval and `--replace`.
+
+Doctor reports missing dependencies, the SDK matching the extractor project,
+profile/chain consistency, and available disk space. Use `doctor --route shell
+--shell <matching-shell.zip>` to also run the shell consumer's compatibility
+checks; omit `--shell` when checking tools before a download. The command does
+not install tools or verify the contents of your keys.
+
+Archive inspection checks the arm64 platform, app layout, game-data marker,
+shader inventory and reflection chain. It distinguishes a shell input, device
+IPA, and Simulator archive. Use `--target simulator` for the latter. Optional
+`--full-crc` reads every archive entry to check CRCs; `--match-source` additionally
+requires a shell manifest matching this exact checkout. The default check does
+not compare source fingerprints. No signing or runtime result is inferred.
+
+For feedback, select `--kind performance` for the performance template and
+provide `--expected`, `--actual`, `--frequency`, or repeated `--step` arguments
+when known. Give `--build` only for an independently verified source revision.
+The helper preserves the current/previous log distinction and treats metadata
+as an export snapshot. It does not alter the original report, publish issues,
+or make network requests. Optional `--issues-json <file>` accepts a local
+`gh issue list --state all --json number,title,state --limit 100` snapshot and
+suggests title matches for review; matching is not proof of a duplicate.
+Use `--out-dir` for another private output directory under `game/`.
+
 ## Build an unsigned IPA
 
 ### 1. Install the build tools
@@ -27,10 +114,15 @@ git clone https://github.com/Nishikori-Yui/lordran-native.git lordran-native
 cd lordran-native
 brew install xcodegen zstd spirv-cross
 brew install --cask dotnet-sdk
-python3 -m pip install lz4 capstone fonttools
+python3 -m venv game/01004AB00A260000/tools-venv
+source game/01004AB00A260000/tools-venv/bin/activate
+python -m pip install lz4 capstone fonttools
 ```
 
-The build also requires the .NET 10 SDK and Xcode's Metal compiler. If Python requires a virtual environment, install the Python packages there and use that environment for the build command.
+The build also requires the .NET 10 SDK and Xcode's Metal compiler. Use the
+virtual environment's interpreter for the checks and build. If a package
+manager installs a different SDK series, install the SDK matching the project
+as reported by doctor; keep other working SDKs.
 
 ### 2. Prepare the game files
 
@@ -61,14 +153,20 @@ For an experimental Apple silicon iOS Simulator build, follow the [Simulator bui
 
 GitHub Actions builds an unsigned, game-free iOS shell when run manually or when a tag is pushed. Download `LordranNative-shell-build-input.zip` from the matching workflow run or release, then on Windows install Python 3.12+, the .NET 10 SDK, `zstd`, and `spirv-cross` 1.4.357.0 (Vulkan SDK tag `vulkan-sdk-1.4.357.0`). Put the base game NSP, the 1.0.3 update NSP, and your own `prod.keys` in a private folder under `game/` (that folder is ignored by Git).
 
-Install the Python dependencies and build:
+First follow the pinned SPIRV-Cross setup in the [Windows guide](docs/windows-packaging.md#requirements), which records `$spirvCrossSha256`. Create a private Python environment, then use its interpreter for the preflight and build. This avoids changing PowerShell's activation policy or installing dependencies into another Python environment:
 
 ```powershell
-py -3 -m pip install lz4 capstone
-py -3 scripts/build_ipa_from_shell.py game/01004AB00A260000 `
+py -3 -m venv game/01004AB00A260000/tools-venv
+$python = (Resolve-Path game/01004AB00A260000/tools-venv/Scripts/python.exe).Path
+& $python -m pip install lz4 capstone fonttools
+& $python scripts/player_support.py doctor --route shell
+& $python scripts/build_ipa_from_shell.py game/01004AB00A260000 `
   --keys game/01004AB00A260000/prod.keys `
-  --shell game/01004AB00A260000/LordranNative-shell-build-input.zip
+  --shell game/01004AB00A260000/LordranNative-shell-build-input.zip `
+  --spirv-cross-sha256 $spirvCrossSha256
 ```
+
+Once the shell is downloaded, add `--shell game/01004AB00A260000/LordranNative-shell-build-input.zip` to the doctor check. The [support build command](#local-support-commands) can preview a build with `--dry-run` and structurally verify its output.
 
 The shell and source checkout must come from the same release. Before building, follow the [Windows packaging notes](docs/windows-packaging.md) to build the pinned SPIRV-Cross source and record its SHA-256 in `DM_SPIRV_CROSS_SHA256` (or pass `--spirv-cross-sha256`). The script checks the title and registered module builds, rewrites the game modules locally, and creates an unsigned IPA. It does not upload NSPs, keys, extracted files or the finished IPA. This no-Xcode route ships translated Metal source, so the iPhone compiles shaders on first launch; the first visit can take several minutes. The normal Mac route still compiles shaders ahead of time. The shell ZIP is build input, not an installable app; sideload and sign only the resulting IPA.
 
@@ -106,6 +204,12 @@ If the game fails to start, exits unexpectedly or renders incorrectly, export a 
 After an interrupted foreground session, the next launch offers diagnostic export before starting the game again. Reports include the current and previous app logs, device/GPU information and a performance snapshot. Each log is limited to its last 8 MiB. Reports do not include saves, game files or system crash reports.
 
 You can also retrieve `log.txt` and `log.prev.txt` from the app's folder. New log lines use UTC timestamps with millisecond precision; retained logs from older builds keep their original text. Build failures are recorded in `01004AB00A260000_build/logs/` beside the NSPs.
+
+You can give the report and your reproduction description to an agent using
+the [feedback prompt](#let-an-agent-help), or fill the issue template yourself.
+Keep full private logs out of public issues. The local helper's draft and
+excerpt require your review: automatic redaction cannot identify every
+personal detail or custom credential.
 
 ## Known limitations
 

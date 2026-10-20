@@ -34,6 +34,23 @@ spirv-cross --version
 zstd --version
 ```
 
+Create a private Python environment under the ignored `game/` directory and
+invoke its interpreter directly. This avoids changing PowerShell's execution
+policy and keeps Python dependencies out of other installations:
+
+```powershell
+py -3 -m venv game/01004AB00A260000/tools-venv
+$python = (Resolve-Path game/01004AB00A260000/tools-venv/Scripts/python.exe).Path
+& $python -m pip install lz4 capstone fonttools
+& $python scripts/player_support.py doctor --route shell
+```
+
+Before downloading a shell, the doctor checks local tools only. Once the
+matching shell is available, pass it with `--shell` to include compatibility
+validation. The same interpreter can run `scripts/player_support.py build ...
+--dry-run` before packaging and `scripts/player_support.py verify <IPA>
+--full-crc` afterward. These are structural checks, not a runtime test.
+
 Windows builds use the full SHA-256 recorded from the executable you built from
 the pinned upstream source. Pass it with `--spirv-cross-sha256`, or retain
 `DM_SPIRV_CROSS_SHA256` in the build session. Save this value when setting up
@@ -49,8 +66,7 @@ committed Mac binary fingerprint. Do not edit `dmsh_chain.lock` or
 Use the source checkout from the same GitHub release as the shell. Keep the NSPs, key file, work output and IPA under `game/`; this directory is ignored by Git.
 
 ```powershell
-py -3 -m pip install lz4 capstone fonttools
-py -3 scripts/build_ipa_from_shell.py game/01004AB00A260000 `
+& $python scripts/build_ipa_from_shell.py game/01004AB00A260000 `
   --keys game/01004AB00A260000/prod.keys `
   --shell game/01004AB00A260000/LordranNative-shell-build-input.zip `
   --spirv-cross-sha256 $spirvCrossSha256
@@ -62,20 +78,20 @@ Useful options:
 
 ```powershell
 # Preserve extracted ExeFS/RomFS after a successful build.
-py -3 scripts/build_ipa_from_shell.py game/01004AB00A260000 `
+& $python scripts/build_ipa_from_shell.py game/01004AB00A260000 `
   --keys game/01004AB00A260000/prod.keys `
   --shell game/01004AB00A260000/LordranNative-shell-build-input.zip `
   --keep-extracted
 
 # Pack the registered base-game build instead of the default update build.
-py -3 scripts/build_ipa_from_shell.py game/01004AB00A260000 `
+& $python scripts/build_ipa_from_shell.py game/01004AB00A260000 `
   --keys game/01004AB00A260000/prod.keys `
   --shell game/01004AB00A260000/LordranNative-shell-build-input.zip `
   --package v0 `
   --out game/01004AB00A260000/DarkSoulsRemastered-v0.ipa
 
 # Show every supported option without reading the game files.
-py -3 scripts/build_ipa_from_shell.py -h
+& $python scripts/build_ipa_from_shell.py -h
 ```
 
 The output directory must remain under this checkout's `game/`. The default
@@ -90,7 +106,7 @@ The ZIP downloaded from Actions is only a shell input. Sign and sideload the gen
 
 - **Shell/source mismatch:** download the shell and checkout the same release tag.
 - **Unsupported title or build ID:** use the Dark Souls: Remastered base NSP and a profile-registered version. This repository supports title `01004AB00A260000` only.
-- **Missing tools:** confirm `dotnet`, `spirv-cross`, `zstd`, and `py -3` resolve in the same PowerShell session. Install `lz4` and `capstone` into the interpreter used by the command.
+- **Missing tools:** confirm `dotnet`, `spirv-cross`, `zstd`, and the selected Python resolve in the same PowerShell session. Install `lz4`, `capstone`, and `fonttools` into the interpreter used by the command.
 - **SPIRV-Cross fingerprint missing or mismatched:** build the pinned upstream revision, record its full SHA-256 as above, and pass `--spirv-cross-sha256` or set `DM_SPIRV_CROSS_SHA256`. Confirm `Get-Command spirv-cross` resolves to that executable. Windows compiler outputs differ from the committed Mac fingerprint; do not change the shared lock to accommodate them.
 - **Extraction failure:** check the matching `nx_extract_build.log` or `extract_<version>.log`; confirm the base and update NSP are complete, the keys file is the user's own valid `prod.keys`, and there is enough disk space. Never print the keys or copy them into a log.
 - **Module build ID mismatch:** the NSP version is not registered in `dm/games/01004AB00A260000/game.tsv`; stop rather than bypassing the check.

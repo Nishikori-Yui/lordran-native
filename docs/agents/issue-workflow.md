@@ -1,11 +1,26 @@
 # Issues, branches, and task scope
 
+## Player feedback requests
+
+When a player asks to understand a log or prepare feedback, generate a local
+draft using the current issue template. They do not need a GitHub login or a
+build environment for this. Do not publish an issue or start implementation
+unless requested. If they ask for submission, show the sanitized draft first
+and use their explicit authorization. When available, check existing issues
+and offer a supplemental comment draft for a matching report.
+
+The [player support skill](../../skills/lordran-native-support/SKILL.md) routes
+these requests to the existing documentation and helpers. If the player instead
+authorizes a repository fix, use the maintainer workflow below.
+
 ## Report the bug first
 
 1. Search existing issues and PRs before creating a duplicate. For every newly
    reported or discovered bug, create an issue using the closest existing
    [issue template](../../.github/ISSUE_TEMPLATE/), or update an existing issue
-   that already covers that exact problem.
+   that already covers that exact problem. For a review finding corrected
+   within the current PR, use its review comment instead of a separate issue.
+   Only independent, deferred, or out-of-scope review findings need an issue.
 2. Read enough evidence to describe the symptom before filing. Include the
    actual build or commit, environment, reproduction steps, expected and actual
    behavior, frequency, and relevant sanitized log excerpts. Preserve useful
@@ -32,10 +47,12 @@ before the implementation decision.
   unrelated local changes and artifacts.
 - Link the branch and eventual PR to its issue. Keep the original reproduction
   and acceptance criteria visible while implementing and validating.
-- If another bug is discovered, record it through the same issue-first process.
-  A finding required to complete the already authorized fix can be addressed on
-  that branch; record its relationship to the original issue. An independent
-  bug needs its own issue and a separate implementation decision.
+- If another bug is discovered, use the issue-first process unless it is a
+  review finding being corrected in the current PR; track that correction in
+  the review thread. A finding required to complete the already authorized fix
+  can stay on that branch. An independent, deferred, or out-of-scope finding
+  needs an issue and, when it requires separate implementation, its own
+  implementation decision.
 - Follow [validation guidance](validation.md) for the changed area. Once the fix
   is ready, continue through [PR creation and local review](review-and-merge.md).
 

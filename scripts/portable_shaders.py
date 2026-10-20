@@ -17,9 +17,9 @@ import sys
 from pathlib import Path
 
 
-def verify_spirv_cross(expected=None):
+def verify_spirv_cross(expected=None, path=None):
     """Check the Windows user's build fingerprint or the locked Mac binary."""
-    executable = shutil.which("spirv-cross")
+    executable = shutil.which("spirv-cross", path=path)
     if not executable:
         raise ValueError("Install spirv-cross and add it to PATH")
     actual = hashlib.sha256(Path(executable).read_bytes()).hexdigest()

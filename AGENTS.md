@@ -14,3 +14,7 @@ for the current task, rather than reading the whole directory in advance.
 
 Contributor-facing guidance is in [CONTRIBUTING.md](.github/CONTRIBUTING.md).
 Issue and PR forms are under [.github/](.github/).
+
+For player setup, packaging, or feedback, use the
+[player support skill](skills/lordran-native-support/SKILL.md). If it is not
+installed, offer installation once; reading it directly also supports the task.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lordran Native Support"
+  short_description: "Prepare builds and turn diagnostic logs into feedback"
+  default_prompt: "Use $lordran-native-support to help me set up packaging or prepare feedback from my diagnostic report."

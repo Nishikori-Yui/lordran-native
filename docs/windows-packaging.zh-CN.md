@@ -34,6 +34,17 @@ spirv-cross --version
 zstd --version
 ```
 
+建议在已被 Git 忽略的 `game/` 目录下创建 Python 虚拟环境，并直接调用其中的解释器。这样不必修改 PowerShell 执行策略，也不会将依赖安装到其他 Python 环境：
+
+```powershell
+py -3 -m venv game/01004AB00A260000/tools-venv
+$python = (Resolve-Path game/01004AB00A260000/tools-venv/Scripts/python.exe).Path
+& $python -m pip install lz4 capstone fonttools
+& $python scripts/player_support.py doctor --route shell
+```
+
+下载空壳前，doctor 只检查本机工具。取得匹配的空壳后，通过 `--shell` 增加兼容性检查。同一解释器还可在打包前运行 `scripts/player_support.py build ... --dry-run`，打包后运行 `scripts/player_support.py verify <IPA> --full-crc`。这些是结构检查，不代表已运行游戏。
+
 Windows 使用你从指定上游源码构建的可执行文件的完整 SHA-256。可通过 `--spirv-cross-sha256` 传入，也可在构建会话中保留 `DM_SPIRV_CROSS_SHA256`。配置工具链时保存该值，在新会话中恢复；不要从未经信任的替换程序重新计算指纹。此检查用于发现 `PATH` 指向了其他程序或二进制被替换，哈希本身不能证明源码来源。整个流程不需要私有工具链记录。macOS 仍校验仓库锁定的 Mac 二进制指纹；不要把 Windows 哈希写入 `dmsh_chain.lock` 或 `dmsh_chain.h`。
 
 ## 构建
@@ -41,8 +52,7 @@ Windows 使用你从指定上游源码构建的可执行文件的完整 SHA-256�
 源码仓库与壳必须来自同一个 GitHub Release。请把 NSP、密钥、构建中间文件和 IPA 都放在 `game/` 下；该目录已被 Git 忽略。
 
 ```powershell
-py -3 -m pip install lz4 capstone fonttools
-py -3 scripts/build_ipa_from_shell.py game/01004AB00A260000 `
+& $python scripts/build_ipa_from_shell.py game/01004AB00A260000 `
   --keys game/01004AB00A260000/prod.keys `
   --shell game/01004AB00A260000/LordranNative-shell-build-input.zip `
   --spirv-cross-sha256 $spirvCrossSha256
@@ -54,20 +64,20 @@ py -3 scripts/build_ipa_from_shell.py game/01004AB00A260000 `
 
 ```powershell
 # 构建成功后保留解出的 ExeFS/RomFS。
-py -3 scripts/build_ipa_from_shell.py game/01004AB00A260000 `
+& $python scripts/build_ipa_from_shell.py game/01004AB00A260000 `
   --keys game/01004AB00A260000/prod.keys `
   --shell game/01004AB00A260000/LordranNative-shell-build-input.zip `
   --keep-extracted
 
 # 打包已登记的本体版本，而不是默认更新版本。
-py -3 scripts/build_ipa_from_shell.py game/01004AB00A260000 `
+& $python scripts/build_ipa_from_shell.py game/01004AB00A260000 `
   --keys game/01004AB00A260000/prod.keys `
   --shell game/01004AB00A260000/LordranNative-shell-build-input.zip `
   --package v0 `
   --out game/01004AB00A260000/DarkSoulsRemastered-v0.ipa
 
 # 查看全部参数，不会读取游戏文件。
-py -3 scripts/build_ipa_from_shell.py -h
+& $python scripts/build_ipa_from_shell.py -h
 ```
 
 输出路径必须位于当前仓库的 `game/` 下。默认输出为 `<NSP 文件夹>/DarkSoulsRemastered.ipa`。不要让两个打包进程同时使用同一个工作目录。
@@ -80,7 +90,7 @@ py -3 scripts/build_ipa_from_shell.py -h
 
 - **壳与源码不匹配：** 下载与源码检出版本相同的 Release。
 - **标题号或构建号不受支持：** 使用《黑暗之魂：重制版》本体 NSP 和档案已登记的版本。本仓库只支持标题 `01004AB00A260000`。
-- **缺少工具：** 在同一个 PowerShell 会话中确认 `dotnet`、`spirv-cross`、`zstd` 和 `py -3` 可用，并把 Python 依赖安装到该 Python 解释器。
+- **缺少工具：** 在同一个 PowerShell 会话中确认 `dotnet`、`spirv-cross`、`zstd` 和选定的 Python 可用，并把 `lz4`、`capstone`、`fonttools` 安装到该 Python 解释器。
 - **SPIRV-Cross 指纹缺失或不符：** 按上面说明从指定上游提交构建，记录完整 SHA-256，通过 `--spirv-cross-sha256` 或 `DM_SPIRV_CROSS_SHA256` 提供，并确认 `Get-Command spirv-cross` 指向该程序。Windows 编译产物与仓库锁定的 Mac 二进制指纹不同，不要因此修改共享锁。
 - **解包失败：** 查看对应的 `nx_extract_build.log` 或 `extract_<version>.log`；确认本体和更新 NSP 完整、密钥是用户自己的有效 `prod.keys`，且磁盘空间足够。不要打印或复制密钥到日志。
 - **模块构建号不匹配：** NSP 版本未登记在 `dm/games/01004AB00A260000/game.tsv`；停止，不要绕过校验。

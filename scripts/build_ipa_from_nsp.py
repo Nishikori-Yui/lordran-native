@@ -30,6 +30,7 @@ DM_ENV_FILE = ''                        # optional: environment switches for a d
 
 BEAT = 60                               # progress interval of quiet steps (seconds)
 TOOL_PATHS = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/local/share/dotnet', os.path.expanduser('~/.dotnet')]   # GUI apps such as Spyder do not get the shell's PATH
+PYTHON_MODULES = ('lz4.block', 'capstone', 'fontTools')
 
 
 class BuildError(Exception):
@@ -189,8 +190,18 @@ def can_clone(d):   # whether this volume supports APFS clones (nx_extract uses 
 
 
 # ---- Steps ----
+def missing_python_modules():
+    return [m for m in PYTHON_MODULES if not _importable(m)]
+
+
+def build_environment():
+    env = dict(os.environ, PATH=os.pathsep.join(TOOL_PATHS + [os.environ.get('PATH', '/usr/bin:/bin:/usr/sbin:/sbin')]))
+    env.setdefault('USER', getpass.getuser())
+    return env
+
+
 def check_prereqs(env, xlate):
-    missing = [m for m in ('lz4.block', 'capstone', 'fontTools') if not _importable(m)]
+    missing = missing_python_modules()
     if missing: raise BuildError(f'当前 Python（{sys.executable}）缺模块 | the current Python is missing modules: {", ".join(missing)}（pip install lz4 capstone fonttools）')
     tools = {'xcodebuild': 'Xcode', 'xcodegen': 'brew install xcodegen', 'dotnet': '.NET SDK 10', 'zstd': 'brew install zstd', 'spirv-cross': 'brew install spirv-cross', 'zip': 'zip', 'make': 'Xcode'}
     gone = [f'{t}（{how}）' for t, how in tools.items() if not shutil.which(t, path=env['PATH'])]
@@ -293,8 +304,7 @@ def main(args=None):
     keys = Path(os.path.expanduser(args.keys or PROD_KEYS or ask('prod.keys 路径 | path of prod.keys: ', ' prod.keys（-k）', 'prod.keys (-k)'))).resolve()
     if not nsp_dir.is_dir(): raise BuildError(f'不是文件夹 | not a folder: {nsp_dir}')
     if not keys.is_file(): raise BuildError(f'没有这个文件 | no such file: {keys}')
-    env = dict(os.environ, PATH=os.pathsep.join(TOOL_PATHS + [os.environ.get('PATH', '/usr/bin:/bin:/usr/sbin:/sbin')]))
-    env.setdefault('USER', getpass.getuser())   # xcodegen fails without USER (Couldn't find current username)
+    env = build_environment()
     py = sys.executable
     app, fam = scan_nsps(nsp_dir)
     g = gamemod.by_title(app)

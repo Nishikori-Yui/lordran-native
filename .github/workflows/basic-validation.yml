@@ -42,6 +42,11 @@ jobs:
       - name: Validate packaging command help
         run: python scripts/build_ipa_from_shell.py -h
 
+      - name: Validate player support command help
+        run: |
+          python scripts/player_support.py -h
+          python scripts/prepare_issue.py -h
+
       - name: Validate target profile metadata
         run: python scripts/shell_common.py 01004AB00A260000
 
