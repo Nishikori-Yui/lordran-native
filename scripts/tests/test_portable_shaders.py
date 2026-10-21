@@ -85,7 +85,7 @@ class SpirvCrossTests(unittest.TestCase):
                                           "-o", str(private / "out.ipa")]), \
                 patch.object(build_ipa_from_shell, "safe_shell", return_value=(
                     {"CFBundleSupportedPlatforms": ["iPhoneOS"]}, {},
-                    {"dm/c1_full.tsv": b"test table"})), \
+                    {"dm/c1_full.tsv": b"test table"}, {})), \
                 patch.object(build_ipa_from_shell, "check_manifest"), \
                 patch.object(build_ipa_from_shell, "check_c1_table"):
             with self.assertRaisesRegex(ValueError, "Windows builds require"):

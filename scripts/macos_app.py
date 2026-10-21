@@ -7,6 +7,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from app_version import resolve as resolve_app_version, write_metadata
+
 
 def copy_tree(source, destination):
     """Use APFS clones when available, falling back to an ordinary copy."""
@@ -59,7 +61,7 @@ def compile_launcher(repo, destination):
 
 
 def build_app(*, repo, profile, host, patched, romfs, shader_cache, fonts,
-              output, app_name, bundle_id, replace=False):
+              output, app_name, bundle_id, version_info=None, replace=False):
     """Build an unsigned .app and refuse to overwrite it unless asked."""
     repo = Path(repo).resolve()
     host = Path(host).resolve()
@@ -114,6 +116,9 @@ def build_app(*, repo, profile, host, patched, romfs, shader_cache, fonts,
             f"approximately {required_bytes / 2**30:.1f} GiB required"
         )
 
+    if version_info is None:
+        version_info = resolve_app_version(repo)
+
     with tempfile.TemporaryDirectory(prefix=f".{output.name}.build-", dir=output.parent) as temporary:
         bundle = Path(temporary) / output.name
         contents = bundle / "Contents"
@@ -148,14 +153,15 @@ def build_app(*, repo, profile, host, patched, romfs, shader_cache, fonts,
             "CFBundleInfoDictionaryVersion": "6.0",
             "CFBundleName": app_name,
             "CFBundlePackageType": "APPL",
-            "CFBundleShortVersionString": "1.0",
-            "CFBundleVersion": "1",
+            "CFBundleShortVersionString": version_info["marketing_version"],
+            "CFBundleVersion": version_info["build_version"],
             "LSApplicationCategoryType": profile.get("app_category"),
             "LSMultipleInstancesProhibited": True,
             "NSHighResolutionCapable": True,
         }
         with (contents / "Info.plist").open("wb") as stream:
             plistlib.dump(info, stream, sort_keys=True)
+        write_metadata(resources / "dm/app-version.json", version_info)
 
         previous = None
         if output.exists():

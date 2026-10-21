@@ -10,7 +10,7 @@ from urllib.parse import quote
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from shell_artifact import PREFIX, shell_filename
+from shell_artifact import PREFIX, safe_tag
 
 
 @unittest.skipIf(os.name == "nt", "The release job runs in Bash on Ubuntu")
@@ -61,8 +61,7 @@ class ReleaseAttachmentTests(unittest.TestCase):
 
     def run_step(self, status, **settings):
         env = dict(self.env, GH_TEST_STATUS=status, **settings)
-        env["SHELL_FILENAME"] = shell_filename(self.root, {
-            "GITHUB_REF": "refs/tags/" + env["GITHUB_REF_NAME"]})
+        env["SHELL_FILENAME"] = PREFIX + "-" + safe_tag(env["GITHUB_REF_NAME"]) + ".zip"
         artifact = self.root / "game/ci-shell" / env["SHELL_FILENAME"]
         artifact.parent.mkdir(parents=True, exist_ok=True)
         artifact.touch()
@@ -110,8 +109,7 @@ class ReleaseAttachmentTests(unittest.TestCase):
         self.assertEqual(calls[0]["args"][-1],
                          "repos/test-owner/test-repo/releases/tags/" + quote(tag, safe=""))
         self.assertEqual(calls[1]["args"][4], tag)
-        self.assertEqual(Path(calls[1]["args"][5]).name, shell_filename(self.root, {
-            "GITHUB_REF": "refs/tags/" + tag}))
+        self.assertEqual(Path(calls[1]["args"][5]).name, PREFIX + "-" + safe_tag(tag) + ".zip")
 
     def test_workflow_passes_the_same_metadata_through_all_stages(self):
         workflow = (Path(__file__).resolve().parents[2] /

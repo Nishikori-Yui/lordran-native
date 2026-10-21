@@ -4,7 +4,8 @@ import hashlib
 import os
 from pathlib import Path
 import re
-import subprocess
+
+from app_version import source_identity
 
 PREFIX = "LordranNative-shell-build-input"
 
@@ -21,29 +22,19 @@ def safe_tag(tag):
 
 def shell_filename(repo, environ=None):
     env = os.environ if environ is None else environ
-
-    def git(*args):
-        return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
-
-    ref = env.get("GITHUB_REF", "")
-    if ref.startswith("refs/tags/"):
-        version = safe_tag(ref[len("refs/tags/"):])
-    elif ref:
-        version = "dev-" + git("rev-parse", "--short=12", "HEAD")
-    else:
-        tags = git("tag", "--points-at", "HEAD").splitlines()
-        if len(tags) > 1:
-            raise ValueError("Multiple tags at HEAD; choose --out or set GITHUB_REF=refs/tags/<tag>")
-        version = safe_tag(tags[0]) if tags else "dev-" + git("rev-parse", "--short=12", "HEAD")
+    identity = source_identity(repo, env)
+    version = (safe_tag(identity["source_version"]) if identity["source_kind"] == "release"
+               else identity["source_version"])
     return f"{PREFIX}-{version}.zip"
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--work", required=True, type=Path, help="Output directory under game/")
     parser.add_argument("--github-output", required=True, type=Path, help="Actions output file")
     args = parser.parse_args()
-    repo = Path(__file__).resolve().parents[1]
+    repo = args.repo.resolve()
     work = args.work.resolve()
     if not work.is_relative_to((repo / "game").resolve()):
         parser.error("Shell work directory must be under game/")

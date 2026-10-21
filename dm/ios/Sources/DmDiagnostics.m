@@ -14,6 +14,9 @@ static NSDictionary *diagnosticMetadata(void) {
     sysctlbyname("hw.machine", model, &size, NULL, 0);
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
     NSBundle *bundle = NSBundle.mainBundle;
+    NSData *versionData = [NSData dataWithContentsOfFile:[bundle.resourcePath stringByAppendingPathComponent:@"dm/app-version.json"]];
+    id versionObject = versionData ? [NSJSONSerialization JSONObjectWithData:versionData options:0 error:nil] : nil;
+    NSDictionary *sourceVersion = [versionObject isKindOfClass:NSDictionary.class] ? versionObject : @{};
     nvn_perf_snapshot perf;
     nvn_perf_read((uint64_t)(CACurrentMediaTime() * 1e9), &perf);
     task_vm_info_data_t vm = {0}; mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
@@ -32,6 +35,11 @@ static NSDictionary *diagnosticMetadata(void) {
         @"game": @DM_GAME_ID,
         @"app_version": [bundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"unknown",
         @"app_build": [bundle objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"unknown",
+        @"source_version": sourceVersion[@"source_version"] ?: @"unknown",
+        @"source_kind": sourceVersion[@"source_kind"] ?: @"unknown",
+        @"source_commit": sourceVersion[@"commit"] ?: @"unknown",
+        @"source_fingerprint": sourceVersion[@"source_fingerprint"] ?: @"",
+        @"source_base_tag": sourceVersion[@"base_tag"] ?: @"",
         @"bundle_id": bundle.bundleIdentifier ?: @"unknown",
         @"device_model": @(model), @"os": NSProcessInfo.processInfo.operatingSystemVersionString,
         @"shader_chain": @DMSH_CHAIN,

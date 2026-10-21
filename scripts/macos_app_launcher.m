@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include "../dm/host/dm_log.h"
+#include "../dm/host/dm_log_timestamp.h"
 
 static void set_path(const char *name, NSString *path) {
     if (setenv(name, path.fileSystemRepresentation, 1) != 0) {
@@ -50,6 +52,14 @@ int main(void) {
             return 1;
         }
         close(log_fd);
+        dm_log_timestamp_stderr();
+        NSData *versionData = [NSData dataWithContentsOfFile:[resources stringByAppendingPathComponent:@"dm/app-version.json"]];
+        id versionObject = versionData ? [NSJSONSerialization JSONObjectWithData:versionData options:0 error:nil] : nil;
+        NSDictionary *sourceVersion = [versionObject isKindOfClass:NSDictionary.class] ? versionObject : @{};
+        NSString *versionJSON = sourceVersion.count ? [[NSString alloc] initWithData:
+            [NSJSONSerialization dataWithJSONObject:sourceVersion options:NSJSONWritingSortedKeys error:nil]
+            encoding:NSUTF8StringEncoding] : @"unknown";
+        DM_LOG_INFO("launcher", "App build identity: %s", versionJSON.UTF8String);
 
         NSString *host = [bundle.bundlePath stringByAppendingPathComponent:@"Contents/MacOS/dmhost"];
         NSString *romfs = [resources stringByAppendingPathComponent:@"game/RomFS"];

@@ -1,5 +1,6 @@
 """macOS app bundling keeps the executable and game resources self-contained."""
 import os
+import json
 import plistlib
 import sys
 import tempfile
@@ -49,16 +50,21 @@ class MacOSAppTests(unittest.TestCase):
                 launcher.write_bytes(b"launcher")
                 launcher.chmod(0o755)
 
+            version_info = dict(schema=1, source_version="v0.2.0-rc.1", source_kind="release", commit="b" * 40,
+                                marketing_version="0.2.0", build_version="1.2.0")
             with patch.object(macos_app, "compile_launcher", side_effect=fake_compile):
                 result = macos_app.build_app(
                     repo=ROOT, profile=self.profile, host=host, patched=patched,
                     romfs=romfs, shader_cache=cache, fonts=fonts, output=output,
-                    app_name="Synthetic Game", bundle_id=None)
+                    app_name="Synthetic Game", bundle_id=None, version_info=version_info)
 
             self.assertEqual(result, output)
             info = plistlib.loads((output / "Contents/Info.plist").read_bytes())
             self.assertEqual(info["CFBundleExecutable"], "LordranNativeLauncher")
             self.assertEqual(info["CFBundleDisplayName"], "Synthetic Game")
+            self.assertEqual(info["CFBundleShortVersionString"], "0.2.0")
+            self.assertEqual(info["CFBundleVersion"], "1.2.0")
+            self.assertEqual(json.loads((output / "Contents/Resources/dm/app-version.json").read_text()), version_info)
             self.assertTrue((output / "Contents/MacOS/dmhost").is_file())
             launcher = output / "Contents/MacOS/LordranNativeLauncher"
             self.assertTrue(launcher.is_file())

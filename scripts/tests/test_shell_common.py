@@ -12,6 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import shell_common
 import build_ipa_from_shell
+import app_version
 
 
 class SourceFingerprintTests(unittest.TestCase):
@@ -81,11 +82,58 @@ class SourceFingerprintTests(unittest.TestCase):
                 with zipfile.ZipFile(shell, "w") as archive:
                     for name, content in files.items():
                         archive.writestr("Payload/DmIOS.app/" + name, content)
-                build_ipa_from_shell.validate_shell(shell, self.repo, self.game)
+                _, _, _, version = build_ipa_from_shell.validate_shell(shell, self.repo, self.game)
+                self.assertEqual(version["source_kind"], "legacy-shell")
+                self.assertTrue(version["source_version"].startswith("legacy-shell-source-sha256:"))
                 self.write("dm/host/runtime.c", b"int value = 2;\n")
                 with self.assertRaisesRegex(ValueError, "Shell source mismatch"):
                     build_ipa_from_shell.validate_shell(shell, self.repo, self.game)
                 self.write("dm/host/runtime.c", b"int value = 1;\n")
+
+    def test_no_git_prebuilt_shell_keeps_tag_dev_and_archive_versions(self):
+        self.game.id = "01004AB00A260000"
+        self.game.table = lambda name: self.game.dir / name
+        self.game.bundle_id = lambda value: value
+        self.write("dm/games/01004AB00A260000/dmsh_chain.h", b'#define DMSH_CHAIN "123456789abc"\n')
+        self.write("dm/games/01004AB00A260000/c1_full.tsv", b"# chain b-123456789abc date\n")
+        self.write("dm/games/01004AB00A260000/shader_map.tsv", b"v0\tvs\t0\t12345678abcdef01\n")
+        manifest = shell_common.make_manifest(self.repo, self.game)
+        versions = [
+            dict(schema=1, source_version=tag, source_kind="release", commit="b" * 40,
+                 marketing_version="0.2.0", build_version="1.2.0")
+            for tag in ("v0.2.0", "v0.2.0-rc.1+build.7")]
+        versions += [dict(schema=1, source_version="dev-" + "b" * 12, source_kind="development",
+                          commit="b" * 40, marketing_version="0.0.0", build_version="1.0.0"),
+                     app_version.resolve(self.repo, {})]
+        self.assertFalse((self.repo / ".git").exists())
+        for version in versions:
+            with self.subTest(source_version=version["source_version"]):
+                shell = self.repo / "shell.zip"
+                info = dict(CFBundleIdentifier="dev.example.shell", CFBundleSupportedPlatforms=["iPhoneOS"],
+                            CFBundleShortVersionString=version["marketing_version"],
+                            CFBundleVersion=version["build_version"])
+                payload = dict.fromkeys(("DmIOS", "dm/shader_map.tsv", "dm/pso_manifest.tsv",
+                                         "dm/font/standard.ttf", "dm/font/nintendo_ext.ttf"), b"synthetic")
+                payload.update({"Info.plist": plistlib.dumps(info),
+                                "dm/shell.json": json.dumps(manifest).encode(),
+                                "dm/c1_full.tsv": self.game.table("c1_full.tsv").read_bytes(),
+                                "dm/app-version.json": json.dumps(version).encode()})
+                with zipfile.ZipFile(shell, "w") as archive:
+                    for name, contents in payload.items():
+                        archive.writestr("Payload/DmIOS.app/" + name, contents)
+                with patch.object(app_version, "resolve", side_effect=AssertionError("Do not resolve Git for a prebuilt shell")):
+                    actual_info, _, _, actual_version = build_ipa_from_shell.validate_shell(shell, self.repo, self.game)
+                    packaged = build_ipa_from_shell.application_info(actual_info, self.game, "Game", version=actual_version)
+                self.assertEqual(actual_version, version)
+                self.assertEqual(packaged["CFBundleShortVersionString"], version["marketing_version"])
+                self.assertEqual(packaged["CFBundleVersion"], version["build_version"])
+
+                payload["Info.plist"] = plistlib.dumps(dict(info, CFBundleShortVersionString="9.9.9"))
+                with zipfile.ZipFile(shell, "w") as archive:
+                    for name, contents in payload.items():
+                        archive.writestr("Payload/DmIOS.app/" + name, contents)
+                with self.assertRaisesRegex(ValueError, "Info.plist.*disagree"):
+                    build_ipa_from_shell.validate_shell(shell, self.repo, self.game)
 
 
 class C1GuardTests(unittest.TestCase):

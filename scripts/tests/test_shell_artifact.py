@@ -70,12 +70,11 @@ class ShellNameTests(unittest.TestCase):
         names = []
         for tag in tags:
             with self.subTest(tag=tag):
-                name = shell_artifact.shell_filename(self.repo, {"GITHUB_REF": "refs/tags/" + tag})
+                name = f"{shell_artifact.PREFIX}-{shell_artifact.safe_tag(tag)}.zip"
                 self.assertRegex(name, r"^[A-Za-z0-9._-]+\.zip$")
                 self.assertLess(len(name.encode("ascii")), 150)
                 self.assertEqual(Path(name).name, name)
-                self.assertEqual(name, shell_artifact.shell_filename(
-                    self.repo, {"GITHUB_REF": "refs/tags/" + tag}))
+                self.assertEqual(name, f"{shell_artifact.PREFIX}-{shell_artifact.safe_tag(tag)}.zip")
                 names.append(name)
         self.assertEqual(len(names), len(set(names)))
         with self.assertRaises(ValueError):
@@ -83,14 +82,17 @@ class ShellNameTests(unittest.TestCase):
 
     def test_ci_metadata_matches_default_generator_name(self):
         output = self.repo / "github-output"
-        work = ROOT / "game/issue32-naming"
-        for ref in ("refs/tags/v0.2.0", "refs/tags/releases/test +?%", "refs/heads/main"):
+        work = self.repo / "game/naming"
+        self.git("tag", "v0.2.0")
+        self.git("tag", "releases/test+%")
+        for ref in ("refs/tags/v0.2.0", "refs/tags/releases/test+%", "refs/heads/main"):
             with self.subTest(ref=ref), patch.dict(os.environ, GITHUB_REF=ref):
                 output.unlink(missing_ok=True)
                 subprocess.run([sys.executable, str(ROOT / "scripts/shell_artifact.py"),
-                                "--work", str(work), "--github-output", str(output)], check=True)
+                                "--repo", str(self.repo), "--work", str(work),
+                                "--github-output", str(output)], check=True)
                 fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
-                self.assertEqual(fields["filename"], shell_artifact.shell_filename(ROOT))
+                self.assertEqual(fields["filename"], shell_artifact.shell_filename(self.repo))
                 self.assertEqual(fields["artifact_name"] + ".zip", fields["filename"])
                 self.assertEqual(Path(fields["path"]), work / fields["filename"])
 
@@ -108,6 +110,8 @@ class ShellProducerTests(unittest.TestCase):
                                       bundle_id=lambda _: "org.example.shell",
                                       get=lambda _: "public.app-category.games", words=lambda _: [])
             manifest = dict(schema=1, source="a" * 64, chain="123456789abc", shader_keys=[])
+            version = dict(schema=1, source_version="v0.2.0", source_kind="release", commit="b" * 40,
+                           marketing_version="0.2.0", build_version="1.2.0")
             original_copy = shutil.copyfile
 
             def copy_file(source, target, **kwargs):
@@ -123,7 +127,9 @@ class ShellProducerTests(unittest.TestCase):
                     shutil.copytree(Path(kwargs["cwd"]) / "Gen/dm", app / "dm")
                     (app / "DmIOS").write_bytes(b"synthetic executable")
                     (app / "Info.plist").write_bytes(plistlib.dumps(dict(
-                        CFBundleIdentifier="org.example.shell", CFBundleSupportedPlatforms=["iPhoneOS"])))
+                        CFBundleIdentifier="org.example.shell", CFBundleSupportedPlatforms=["iPhoneOS"],
+                        CFBundleShortVersionString=kwargs["env"]["DM_MARKETING_VERSION"],
+                        CFBundleVersion=kwargs["env"]["DM_BUILD_VERSION"])))
                 elif any(str(arg).endswith("make_ext_font.py") for arg in command):
                     Path(command[-1]).write_bytes(b"synthetic font")
                 return SimpleNamespace(stdout="", returncode=0)
@@ -148,6 +154,7 @@ class ShellProducerTests(unittest.TestCase):
                             patch.object(sys, "argv", argv), \
                             patch.object(build_shell, "shell_filename", return_value=output.name) as naming, \
                             patch.object(build_shell, "make_manifest", return_value=manifest), \
+                            patch.object(build_shell, "resolve_app_version", return_value=version), \
                             patch.object(build_shell, "check_c1_table"), \
                             patch.object(build_shell.shutil, "copyfile", side_effect=copy_file), \
                             patch.object(build_shell.zipfile, "ZipFile", side_effect=open_archive), \
@@ -159,6 +166,10 @@ class ShellProducerTests(unittest.TestCase):
                     self.assertFalse(output.with_suffix(".zip.partial").exists())
                     with zipfile.ZipFile(output) as archive:
                         self.assertEqual(json.loads(archive.read("Payload/DmIOS.app/dm/shell.json")), manifest)
+                        version = json.loads(archive.read("Payload/DmIOS.app/dm/app-version.json"))
+                        self.assertEqual(version["source_version"], "v0.2.0")
+                        self.assertEqual(version["marketing_version"], "0.2.0")
+                        self.assertEqual(version["build_version"], "1.2.0")
                     with patch.object(build_ipa_from_shell, "check_manifest",
                                       side_effect=ValueError("Shell source mismatch")) as check:
                         with self.assertRaisesRegex(ValueError, "source mismatch"):
