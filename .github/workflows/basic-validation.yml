@@ -62,6 +62,7 @@ jobs:
             exit 1
           }
           & (Join-Path $env:GITHUB_WORKSPACE 'scripts/setup_windows_packaging.ps1') -Help
+          & (Join-Path $env:GITHUB_WORKSPACE 'scripts/tests/test_windows_packaging.ps1')
 
       - name: Check Mac setup script and launcher syntax
         if: runner.os == 'macOS'

@@ -19,6 +19,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'windows_packaging_common.ps1')
 
 if ($Help) {
     @'
@@ -320,11 +321,14 @@ function Ensure-SpirvCross {
             $gitDir = Join-Path $sourceRoot '.git'
             if (Test-Path -LiteralPath $gitDir) {
                 $actual = (Invoke-Captured 'git' @('-C', $sourceRoot, 'rev-parse', 'HEAD')).Trim()
-                $dirty = (Invoke-Captured 'git' @('-C', $sourceRoot, 'status', '--porcelain')).Trim()
-                if ($actual -eq $SpirvCrossCommit -and [string]::IsNullOrWhiteSpace($dirty)) {
+                $unexpected = @(Get-UnexpectedGitChanges -Path $sourceRoot -GeneratedPaths @(
+                    'build-vs/', 'spirv-cross.sha256'
+                ))
+                if ($actual -eq $SpirvCrossCommit -and $unexpected.Count -eq 0) {
                     $reuse = $true
                 } elseif (-not $Force) {
-                    throw "SPIRV-Cross already exists but is not a clean checkout of $SpirvCrossCommit. Use -Force to move it aside and clone the pinned source again: $sourceRoot"
+                    $details = if ($unexpected.Count) { " Unexpected source changes: $($unexpected -join '; ')." } else { '' }
+                    throw "SPIRV-Cross already exists but is not a clean checkout of $SpirvCrossCommit.$details Use -Force to move it aside and clone the pinned source again: $sourceRoot"
                 } else {
                     $backup = "$sourceRoot.backup-$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))"
                     Move-Item -LiteralPath $sourceRoot -Destination $backup
