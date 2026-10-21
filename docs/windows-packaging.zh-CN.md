@@ -287,8 +287,9 @@ tag 含有文件名不安全字符时会经过清理并附加短哈希；`v0.2.0
 这些历史资产不会被重命名。
 
 在本地运行 `scripts/build_shell.py --work game/<工作目录>` 时使用相同规则：HEAD 上有准确的
-tag 就用该 tag，否则用 `dev-<commit>`。HEAD 对应多个 tag 时，必须明确指定 `--out`，或在
-`GITHUB_REF` 中指定 tag ref。Actions 的非 tag 运行始终使用开发构建名，即使该 commit 同时有 tag。
+tag 就用该 tag，否则用 `dev-<commit>`。HEAD 对应多个 tag 时，必须通过
+`GITHUB_REF=refs/tags/<tag>` 选择 Release 身份。`--out` 只改变输出路径，不能消除 App 元数据
+的 tag 歧义。Actions 的非 tag 运行始终使用开发构建名，即使该 commit 同时有 tag。
 
 没有 `.git` 时，新构建的壳会在 ZIP 文件名及 App 身份中一致使用 `dev-source-<内容哈希>`。
 不会根据源码目录名猜测 tag，也不会复用之前生成的版本记录。

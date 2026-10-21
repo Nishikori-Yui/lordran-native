@@ -63,6 +63,22 @@ class ShellNameTests(unittest.TestCase):
         self.assertEqual(shell_artifact.shell_filename(self.repo, {}),
                          f"{shell_artifact.PREFIX}-dev-{self.git('rev-parse', '--short=12', 'HEAD')}.zip")
 
+    def test_explicit_output_does_not_bypass_ambiguous_app_identity(self):
+        self.git("tag", "v0.2.0")
+        self.git("tag", "v0.2.0-alias")
+        profile = SimpleNamespace(bundle_id=lambda _: "org.example.shell")
+        work = self.repo / "game/shell"
+        with patch.dict(os.environ, GITHUB_REF=""), \
+                patch.dict(sys.modules, game=SimpleNamespace(load=lambda: profile)), \
+                patch.object(build_shell, "__file__", str(self.repo / "scripts/build_shell.py")), \
+                patch.object(sys, "argv", ["build_shell.py", "--work", str(work),
+                                          "--out", str(work / "selected.zip")]), \
+                patch.object(build_shell, "make_manifest", return_value={}), \
+                patch.object(build_shell.shutil, "copytree") as copy:
+            with self.assertRaisesRegex(ValueError, "Multiple tags"):
+                build_shell.main()
+        copy.assert_not_called()
+
     def test_sanitization_is_bounded_safe_and_distinguishes_lossy_names(self):
         tags = ("release/test", "release-test", "release\\test", "v1.0 +?%:#*<>|\"", "v0.2.0.partial",
                 "../..", "\nfilename=evil", "${{ github.token }}", "\u7248\u672c/\U0001f600",

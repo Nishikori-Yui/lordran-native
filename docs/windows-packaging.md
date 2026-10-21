@@ -399,8 +399,10 @@ Historical releases, including `v0.1.0`, keep
 
 Local `scripts/build_shell.py --work game/<work-directory>` builds use the same
 names: an exact tag at HEAD, otherwise `dev-<commit>`. Multiple tags at HEAD
-require an explicit `--out` or tag ref in `GITHUB_REF`. A non-tag Actions run
-always uses the development name, even if that commit also has a tag.
+require `GITHUB_REF=refs/tags/<tag>` to select the release identity. `--out`
+changes only the output path; it cannot resolve ambiguous app metadata.
+A non-tag Actions run always uses the development name, even if that commit
+also has a tag.
 
 Without `.git`, a newly built shell uses `dev-source-<content-hash>` in both the
 ZIP filename and embedded app identity. It does not infer a tag from a source
