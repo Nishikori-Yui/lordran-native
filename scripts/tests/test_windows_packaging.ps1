@@ -57,7 +57,8 @@ try {
     $legacy = Join-Path $shellDirectory 'LordranNative-shell-build-input.zip'
     $versioned = Join-Path $shellDirectory 'LordranNative-shell-build-input-v0.2.0.zip'
     $dev = Join-Path $shellDirectory 'LordranNative-shell-build-input-dev-123456789abc.zip'
-    foreach ($candidate in @($legacy, $versioned, $dev)) {
+    $partialTag = Join-Path $shellDirectory 'LordranNative-shell-build-input-v0.2.0.partial.zip'
+    foreach ($candidate in @($legacy, $versioned, $dev, $partialTag)) {
         Set-Content -LiteralPath $candidate -Value 'synthetic archive'
         if ((Get-PackagingShellZip -GameDirectory $shellDirectory) -ne $candidate) {
             throw 'A single legacy, release, or development shell must be discovered.'
@@ -73,7 +74,7 @@ try {
     Remove-Item -LiteralPath $dev
     New-Item -ItemType Directory -Path $dev | Out-Null
     Set-Content -LiteralPath (Join-Path $shellDirectory 'unrelated.zip') -Value 'not a shell'
-    Set-Content -LiteralPath (Join-Path $shellDirectory 'LordranNative-shell-build-input-v0.3.0.partial.zip') -Value 'partial'
+    Set-Content -LiteralPath (Join-Path $shellDirectory 'LordranNative-shell-build-input-v0.3.0.zip.partial') -Value 'partial'
     if ((Get-PackagingShellZip -GameDirectory $shellDirectory) -ne $versioned) {
         throw 'Discovery must ignore directories, unrelated ZIPs, and incomplete shell outputs.'
     }

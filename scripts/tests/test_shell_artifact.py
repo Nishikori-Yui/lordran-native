@@ -64,7 +64,7 @@ class ShellNameTests(unittest.TestCase):
                          f"{shell_artifact.PREFIX}-dev-{self.git('rev-parse', '--short=12', 'HEAD')}.zip")
 
     def test_sanitization_is_bounded_safe_and_distinguishes_lossy_names(self):
-        tags = ("release/test", "release-test", "release\\test", "v1.0 +?%:#*<>|\"",
+        tags = ("release/test", "release-test", "release\\test", "v1.0 +?%:#*<>|\"", "v0.2.0.partial",
                 "../..", "\nfilename=evil", "${{ github.token }}", "\u7248\u672c/\U0001f600",
                 "a" * 300, "a" * 299 + "b", "CON", "-start", ".")
         names = []
@@ -136,6 +136,13 @@ class ShellProducerTests(unittest.TestCase):
                     argv = ["build_shell.py", "--work", str(work)]
                     if explicit:
                         argv += ["--out", str(output)]
+                    partial_names = []
+                    archive_class = zipfile.ZipFile
+
+                    def open_archive(path, *args, **kwargs):
+                        partial_names.append(Path(path).name)
+                        return archive_class(path, *args, **kwargs)
+
                     with patch.dict(sys.modules, game=SimpleNamespace(load=lambda: profile)), \
                             patch.object(build_shell, "__file__", str(repo / "scripts/build_shell.py")), \
                             patch.object(sys, "argv", argv), \
@@ -143,10 +150,13 @@ class ShellProducerTests(unittest.TestCase):
                             patch.object(build_shell, "make_manifest", return_value=manifest), \
                             patch.object(build_shell, "check_c1_table"), \
                             patch.object(build_shell.shutil, "copyfile", side_effect=copy_file), \
+                            patch.object(build_shell.zipfile, "ZipFile", side_effect=open_archive), \
                             patch.object(build_shell.subprocess, "run", side_effect=run):
                         build_shell.main()
                     self.assertEqual(naming.call_count, 0 if explicit else 1)
                     self.assertTrue(output.is_file())
+                    self.assertEqual(partial_names, [output.name + ".partial"])
+                    self.assertFalse(output.with_suffix(".zip.partial").exists())
                     with zipfile.ZipFile(output) as archive:
                         self.assertEqual(json.loads(archive.read("Payload/DmIOS.app/dm/shell.json")), manifest)
                     with patch.object(build_ipa_from_shell, "check_manifest",

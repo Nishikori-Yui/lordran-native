@@ -2,9 +2,8 @@ function Get-PackagingShellZip {
     param([Parameter(Mandatory = $true)][string]$GameDirectory)
 
     $candidates = @(Get-ChildItem -LiteralPath $GameDirectory -File | Where-Object {
-        ($_.Name -eq 'LordranNative-shell-build-input.zip' -or
-         $_.Name -like 'LordranNative-shell-build-input-*.zip') -and
-        $_.Name -notlike '*.partial.zip'
+        $_.Name -eq 'LordranNative-shell-build-input.zip' -or
+        $_.Name -like 'LordranNative-shell-build-input-*.zip'
     } | Sort-Object Name)
     if ($candidates.Count -eq 0) {
         throw 'No shell ZIP found. Download the matching shell into the game directory or pass -ShellZip PATH.'

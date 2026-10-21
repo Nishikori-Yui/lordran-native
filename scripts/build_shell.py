@@ -109,7 +109,7 @@ def main():
            for name in profile.words("modules")):
         raise ValueError("Shell executable contains embedded game modules")
     output.parent.mkdir(parents=True, exist_ok=True)
-    partial = output.with_suffix(".partial.zip")
+    partial = output.with_suffix(".zip.partial")
     try:
         with zipfile.ZipFile(partial, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
             for path in files:
