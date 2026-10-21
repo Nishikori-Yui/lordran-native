@@ -68,7 +68,7 @@ class MacOSAppTests(unittest.TestCase):
                              self.profile.get("romfs_marker")).is_file())
             self.assertTrue((output / "Contents/Resources/dm/pso_manifest.tsv").is_file())
             self.assertTrue((output / "Contents/Resources/shaders" /
-                             f"b-{self.profile.table('dmsh_chain.h').read_text().split(chr(34))[1]}" /
+                             f"b-{self.profile.table('dmsh_chain.h').read_text(encoding='utf-8').split(chr(34))[1]}" /
                              "shader_b.metallib").is_file())
 
     def test_existing_bundle_requires_explicit_replace(self):
