@@ -65,6 +65,9 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/setup_windows_packaging.ps1 -Help
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & (Join-Path $env:GITHUB_WORKSPACE 'scripts/tests/test_windows_packaging.ps1')
+          & (Join-Path $env:GITHUB_WORKSPACE 'scripts/tests/test_windows_dependencies.ps1')
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/tests/test_windows_dependencies.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Check Mac setup script and launcher syntax
         if: runner.os == 'macOS'

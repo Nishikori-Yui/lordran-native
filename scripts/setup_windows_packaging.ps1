@@ -12,6 +12,7 @@ param(
     [switch]$KeepExtracted,
     [switch]$ReplaceOutput,
     [switch]$Help,
+    [switch]$NoWinget,
     [switch]$SkipInstall,
     [switch]$SkipVisualStudio,
     [switch]$SkipSpirvCross,
@@ -42,11 +43,12 @@ Options:
   -Package VERSION       Registered game version, e.g. v196608 or v0.
   -KeepExtracted         Keep extracted game files after a successful build.
   -ReplaceOutput         Allow replacing the exact existing IPA named by -OutputPath.
-  -SkipInstall           Skip winget installs; existing dependencies are still checked.
-  -SkipVisualStudio      Do not install Visual Studio Build Tools (it must already exist).
+  -NoWinget              Use official downloads instead of winget for missing tools.
+  -SkipInstall           Reuse public tools without installing missing dependencies.
+  -SkipVisualStudio      Do not install Visual Studio; reuse a working C++ compiler.
   -SkipSpirvCross        Reuse the pinned SPIRV-Cross checkout after verifying its saved hash.
   -ZstdPath PATH         Use an existing zstd.exe.
-  -ToolRoot PATH         Store zstd and SPIRV-Cross under this directory.
+  -ToolRoot PATH         Store public tools and SPIRV-Cross under this directory.
   -Force                 Move unexpected zstd/SPIRV-Cross data aside before reinstalling.
   -Help                  Show this help.
 
@@ -97,8 +99,13 @@ function Invoke-Captured {
         [Parameter(Mandatory = $true)][string]$Command,
         [string[]]$Arguments = @()
     )
-    $output = & $Command @Arguments 2>&1
-    $exitCode = $LASTEXITCODE
+    $oldPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell turns native stderr into ErrorRecords, even for probes.
+        $ErrorActionPreference = 'Continue'
+        $output = & $Command @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $oldPreference }
     if ($exitCode -ne 0) {
         throw "Command failed with exit code ${exitCode}: $Command $($Arguments -join ' ')`n$($output -join "`n")"
     }
@@ -108,7 +115,7 @@ function Invoke-Captured {
 function Refresh-Path {
     $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $user = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $parts = @($machine, $user, $env:Path) |
+    $parts = @($env:Path, $machine, $user) |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
         ForEach-Object { $_ -split ';' } |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
@@ -162,18 +169,6 @@ function Resolve-PrivatePath {
     return $resolved
 }
 
-function Get-PythonCommand {
-    $launcher = Get-Executable 'py.exe'
-    if ($null -ne $launcher) {
-        return @($launcher, '-3')
-    }
-    $python = Get-Executable 'python.exe'
-    if ($null -ne $python) {
-        return @($python)
-    }
-    return $null
-}
-
 function Get-PythonVersion {
     param([string[]]$PythonCommand)
     $pythonArgs = @()
@@ -196,7 +191,7 @@ function Find-VisualStudio {
         (Join-Path $env:ProgramFiles 'Microsoft Visual Studio\Installer\vswhere.exe')
     ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
     foreach ($vswhere in $candidates) {
-        $path = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null |
+        $path = & $vswhere -latest -version '[17.0,18.0)' -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null |
             Select-Object -First 1
         if (-not [string]::IsNullOrWhiteSpace($path)) {
             return $path.Trim()
@@ -297,18 +292,21 @@ function Ensure-SpirvCross {
         if ($actualSource -ne $SpirvCrossCommit) {
             throw "-SkipSpirvCross was specified, but the checkout is not pinned to ${SpirvCrossCommit}: $actualSource"
         }
-        $buildRoot = Join-Path $sourceRoot 'build-vs'
-        $existing = Get-ChildItem -LiteralPath $buildRoot -Filter 'spirv-cross.exe' -File -Recurse |
-            Sort-Object @{ Expression = { $_.FullName.Length } } |
-            Select-Object -First 1
-        if ($null -eq $existing -or -not (Test-Path -LiteralPath $hashFile -PathType Leaf)) {
+        if (-not (Test-Path -LiteralPath $hashFile -PathType Leaf)) {
             throw "-SkipSpirvCross was specified, but a built executable and hash are missing under: $sourceRoot"
         }
         $savedHash = (Get-Content -Raw -LiteralPath $hashFile).Trim().ToLowerInvariant()
-        $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $existing.FullName).Hash.ToLowerInvariant()
-        if ($savedHash -ne $actualHash) {
-            throw "Saved SPIRV-Cross SHA-256 does not match: $($existing.FullName)"
+        $existing = $null
+        foreach ($directory in @('build-vs', 'build-ninja')) {
+            $buildRoot = Join-Path $sourceRoot $directory
+            if (-not (Test-Path -LiteralPath $buildRoot -PathType Container)) { continue }
+            foreach ($candidate in @(Get-ChildItem -LiteralPath $buildRoot -Filter 'spirv-cross.exe' -File -Recurse)) {
+                $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $candidate.FullName).Hash.ToLowerInvariant()
+                if ($actualHash -eq $savedHash) { $existing = $candidate; break }
+            }
+            if ($existing) { break }
         }
+        if (-not $existing) { throw "No built SPIRV-Cross executable matches the saved SHA-256 under: $sourceRoot" }
         $env:Path = "$(Split-Path $existing.FullName);$env:Path"
         $env:DM_SPIRV_CROSS_SHA256 = $actualHash
         return [pscustomobject]@{
@@ -325,7 +323,7 @@ function Ensure-SpirvCross {
             if (Test-Path -LiteralPath $gitDir) {
                 $actual = (Invoke-Captured 'git' @('-C', $sourceRoot, 'rev-parse', 'HEAD')).Trim()
                 $unexpected = @(Get-UnexpectedGitChanges -Path $sourceRoot -GeneratedPaths @(
-                    'build-vs/', 'spirv-cross.sha256'
+                    'build-vs/', 'build-ninja/', 'spirv-cross.sha256'
                 ))
                 if ($actual -eq $SpirvCrossCommit -and $unexpected.Count -eq 0) {
                     $reuse = $true
@@ -350,7 +348,7 @@ function Ensure-SpirvCross {
             Write-Step "Cloning pinned SPIRV-Cross $SpirvCrossTag"
             New-Item -ItemType Directory -Force -Path $Root | Out-Null
             Invoke-Checked 'git' @('clone', '--branch', $SpirvCrossTag, '--depth', '1',
-                'https://github.com/KhronosGroup/SPIRV-Cross', $sourceRoot)
+                'https://github.com/KhronosGroup/SPIRV-Cross', $sourceRoot) | Out-Host
         }
 
         $actual = (Invoke-Captured 'git' @('-C', $sourceRoot, 'rev-parse', 'HEAD')).Trim()
@@ -359,7 +357,7 @@ function Ensure-SpirvCross {
         }
     }
 
-    $buildRoot = Join-Path $sourceRoot 'build-vs'
+    $buildRoot = Join-Path $sourceRoot $toolchain.Directory
     $cmake = Get-Executable 'cmake.exe'
     if ($null -eq $cmake) {
         throw 'cmake.exe is missing. Install CMake before building SPIRV-Cross.'
@@ -368,17 +366,11 @@ function Ensure-SpirvCross {
     if ($null -eq $ninja) {
         throw 'ninja.exe is missing. Install Ninja before building SPIRV-Cross.'
     }
-    $vsRoot = Find-VisualStudio
-    if ($null -eq $vsRoot) {
-        throw 'A Visual Studio C++ toolchain was not found. Run this script without -SkipVisualStudio.'
-    }
-
     Write-Step 'Configuring and building SPIRV-Cross for Windows x64'
-    Invoke-Checked $cmake @('-S', $sourceRoot, '-B', $buildRoot,
-        '-G', 'Visual Studio 17 2022', '-A', 'x64',
-        '-DSPIRV_CROSS_ENABLE_TESTS=OFF')
+    Invoke-Checked $cmake (@('-S', $sourceRoot, '-B', $buildRoot,
+        '-DSPIRV_CROSS_ENABLE_TESTS=OFF') + $toolchain.Arguments) | Out-Host
     Invoke-Checked $cmake @('--build', $buildRoot, '--config', 'Release',
-        '--target', 'spirv-cross', '--parallel')
+        '--target', 'spirv-cross', '--parallel') | Out-Host
 
     $executable = Get-ChildItem -LiteralPath $buildRoot -Filter 'spirv-cross.exe' -File -Recurse |
         Sort-Object @{ Expression = { $_.FullName.Length } } |
@@ -396,7 +388,7 @@ function Ensure-SpirvCross {
         Hash = $hash
         HashFile = $hashFile
         Source = $sourceRoot
-        VisualStudio = $vsRoot
+        VisualStudio = $toolchain.VisualStudio
     }
 }
 
@@ -406,12 +398,18 @@ if ($env:OS -ne 'Windows_NT') {
 if (-not [Environment]::Is64BitOperatingSystem) {
     throw 'The Windows packaging route requires a 64-bit Windows installation.'
 }
+if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') {
+    throw 'The automatic Windows tool downloads support x64 Windows only, not Windows on ARM.'
+}
 
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot -ErrorAction Stop).Path
 $ToolRoot = [IO.Path]::GetFullPath($ToolRoot)
 $gameDir = Join-Path $RepoRoot 'game\01004AB00A260000'
 $buildWork = Join-Path $gameDir '01004AB00A260000_shell_build'
 $venv = Join-Path $gameDir 'tools-venv'
+# Do not satisfy packaging dependencies from a different user-site environment.
+$env:PYTHONNOUSERSITE = '1'
+. (Join-Path $PSScriptRoot 'windows_packaging_dependencies.ps1')
 
 if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot '.git') -PathType Container)) {
     throw "RepoRoot is not a Git checkout: $RepoRoot"
@@ -422,27 +420,24 @@ Write-Host "Repository: $RepoRoot"
 Write-Host "Tool root:  $ToolRoot"
 Write-Host 'This script installs public tools only; it never downloads NSPs, keys, or game data.'
 
-if ($SkipInstall) {
-    Write-Host 'Skipping winget and public-tool installation because -SkipInstall was specified.' -ForegroundColor Yellow
-} else {
-    Write-Step 'Installing or updating the public command-line tools'
-    $packages = @(
-        @{ Id = 'Git.Git'; Name = 'Git' },
-        @{ Id = 'Python.Python.3.12'; Name = 'Python 3.12' },
-        @{ Id = 'Microsoft.DotNet.SDK.10'; Name = '.NET 10 SDK' },
+Refresh-Path
+Write-Step 'Reusing compatible public tools and installing only missing dependencies'
+if ($NoWinget -or -not (Get-Executable 'winget.exe')) {
+    Write-Host 'winget is disabled or unavailable. Missing tools will use verified official downloads.'
+}
+$packages = @(
+    @{ Id = 'Git.Git'; Name = 'Git' },
+    @{ Id = 'Python.Python.3.12'; Name = 'Python' },
+    @{ Id = 'Microsoft.DotNet.SDK.10'; Name = 'Dotnet' }
+)
+if (-not $SkipSpirvCross) {
+    $packages += @(
         @{ Id = 'Kitware.CMake'; Name = 'CMake' },
         @{ Id = 'Ninja-build.Ninja'; Name = 'Ninja' }
     )
-    foreach ($package in $packages) {
-        Write-Host "Installing $($package.Name) ($($package.Id))..."
-        Install-WingetPackage -Id $package.Id
-    }
-    if (-not $SkipVisualStudio) {
-        Write-Step 'Installing or updating Visual Studio Build Tools C++ workload'
-        Install-WingetPackage -Id 'Microsoft.VisualStudio.2022.BuildTools' `
-            -Override '--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended'
-    }
-    Refresh-Path
+}
+foreach ($dependency in $packages) {
+    Ensure-PublicTool -Name $dependency.Name -WingetId $dependency.Id
 }
 
 Write-Step 'Checking the required public tools'
@@ -460,39 +455,25 @@ $sdks = Invoke-Captured $dotnet @('--list-sdks')
 if ($sdks -notmatch '(?m)^10\.') {
     throw "The .NET 10 SDK was not found. Detected SDKs:`n$sdks"
 }
-$cmake = Get-Executable 'cmake.exe'
-if ($null -eq $cmake) { throw 'cmake.exe is missing. Install CMake and reopen PowerShell.' }
-$ninja = Get-Executable 'ninja.exe'
-if ($null -eq $ninja) { throw 'ninja.exe is missing. Install Ninja and reopen PowerShell.' }
-
-if ($SkipVisualStudio) {
-    Write-Host 'Skipping Visual Studio installation because -SkipVisualStudio was specified.' -ForegroundColor Yellow
-}
-$visualStudio = Find-VisualStudio
-if ($null -eq $visualStudio) {
-    throw 'Visual Studio Build Tools with the C++ workload were not found.'
+$toolchain = $null
+if (-not $SkipSpirvCross) {
+    $toolchain = Find-SpirvToolchain
+    if (-not $toolchain) {
+        Install-VisualStudioTools
+        $toolchain = Find-SpirvToolchain
+    }
+    if (-not $toolchain) { throw 'No working C++ toolchain was found after installation. Restart Windows and rerun setup.' }
+    Write-Host "C++ toolchain: $($toolchain.Name)"
 }
 $zstd = Ensure-Zstd -Root $ToolRoot
 $env:Path = "$(Split-Path $zstd);$env:Path"
 Write-Host "zstd:       $zstd"
-Write-Host "Visual Studio: $visualStudio"
 
 $spirv = Ensure-SpirvCross -Root $ToolRoot
 
 Write-Step 'Creating the repository-local Python environment'
 New-Item -ItemType Directory -Force -Path $gameDir | Out-Null
-$pythonArgs = @()
-if ($pythonCommand.Length -gt 1) {
-    $pythonArgs = $pythonCommand[1..($pythonCommand.Length - 1)]
-}
-$pythonLauncher = $pythonCommand[0]
-Invoke-Checked $pythonLauncher @($pythonArgs + @('-m', 'venv', $venv))
-$python = Join-Path $venv 'Scripts\python.exe'
-if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
-    throw "Python virtual environment was not created: $python"
-}
-Invoke-Checked $python @('-m', 'pip', 'install', '--upgrade', 'pip')
-Invoke-Checked $python @('-m', 'pip', 'install', 'lz4', 'capstone', 'fonttools')
+$python = Initialize-PackagingPython $pythonCommand
 
 New-Item -ItemType Directory -Force -Path $buildWork | Out-Null
 $supportScript = Join-Path $RepoRoot 'scripts/player_support.py'
@@ -553,4 +534,8 @@ if (-not $Build) {
     Write-Host 'After downloading the matching public shell ZIP and placing your own NSPs and prod.keys under game/, build and verify the IPA with:' -ForegroundColor Yellow
     Write-Host '   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -SkipInstall -SkipSpirvCross -Build'
 }
-Write-Host 'The setup script did not access or print any key, NSP, or private game data.'
+if (-not $Build) {
+    Write-Host 'Setup did not access any key, NSP, or private game data.'
+} else {
+    Write-Host 'Private build inputs and output stayed local. No game files or keys were uploaded.'
+}

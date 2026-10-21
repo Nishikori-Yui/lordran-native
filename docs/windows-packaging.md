@@ -48,7 +48,7 @@ the workflow also uploads the ZIP to that release.
 ## Quick setup (recommended)
 
 The repository includes `scripts/setup_windows_packaging.ps1` for first-time
-users. It installs the public tools, configures the Visual Studio C++ workload,
+users. It reuses compatible public tools and installs only missing dependencies,
 downloads the official zstd command-line tool when it is not already available,
 builds the pinned SPIRV-Cross executable, creates the repository-local Python
 environment, and runs the read-only preflight check. It never downloads or
@@ -62,12 +62,43 @@ change the machine or user policy permanently:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1
 ```
 
-The script uses `winget` for Git, Python 3.12, .NET 10, CMake, Ninja, and
-Visual Studio Build Tools. The Visual Studio installer can display a UAC prompt
-and may take several minutes. An Internet connection is required for public
-downloads. At the end, the script prints the SPIRV-Cross executable, its
-SHA-256 file, and the Python interpreter path. Keep those values for the
-packaging commands below. It uses CMake's Visual Studio generator, so this
+**You do not need winget or the Microsoft Store.** If `winget` is available,
+the script tries it for missing tools; otherwise it downloads official portable
+archives automatically. A failed winget install also falls back to those
+downloads. To avoid winget even when it is installed, run:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -NoWinget
+```
+
+The no-winget route works as follows:
+
+| Dependency | What setup does when a compatible copy is missing |
+| --- | --- |
+| Git | Extract Git for Windows MinGit 2.56.0.2. |
+| Python | Extract official Python 3.12.10 into `game/01004AB00A260000/tools-python/`; bootstrap pip from a verified wheel. No Windows Installer service is needed. |
+| .NET | Extract the official .NET SDK 10.0.402 ZIP. No system-wide SDK change is needed. |
+| CMake / Ninja | Extract official CMake 3.31.12 and Ninja 1.12.1 ZIPs. |
+| C++ compiler | Reuse Visual Studio 2022, or an existing Clang/MinGW compiler after a successful compile, link, and x64 executable check. If none works, start Microsoft's official Visual Studio 2022 Build Tools installer. |
+| zstd | Reuse `zstd.exe`, or extract the pinned official 1.5.7 archive. |
+
+Public archives are checked against pinned SHA-256/SHA-512 values before
+extraction. The Visual Studio installer is checked for a valid Microsoft
+Authenticode signature before it runs. Public portable tools and downloads stay
+under `$HOME\src` by default (`-ToolRoot` changes this); Python and its packages
+stay in the ignored repository `game/` folder. The script updates `PATH` only
+inside its process, not your permanent user or machine settings. Rerunning setup
+finds its own tools again, including in a new PowerShell window.
+
+An Internet connection is needed for missing tools, Python packages, and
+SPIRV-Cross source. Portable tools do not require administrator access. If no
+working C++ compiler exists, Visual Studio installation can request UAC approval
+and a restart; restart Windows and rerun the same command if instructed. Setup
+does not bypass administrator or organization policies. The automatic downloads
+target x64 Windows, not Windows on ARM.
+
+At the end, setup prints the SPIRV-Cross executable, its SHA-256 file, and the
+exact Python interpreter path. Keep those values for the commands below. This
 automatic route does not require a separate Developer PowerShell window.
 
 ### Set up and build in one run
@@ -101,7 +132,7 @@ The script can be run again safely when the checkout is already prepared. Useful
 options are:
 
 ```powershell
-# Verify an existing installation without installing packages or downloading zstd.
+# Reuse public tools without installing missing tools. Python packages may still need downloading.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -SkipInstall
 
 # Use an existing zstd.exe instead of downloading the pinned portable copy.
@@ -111,14 +142,15 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -Force
 ```
 
-`-SkipVisualStudio` and `-SkipSpirvCross` are intended for machines that have
-already been prepared manually. The script still verifies the corresponding
-toolchain and saved SPIRV-Cross hash; it does not silently accept an arbitrary
-compiler or executable.
+`-SkipVisualStudio` prevents compiler installation; an existing C++ compiler
+must pass the probe when rebuilding SPIRV-Cross. `-SkipSpirvCross` verifies and
+reuses the pinned checkout's executable and saved hash; it does not require a
+compiler, CMake, or Ninja just to package again. Neither option disables the
+shell/source or shader fingerprint checks.
 
 After setup, continue with the shell download and private-input steps in
-section 5. If setup cannot use `winget`, follow the manual installation
-fallback below, then rerun the script with `-SkipInstall`.
+section 5. The manual installation below is optional, not required when winget
+is missing.
 
 ## 1. Manual tool installation (fallback)
 
@@ -153,9 +185,11 @@ You will use two kinds of PowerShell window:
 
 Use a 64-bit Windows 10 or Windows 11 machine with:
 
-- Python 3.12 or later, available as `py -3`.
+- x64 Python 3.12 or later. The manual commands use `py -3`; automatic setup
+  can also use `python.exe` or its own portable Python.
 - .NET 10 SDK.
-- Git, CMake, Ninja, and an MSVC C++ toolchain. The easiest build shell is
+- Git, CMake, Ninja, and a working C++ toolchain. The manual example uses MSVC;
+  automatic setup can also reuse a working Clang/MinGW compiler. The easiest MSVC build shell is
   **Developer PowerShell for Visual Studio**, because it sets the compiler
   environment for CMake.
 - `zstd.exe` on `PATH` for shader-container extraction.
@@ -338,7 +372,22 @@ Get-ChildItem -LiteralPath $GameDir -File |
     Select-Object Name, Length, LastWriteTime
 ```
 
-Create a repository-local virtual environment and install the Python packages:
+If you used automatic setup, use the Python path it printed and skip the
+environment-creation block. To restore it in a new PowerShell window:
+
+```powershell
+$Python = Join-Path $GameDir 'tools-venv\Scripts\python.exe'
+if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
+    $Python = Join-Path $GameDir 'tools-python\python.exe'
+}
+if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
+    throw 'Packaging Python is missing. Run the setup script first.'
+}
+& $Python --version
+```
+
+For manual setup with a regular Python installation, create a repository-local
+virtual environment and install the Python packages:
 
 ```powershell
 $PythonVenv = Join-Path $GameDir 'tools-venv'
@@ -473,6 +522,12 @@ subsequent launches reuse the system cache.
 
 ## Troubleshooting
 
+- **No winget or Microsoft Store:** run setup normally or add `-NoWinget`.
+  App Installer is not a prerequisite. If an official download fails, check the
+  URL, network/proxy policy, and available disk space; do not disable hash checks.
+- **No administrator access:** existing Clang/MinGW may avoid Visual Studio
+  installation if its compiler probe succeeds. Otherwise ask an administrator
+  to install the C++ workload. `-NoWinget` does not bypass UAC.
 - **A command is not recognized:** reopen the same PowerShell type used for the
   build and rerun the checks in section 1. Do not mix an ordinary PowerShell
   window with a Developer PowerShell window while building SPIRV-Cross.
@@ -482,7 +537,7 @@ subsequent launches reuse the system cache.
   `$SpirvCrossExe`, and `$env:DM_SPIRV_CROSS_SHA256`. Rebuild the pinned source
   if necessary; do not change the repository shader lock.
 - **Missing Python package:** verify that `$Python` points inside
-  `game/01004AB00A260000/tools-venv`, then rerun `& $Python -m pip install
+  `game/01004AB00A260000/tools-venv` or `tools-python`, then rerun `& $Python -m pip install
   lz4 capstone fonttools`.
 - **Unsupported title or build ID:** use title `01004AB00A260000` and a version
   registered in `dm/games/01004AB00A260000/game.tsv`. Do not bypass the check.

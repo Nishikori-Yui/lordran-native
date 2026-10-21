@@ -29,7 +29,7 @@ Windows 打包流程不需要 Xcode，可以生成未签名 iOS IPA：
 
 ## 快速配置（推荐）
 
-仓库提供了面向首次使用者的 `scripts/setup_windows_packaging.ps1`。它会安装公开工具，配置 Visual Studio C++ 工作负载；如果系统中没有 `zstd.exe`，还会下载官方 zstd 命令行工具；随后构建指定版本的 SPIRV-Cross、创建仓库内的 Python 环境并执行只读环境检查。它不会下载或打开 NSP、`prod.keys` 或其他私人游戏数据。
+仓库提供了面向首次使用者的 `scripts/setup_windows_packaging.ps1`。它会优先复用兼容的已有工具，只安装缺少的依赖；如果系统中没有 `zstd.exe`，还会下载官方 zstd 命令行工具；随后构建指定版本的 SPIRV-Cross、创建仓库内的 Python 环境并执行只读环境检查。它不会下载或打开 NSP、`prod.keys` 或其他私人游戏数据。
 
 在仓库根目录的普通 PowerShell 中执行下面这一条命令。它只对本次调用临时绕过执行策略，不会永久修改用户或系统策略：
 
@@ -37,7 +37,28 @@ Windows 打包流程不需要 Xcode，可以生成未签名 iOS IPA：
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1
 ```
 
-脚本使用 `winget` 安装 Git、Python 3.12、.NET 10、CMake、Ninja 和 Visual Studio Build Tools。Visual Studio 安装程序可能弹出 UAC 管理员确认，并需要几分钟；公开工具和 SPIRV-Cross 的下载需要联网。脚本结束时会打印 SPIRV-Cross 程序路径、SHA-256 文件和 Python 解释器路径，请保留这些信息供后续打包命令使用。自动流程使用 CMake 的 Visual Studio 生成器，不需要另外打开 Developer PowerShell。
+**不需要先安装 winget，也不需要 Microsoft Store。** 系统中有 `winget` 时，脚本会尝试用它安装缺少的工具；没有时自动改用官方便携下载，winget 安装失败也会转用该路径。如果想明确跳过 winget，可以直接复制这一条：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -NoWinget
+```
+
+不使用 winget 时，各项依赖的处理方式如下：
+
+| 依赖 | 缺少兼容版本时，脚本会怎么做 |
+| --- | --- |
+| Git | 解压 Git for Windows 官方 MinGit 2.56.0.2。 |
+| Python | 解压官方 Python 3.12.10 到 `game/01004AB00A260000/tools-python/`，从通过校验的 wheel 安装 pip，不依赖 Windows Installer 服务。 |
+| .NET | 解压官方 .NET SDK 10.0.402 ZIP，不修改系统 SDK 安装。 |
+| CMake / Ninja | 解压官方 CMake 3.31.12 和 Ninja 1.12.1 ZIP。 |
+| C++ 编译器 | 复用 Visual Studio 2022；或探测已有 Clang/MinGW，只有编译、链接、运行 x64 测试程序都成功才采用。没有可用编译器时，启动微软官方 Visual Studio 2022 Build Tools 安装程序。 |
+| zstd | 复用已有 `zstd.exe`，或解压固定的官方 1.5.7 归档。 |
+
+公开归档会在解压前检查固定的 SHA-256/SHA-512；Visual Studio 安装程序会在运行前检查有效的微软 Authenticode 签名。便携公共工具和下载缓存默认放在 `$HOME\src` 下，可用 `-ToolRoot` 修改；Python 和 Python 依赖保存在仓库被忽略的 `game/` 目录内。脚本只修改本次进程的 `PATH`，不永久修改用户或系统设置。重新打开 PowerShell 后再次运行脚本，也会找到并复用自己安装的工具。
+
+缺少的工具、Python 依赖和 SPIRV-Cross 源码需要联网下载。便携工具不需要管理员权限；如果没有可用 C++ 编译器，Visual Studio 安装可能弹出 UAC 管理员确认，或要求重启。按提示重启 Windows 后，再运行同一条命令即可。脚本不会绕过管理员权限或组织策略。自动下载面向 x64 Windows，不支持 Windows on ARM。
+
+脚本结束时会打印 SPIRV-Cross 程序路径、SHA-256 文件和实际使用的 Python 解释器路径，请保留这些信息供后续打包使用。自动流程不需要另外打开 Developer PowerShell。
 
 ### 一次完成环境配置和打包
 
@@ -58,7 +79,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_
 脚本可以安全地再次运行。常用选项如下：
 
 ```powershell
-# 只检查已有安装，不通过 winget 安装工具，也不下载 zstd。
+# 复用已有工具，不安装缺少的公共工具；Python 依赖仍可能需要下载。
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -SkipInstall
 
 # 使用已有的 zstd.exe，不下载脚本提供的便携版本。
@@ -68,9 +89,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -Force
 ```
 
-`-SkipVisualStudio` 和 `-SkipSpirvCross` 适用于已经手动配置过对应环境的电脑。脚本仍会检查对应工具链和已保存的 SPIRV-Cross 指纹，不会默默接受任意编译器或程序。
+`-SkipVisualStudio` 禁止安装编译器；重新构建 SPIRV-Cross 时，已有 C++ 编译器仍须通过探测。`-SkipSpirvCross` 会验证并复用指定源码 checkout 中的程序和已保存指纹；仅重新打包时，不再要求编译器、CMake 或 Ninja。这些选项都不会跳过壳与源码匹配检查或着色器指纹校验。
 
-配置完成后，继续执行第 5 节的壳下载和私有输入文件步骤。如果当前电脑无法使用 `winget`，请先按照下面的手动安装备用流程安装工具，再用 `-SkipInstall` 重新运行脚本。
+配置完成后，继续执行第 5 节的壳下载和私有输入文件步骤。下面的手动安装流程是可选备用方案；缺少 winget 并不需要改用手动安装。
 
 ## 1. 手动安装工具（备用流程）
 
@@ -95,9 +116,11 @@ winget install --id Ninja-build.Ninja -e
 
 准备一台 64 位 Windows 10/11 电脑，并安装：
 
-- Python 3.12 或更高版本，可通过 `py -3` 调用。
+- x64 Python 3.12 或更高版本。手动命令使用 `py -3`；自动脚本也支持
+  `python.exe` 或自己下载的便携 Python。
 - .NET 10 SDK。
-- Git、CMake、Ninja 和 MSVC C++ 工具链。最方便的方式是使用
+- Git、CMake、Ninja 和可用的 C++ 工具链。手动示例采用 MSVC，自动脚本也可复用
+  通过探测的 Clang/MinGW。使用 MSVC 时，最方便的方式是打开
   **Visual Studio Developer PowerShell**，因为它会自动设置 CMake 所需的编译器环境。
 - 加入 `PATH` 的 `zstd.exe`，用于解压着色器容器。
 - 构建前至少约 15 GB 可用空间；如果要保留解包文件和缓存，建议至少保留 30 GB。
@@ -260,7 +283,21 @@ Get-ChildItem -LiteralPath $GameDir -File |
     Select-Object Name, Length, LastWriteTime
 ```
 
-创建仓库内的虚拟环境并安装 Python 依赖：
+如果已经运行自动配置脚本，使用它打印的 Python 路径，跳过下面的创建环境步骤。
+重新打开 PowerShell 后，可以这样恢复解释器路径：
+
+```powershell
+$Python = Join-Path $GameDir 'tools-venv\Scripts\python.exe'
+if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
+    $Python = Join-Path $GameDir 'tools-python\python.exe'
+}
+if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
+    throw 'Packaging Python is missing. Run the setup script first.'
+}
+& $Python --version
+```
+
+如果采用手动安装的常规 Python，则创建仓库内的虚拟环境并安装依赖：
 
 ```powershell
 $PythonVenv = Join-Path $GameDir 'tools-venv'
@@ -388,6 +425,11 @@ Windows 无法运行 Apple Metal 编译器，因此 IPA 内包含 MSL 源码，i
 
 ## 故障排查
 
+- **没有 winget 或 Microsoft Store：** 直接运行配置脚本，或加上 `-NoWinget`，
+  不需要先安装 App Installer。官方下载失败时，检查报错中的网址、网络/代理策略及
+  剩余磁盘空间，不要关闭哈希校验。
+- **没有管理员权限：** 已有 Clang/MinGW 通过编译器探测后，就无需安装 Visual Studio；
+  否则需要请管理员安装 C++ 工作负载。`-NoWinget` 不会绕过 UAC。
 - **找不到命令：** 重新打开与构建相同类型的 PowerShell，重新执行第 1 节检查。
   构建 SPIRV-Cross 时不要混用普通 PowerShell 和 Developer PowerShell。
 - **壳与源码不匹配：** 下载与当前 checkout 相同 Release tag 的壳，不要把 `main`
@@ -395,7 +437,7 @@ Windows 无法运行 Apple Metal 编译器，因此 IPA 内包含 MSL 源码，i
 - **SPIRV-Cross 指纹不符：** 检查 `Get-Command spirv-cross`、`$SpirvCrossExe`
   和 `$env:DM_SPIRV_CROSS_SHA256`。必要时重新构建指定提交，不要修改仓库着色器锁。
 - **缺少 Python 依赖：** 确认 `$Python` 位于
-  `game/01004AB00A260000/tools-venv` 内，再执行
+  `game/01004AB00A260000/tools-venv` 或 `tools-python` 内，再执行
   `& $Python -m pip install lz4 capstone fonttools`。
 - **标题号或构建号不受支持：** 使用标题 `01004AB00A260000` 和
   `dm/games/01004AB00A260000/game.tsv` 中登记的版本，不要绕过检查。

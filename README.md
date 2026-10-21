@@ -209,8 +209,12 @@ From the repository root, run this in PowerShell:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1
 ```
 
-The script may request administrator approval for Visual Studio Build Tools and
-requires an Internet connection for public installers and SPIRV-Cross. It also
+winget and Microsoft Store are optional: the script reuses compatible tools,
+then uses winget or verified official portable downloads for missing ones.
+Add `-NoWinget` to use official downloads explicitly. A working Clang/MinGW
+compiler can be reused; only machines without a usable C++ compiler need the
+Visual Studio installer, which may request administrator approval. Public
+downloads and SPIRV-Cross require an Internet connection. The script also
 prints the exact path and SHA-256 needed by the later packaging command. After
 it finishes, download the matching shell ZIP from the same release, then put
 the base game NSP, the 1.0.3 update NSP, and your own `prod.keys` in the
@@ -227,7 +231,7 @@ If setup has already completed, add `-SkipInstall -SkipSpirvCross -Build` to
 recheck the saved toolchain and build without reinstalling it. The script
 verifies the resulting IPA; signing and sideloading remain your steps.
 
-If you are following the manual fallback in the [Windows guide](docs/windows-packaging.md#requirements) instead of the setup script, first build the pinned SPIRV-Cross executable and record `$spirvCrossSha256`. Create a private Python environment, then use its interpreter for the preflight and build. This avoids changing PowerShell's activation policy or installing dependencies into another Python environment:
+If you are following the manual fallback in the [Windows guide](docs/windows-packaging.md#2-requirements) instead of the setup script, first build the pinned SPIRV-Cross executable and record `$spirvCrossSha256`. Create a private Python environment, then use its interpreter for the preflight and build. This avoids changing PowerShell's activation policy or installing dependencies into another Python environment:
 
 ```powershell
 py -3 -m venv game/01004AB00A260000/tools-venv
