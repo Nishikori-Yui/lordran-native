@@ -66,7 +66,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_
 
 目前镜像覆盖 `lz4`、`capstone` 和 `fonttools` 的安装，不覆盖 Python 运行时、引导 pip 的固定 wheel、Git / CMake / Ninja / zstd / .NET 归档、Visual Studio 安装、NuGet、SPIRV-Cross GitHub 源码或 Release 壳 ZIP。这些仍使用原有官方渠道；`-NoWinget` 只是切换安装方式，不是国内镜像开关。不要把任意 GitHub 加速站当作官方镜像，也不要关闭 TLS 或删除归档哈希校验。
 
-如果清华镜像超时或尚未同步某个版本，可直接复制下面的官方源命令重试；如果需要同时打包，在末尾追加 `-Build`：
+如果清华镜像超时、返回 HTTP 403（当前网络可能受访问限制）或尚未同步某个版本，可直接复制下面的官方源命令重试；如果需要同时打包，在末尾追加 `-Build`。pip 出现 `No matching distribution` 时，也要查看前面是否有 `403` / `Could not fetch URL`，不要仅凭最后一行认定不支持该 Python 版本：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -PipIndexUrl 'https://pypi.org/simple'

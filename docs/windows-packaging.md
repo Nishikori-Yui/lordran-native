@@ -122,8 +122,10 @@ installation route, not the download region. Pinned archive hashes, installer
 signature checks, and TLS verification remain enabled. No private game input
 or output is sent to a mirror.
 
-If the mirror times out or has not synced a version, retry with official PyPI
-(append `-Build` if needed):
+If the mirror times out, returns HTTP 403 (network access restrictions may apply),
+or has not synced a version, retry with official PyPI (append `-Build` if needed).
+For pip's `No matching distribution` error, check earlier messages for `403` or
+`Could not fetch URL` before assuming the Python version is unsupported:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -PipIndexUrl 'https://pypi.org/simple'

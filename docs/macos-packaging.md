@@ -53,8 +53,10 @@ Install Homebrew first using its [official instructions](https://brew.sh/) or
 consult [USTC's Homebrew help](https://mirrors.ustc.edu.cn/help/brew.git.html).
 Keep TLS and package integrity checks enabled.
 
-If a mirror is unreachable, behind upstream, or returns a hash mismatch, retry
-with Homebrew's defaults and official PyPI rather than disabling verification:
+If a mirror is unreachable, returns HTTP 403, is behind upstream, or returns a
+hash mismatch, retry with Homebrew's defaults and official PyPI rather than
+disabling verification. For pip's `No matching distribution`, check earlier
+`Could not fetch URL` messages: a blocked mirror can cause the same error.
 
 ```bash
 unset HOMEBREW_BOTTLE_DOMAIN HOMEBREW_API_DOMAIN

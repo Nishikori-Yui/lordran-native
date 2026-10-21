@@ -34,7 +34,7 @@ bash scripts/setup_macos_packaging.sh --target setup-only
 - 仅替换公开工具和依赖的下载源，不会把 NSP、密钥、缓存或生成的 IPA / App 发送给镜像站。
 - Homebrew 尚未安装时，先按 [Homebrew 官方说明](https://brew.sh/)安装；也可参考[中科大的 Homebrew 说明](https://mirrors.ustc.edu.cn/help/brew.git.html)。不要运行来源不明的“一键换源”脚本。
 
-镜像可能有同步延迟。如果遇到超时、缺少版本或哈希不匹配，不要关闭证书验证或修改校验值。在当前窗口执行下面整段，恢复 Homebrew 默认源、明确使用官方 PyPI，再重试：
+镜像可能有同步延迟，也可能对当前网络限制访问。如果遇到超时、HTTP 403、缺少版本或哈希不匹配，不要关闭证书验证或修改校验值。pip 的 `No matching distribution` 也可能由镜像访问失败引起，先检查前面是否有 `Could not fetch URL`。在当前窗口执行下面整段，恢复 Homebrew 默认源、明确使用官方 PyPI，再重试：
 
 ```bash
 unset HOMEBREW_BOTTLE_DOMAIN HOMEBREW_API_DOMAIN
