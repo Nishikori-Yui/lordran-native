@@ -267,6 +267,27 @@ Once the shell is downloaded, add `--shell $Shell` to the doctor check. The [sup
 
 The shell and source checkout must come from the same release. Before building, follow the [Windows packaging notes](docs/windows-packaging.md) to build the pinned SPIRV-Cross source and record its SHA-256 in `DM_SPIRV_CROSS_SHA256` (or pass `--spirv-cross-sha256`). The script checks the title and registered module builds, rewrites the game modules locally, and creates an unsigned IPA. It does not upload NSPs, keys, extracted files or the finished IPA. This no-Xcode route ships translated Metal source, so the iPhone compiles shaders on first launch; the first visit can take several minutes. The normal Mac route still compiles shaders ahead of time. The shell ZIP is build input, not an installable app; sideload and sign only the resulting IPA.
 
+### App Version And Build Identity
+
+Native iOS, Simulator, macOS app, and new shell builds share the same version
+resolver. At the exact `v0.2.0` tag, the displayed app version is `0.2.0`.
+The Apple build version is `1.2.0`: its first component is the tag's major
+version plus one because Apple requires a positive first build component.
+Prerelease/build suffixes (for example `v0.2.0-rc.1+build.7`) stay in the full
+source identity, not the numeric Apple fields. Arbitrary non-SemVer tags use
+display version `0.0.0` / build `1.0.0`, with the full tag still recorded.
+
+Development commits use `0.0.0` / `1.0.0` and `dev-<commit>`; the resolver never
+uses the nearest older tag. Modified code uses `dev-<commit>-dirty-<content-hash>`
+and the numeric development fallback. A source download without `.git` uses
+`dev-source-<content-hash>`, not a guessed release. Windows packaging retains
+the prebuilt shell's identity even without Git. Old shells keep their original
+versions and are identified by their source fingerprint rather than a guessed
+tag. The complete identity is stored in `dm/app-version.json`, included in iOS
+diagnostic exports and logged by the macOS app launcher. See the
+[Mac guide](docs/macos-packaging.md#app-version-metadata) and
+[Windows guide](docs/windows-packaging.md#app-version-metadata) for constraints.
+
 ### 4. Sideload the IPA
 
 Use your sideloading tool to sign and install the unsigned IPA. The app uses the game's name and icon from the NSP.

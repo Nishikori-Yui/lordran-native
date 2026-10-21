@@ -133,3 +133,35 @@ bash scripts/setup_macos_packaging.sh \
 
 如果配置或打包失败，可运行 `game/01004AB00A260000/tools-venv-mac/bin/python
 scripts/player_support.py doctor --route mac`，并按检查结果处理。更底层的手动构建步骤见[开发文档](development.md#build-by-hand-mac)。
+
+## App 版本元数据
+
+App 版本标识 Lordran Native，不是 `--package` 选择的 Nintendo 游戏更新版本。
+原生 iOS、Simulator、macOS App 和壳构建共用 `scripts/app_version.py`；
+`dm/ios/project.yml` 通过构建脚本接收数字版本，不再写死版本号。
+壳工作流会获取 tag/历史元数据，并检查所选 tag 确实指向 HEAD。
+
+- 准确的 `vMAJOR.MINOR.PATCH` 或 `MAJOR.MINOR.PATCH` tag 将
+  `CFBundleShortVersionString` 设为不带 `v` 的 `MAJOR.MINOR.PATCH`。
+- `CFBundleVersion` 使用 `(MAJOR + 1).MINOR.PATCH`，因此 `v0.2.0` 对应 `1.2.0`。
+  这是确定性的正主版本映射，不是 CI 运行计数。支持 tag 主版本 0-9998、次版本和补丁版本
+  0-99；超出范围的数字 tag 会报错，不会生成不符合 Apple 约束的版本号。
+- 预发布和构建后缀不进入 Apple 数字字段。`v0.2.0-rc.1+build.7` 的数字字段为
+  `0.2.0` 和 `1.2.0`；完整 tag 与完整 commit ID 保存在 `dm/app-version.json`。
+  不同预发布可能共享数字版本；此机制不负责 App Store 构建号分配。
+- 非 SemVer tag 保留完整身份，但数字字段回退到 `0.0.0` / `1.0.0`。无 tag 的 commit
+  和 Actions 分支运行也使用该数字回退，并以 `dev-<12 位 commit>` 标识，绝不沿用最近的旧 tag。
+  本地存在多个准确 tag 时必须通过 `GITHUB_REF=refs/tags/<tag>` 明确选择。
+- `dm/` 或 `scripts/` 有本地修改时，使用开发数字回退和
+  `dev-<commit>-dirty-<内容哈希>`，保留完整指纹及所选的基础 tag，不冒充干净 Release。
+- 没有 `.git` 的纯源码下载使用 `dev-source-<内容哈希>` 和开发数字回退。之前构建生成的版本
+  文件不参与解析；解压在其他 checkout 内的源码也不会继承外层 checkout 的 tag。
+  新壳 ZIP 文件名和嵌入元数据使用同一份源码身份。
+- Windows/预编译壳打包即使没有 Git，也保留壳内的身份和数字版本，并检查它们与壳 plist 一致；
+  manifest、源码及游戏档案检查保持不变。没有版本元数据的旧壳保留旧 plist 版本，以 manifest
+  源码指纹标记为旧壳，不会猜测当前 checkout 的 tag。
+
+元数据位于 iOS App 的 `dm/app-version.json` 和 Mac App 的
+`Contents/Resources/dm/app-version.json`。iOS 诊断导出包含完整源码身份；Mac App 启动器
+每次启动都会记录它。它们标识构建，但不能证明游戏兼容性、签名有效性，也不证明本地修改过的源码
+与干净 Release 一致。

@@ -198,6 +198,22 @@ $Shell = 'game/01004AB00A260000/LordranNative-shell-build-input-v0.2.0.zip' # Us
 
 壳和源码必须来自同一个 Release。构建前先按 [Windows 打包说明](docs/windows-packaging.zh-CN.md) 从指定源码构建 SPIRV-Cross，并将其 SHA-256 保存到 `DM_SPIRV_CROSS_SHA256`，或通过 `--spirv-cross-sha256` 传入。脚本会校验游戏标题及档案登记的模块构建号，在本机改写游戏模块并生成未签名 IPA。NSP、密钥、解包文件和生成的 IPA 都不会上传。此无 Xcode 流程会把着色器源码放进 IPA，首次启动时由 iPhone 编译；首次进入场景可能需要等待数分钟。Mac 的常规流程仍会预先编译着色器。壳 ZIP 只是打包输入，不是可安装 App；请对最终生成的 IPA 进行签名和侧载。
 
+### App 版本与构建身份
+
+原生 iOS、Simulator、macOS App 和新壳构建使用同一个版本解析器。准确位于 `v0.2.0`
+tag 时，显示版本为 `0.2.0`；Apple 构建版本为 `1.2.0`，首段是 tag 的主版本号加一，
+以满足 Apple 对构建版本首段必须为正数的要求。`v0.2.0-rc.1+build.7` 等预发布和构建后缀
+完整保存在源码身份中，不写入 Apple 数字版本字段。任意非 SemVer tag 使用显示版本
+`0.0.0` / 构建版本 `1.0.0`，仍保留完整 tag。
+
+开发 commit 使用 `0.0.0` / `1.0.0` 和 `dev-<commit>`，不会回退到最近的旧 tag。
+本地代码修改使用 `dev-<commit>-dirty-<内容哈希>` 和开发数字回退，不冒充干净 Release。
+没有 `.git` 的源码下载使用 `dev-source-<内容哈希>`，不会猜测 Release。Windows 打包即使
+没有 Git，也会保留预编译壳的版本身份。旧壳保留原版本，以源码指纹标识，不猜测 tag。
+完整身份存储在 `dm/app-version.json`，会进入 iOS 诊断导出和 macOS App 启动日志。
+字段限制见 [Mac 指南](docs/macos-packaging.zh-CN.md#app-版本元数据)和
+[Windows 指南](docs/windows-packaging.zh-CN.md#app-版本元数据)。
+
 ### 4. 侧载 IPA
 
 使用你的侧载工具签名并安装未签名 IPA。App 会采用 NSP 中的游戏名称和图标。
