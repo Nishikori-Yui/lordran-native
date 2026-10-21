@@ -114,7 +114,24 @@ foreach ($mode in @('winget-absent', 'winget-disabled', 'winget-fails', 'winget-
     $result = Initialize-PackagingPython @($python)
     Assert-True ($result -eq $python) 'Python initialization must return only its interpreter path'
     Assert-True ('--isolated' -in $script:pipArguments -and '--no-user' -in $script:pipArguments) 'pip must not install into user-site packages'
+    $indexPosition = [Array]::IndexOf($script:pipArguments, '--index-url')
+    Assert-True ($indexPosition -ge 0 -and $script:pipArguments[$indexPosition + 1] -eq 'https://pypi.org/simple') 'Default index must be explicit'
+    $null = Initialize-PackagingPython @($python) -IndexUrl 'https://pypi.tuna.tsinghua.edu.cn/simple'
+    Assert-True ($script:pipArguments[$indexPosition + 1] -eq 'https://pypi.tuna.tsinghua.edu.cn/simple') 'Selected mirror must reach isolated pip'
+    Assert-True ('--isolated' -in $script:pipArguments -and '--no-user' -in $script:pipArguments) 'Mirrors must not disable Python isolation'
 }
+
+# Exercise actual parameter binding as well as offline pip argument routing.
+$setupScript = Join-Path $PSScriptRoot '..\setup_windows_packaging.ps1'
+foreach ($index in @('https://pypi.org/simple', 'https://pypi.tuna.tsinghua.edu.cn/simple')) {
+    $null = & $setupScript -PipIndexUrl $index -Help
+}
+foreach ($index in @('http://example.invalid/simple', 'file:///tmp/index',
+        'relative/simple', 'https://user:test@example.invalid/simple',
+        'https://example.invalid/simple?token=test', 'https://example.invalid/simple#fragment')) {
+    Assert-Throws { & $setupScript -PipIndexUrl $index -Help } 'absolute HTTPS'
+}
+Assert-True ($ast.Extent.Text -match 'Initialize-PackagingPython \$pythonCommand -IndexUrl \$PipIndexUrl') 'Setup must forward the selected package index'
 
 & {
     $SkipInstall = $true

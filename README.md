@@ -33,6 +33,10 @@ environment without reading any game files:
 bash scripts/setup_macos_packaging.sh --target setup-only
 ```
 
+For networks in mainland China, the [Chinese Mac guide](docs/macos-packaging.zh-CN.md#配置构建环境)
+provides session-only USTC Homebrew and TUNA PyPI settings, their coverage limits,
+and commands to retry with official sources. The script does not choose mirrors by locale.
+
 To configure the environment and build an unsigned iOS IPA in one run:
 
 ```bash
@@ -208,6 +212,12 @@ From the repository root, run this in PowerShell:
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1
 ```
+
+Use `-PipIndexUrl 'https://pypi.tuna.tsinghua.edu.cn/simple'` to select TUNA PyPI
+for this run, or another approved HTTPS index. Windows setup keeps pip isolated,
+so `PIP_INDEX_URL` alone does not change its index. The default is official PyPI;
+public tool archives still use their existing official sources. See the
+[Windows guide](docs/windows-packaging.md#python-package-mirrors).
 
 winget and Microsoft Store are optional: the script reuses compatible tools,
 then uses winget or verified official portable downloads for missing ones.

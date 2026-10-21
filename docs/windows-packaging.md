@@ -101,6 +101,40 @@ At the end, setup prints the SPIRV-Cross executable, its SHA-256 file, and the
 exact Python interpreter path. Keep those values for the commands below. This
 automatic route does not require a separate Developer PowerShell window.
 
+### Python package mirrors
+
+Use an explicit HTTPS package index for this run only, without changing global
+pip configuration:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -PipIndexUrl 'https://pypi.tuna.tsinghua.edu.cn/simple'
+```
+
+Repeat `-PipIndexUrl` on subsequent setup/build invocations, including `-Build` or
+`-SkipInstall`. Setup keeps pip in isolated mode, so setting `PIP_INDEX_URL` alone
+does not work here. Without the option, the default is `https://pypi.org/simple`.
+URLs must use HTTPS and cannot contain credentials, a query, or a fragment.
+
+This selects the index for `lz4`, `capstone`, and `fonttools` only. It does not
+mirror Python itself, the pinned bootstrap pip wheel, portable tools, Visual
+Studio, NuGet, GitHub source, or shell ZIP downloads. `-NoWinget` changes the
+installation route, not the download region. Pinned archive hashes, installer
+signature checks, and TLS verification remain enabled. No private game input
+or output is sent to a mirror.
+
+If the mirror times out or has not synced a version, retry with official PyPI
+(append `-Build` if needed):
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -PipIndexUrl 'https://pypi.org/simple'
+```
+
+For manual pip commands below, append
+`--index-url https://pypi.tuna.tsinghua.edu.cn/simple` to each install command to
+use the same mirror; use `https://pypi.org/simple` to retry officially. Do not
+disable TLS checks or add `--trusted-host`. See [TUNA's PyPI help](https://mirrors.tuna.tsinghua.edu.cn/help/pypi/)
+and the [Chinese guide](windows-packaging.zh-CN.md#国内镜像的范围与官方源回退).
+
 ### Set up and build in one run
 
 The setup script can continue directly into packaging. First put the shell ZIP

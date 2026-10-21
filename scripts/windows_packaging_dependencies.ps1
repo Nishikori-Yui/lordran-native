@@ -194,7 +194,10 @@ function Ensure-PublicTool {
 }
 
 function Initialize-PackagingPython {
-    param([string[]]$Command)
+    param(
+        [string[]]$Command,
+        [string]$IndexUrl = 'https://pypi.org/simple'
+    )
     $portable = Get-PortableExecutable 'Python' $gameDir
     $executable = $Command[0]
     if ($executable -eq $portable) {
@@ -213,7 +216,8 @@ function Initialize-PackagingPython {
             Invoke-Checked $executable @($arguments + @('-m', 'venv', $venv)) | Out-Host
         }
     }
-    Invoke-Checked $python @('-m', 'pip', '--isolated', 'install', '--no-user', 'lz4', 'capstone', 'fonttools') | Out-Host
+    Invoke-Checked $python @('-m', 'pip', '--isolated', 'install', '--no-user',
+        '--index-url', $IndexUrl, 'lz4', 'capstone', 'fonttools') | Out-Host
     return $python
 }
 

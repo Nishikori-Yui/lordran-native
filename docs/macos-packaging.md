@@ -30,6 +30,45 @@ Open Terminal, change to the repository root, and run:
 bash scripts/setup_macos_packaging.sh --target setup-only
 ```
 
+### Optional mirrors for mainland China
+
+Before setup, use USTC for Homebrew's update repository, bottle downloads, and
+metadata API, and TUNA for Python packages. These variables affect the current
+terminal and its child processes only; they do not rewrite shell configuration
+or Git remotes. Run subsequent IPA/app build commands in the same terminal.
+
+```bash
+export HOMEBREW_BREW_GIT_REMOTE="https://mirrors.ustc.edu.cn/brew.git"
+export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles"
+export HOMEBREW_API_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles/api"
+export PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+bash scripts/setup_macos_packaging.sh --target setup-only
+```
+
+The script does not select mirrors by locale. These mirrors do not proxy every
+download: Xcode still comes from Apple, casks such as the .NET SDK and source
+archives may still use upstream URLs, and GitHub/NuGet downloads are unchanged.
+Only public dependencies are requested from mirrors, not game inputs or outputs.
+Install Homebrew first using its [official instructions](https://brew.sh/) or
+consult [USTC's Homebrew help](https://mirrors.ustc.edu.cn/help/brew.git.html).
+Keep TLS and package integrity checks enabled.
+
+If a mirror is unreachable, behind upstream, or returns a hash mismatch, retry
+with Homebrew's defaults and official PyPI rather than disabling verification:
+
+```bash
+unset HOMEBREW_BREW_GIT_REMOTE HOMEBREW_BOTTLE_DOMAIN HOMEBREW_API_DOMAIN
+export PIP_INDEX_URL="https://pypi.org/simple"
+bash scripts/setup_macos_packaging.sh --target setup-only
+```
+
+These commands do not change any mirror settings already saved in your shell
+configuration. See [USTC bottle help](https://mirrors.ustc.edu.cn/help/homebrew-bottles.html),
+[TUNA PyPI help](https://mirrors.tuna.tsinghua.edu.cn/help/pypi/), and the
+[Chinese guide](macos-packaging.zh-CN.md#镜像覆盖范围与官方源回退).
+
+### Setup results
+
 The script checks Xcode, installs missing Homebrew dependencies, creates a
 repository-local Python environment at
 `game/01004AB00A260000/tools-venv-mac`, installs `lz4`, `capstone`, and

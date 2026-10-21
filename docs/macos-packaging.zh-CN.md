@@ -16,11 +16,34 @@ NSP、密钥、构建输出和最终 App 都应保存在仓库中被 Git 忽略�
 
 ## 配置构建环境
 
-打开「终端」，进入仓库根目录并执行：
+打开「终端」，进入仓库根目录。中国大陆网络建议先在**当前终端窗口**设置中科大 Homebrew 镜像和清华 PyPI 镜像，再运行配置脚本；下面整段可以直接复制：
 
 ```bash
+export HOMEBREW_BREW_GIT_REMOTE="https://mirrors.ustc.edu.cn/brew.git"
+export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles"
+export HOMEBREW_API_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles/api"
+export PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
 bash scripts/setup_macos_packaging.sh --target setup-only
 ```
+
+这些设置也适用于同一窗口里后续的 `--target ipa`、`--target macos-app` 和手动 `brew` / pip 命令。它们不写入 shell 配置文件，也不修改 Homebrew 仓库的 Git remote；新开的终端不会继承本次设置。脚本不根据系统语言自动选择镜像。
+
+### 镜像覆盖范围与官方源回退
+
+- Homebrew 的更新仓库、软件包元数据和可用的预编译 bottle 使用中科大镜像；Python 包使用清华镜像。保留 HTTPS 和包管理器原有的完整性检查。
+- 镜像**不是所有下载的代理**。Xcode 仍从 Apple 获取；Homebrew cask（例如 .NET SDK）和源码包可能仍从上游获取。GitHub 仓库、Release 壳 ZIP、NuGet 等未在此处换源。
+- 仅替换公开工具和依赖的下载源，不会把 NSP、密钥、缓存或生成的 IPA / App 发送给镜像站。
+- Homebrew 尚未安装时，先按 [Homebrew 官方说明](https://brew.sh/)安装；也可参考[中科大的 Homebrew 说明](https://mirrors.ustc.edu.cn/help/brew.git.html)。不要运行来源不明的“一键换源”脚本。
+
+镜像可能有同步延迟。如果遇到超时、缺少版本或哈希不匹配，不要关闭证书验证或修改校验值。在当前窗口执行下面整段，恢复 Homebrew 默认源、明确使用官方 PyPI，再重试：
+
+```bash
+unset HOMEBREW_BREW_GIT_REMOTE HOMEBREW_BOTTLE_DOMAIN HOMEBREW_API_DOMAIN
+export PIP_INDEX_URL="https://pypi.org/simple"
+bash scripts/setup_macos_packaging.sh --target setup-only
+```
+
+如果你原本就在 shell 配置文件中设置了其他镜像，请另行核对自己的设置；上面的命令不会重写它们。镜像维护方说明：[清华 PyPI](https://mirrors.tuna.tsinghua.edu.cn/help/pypi/)、[中科大 Homebrew bottles](https://mirrors.ustc.edu.cn/help/homebrew-bottles.html)。
 
 脚本会检查 Xcode、通过 Homebrew 安装缺少的依赖，在仓库私有目录
 `game/01004AB00A260000/tools-venv-mac` 创建 Python 环境，安装 `lz4`、

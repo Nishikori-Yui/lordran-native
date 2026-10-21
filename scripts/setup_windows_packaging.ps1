@@ -2,6 +2,16 @@
 param(
     [string]$RepoRoot,
     [string]$ToolRoot = (Join-Path $env:USERPROFILE 'src'),
+    [ValidateScript({
+        $uri = $null
+        if (-not [Uri]::TryCreate($_, [UriKind]::Absolute, [ref]$uri) -or
+            $uri.Scheme -ne 'https' -or -not $uri.Host -or $uri.UserInfo -or
+            $uri.Query -or $uri.Fragment) {
+            throw '-PipIndexUrl must be an absolute HTTPS package index URL without credentials, query, or fragment.'
+        }
+        $true
+    })]
+    [string]$PipIndexUrl = 'https://pypi.org/simple',
     [string]$ZstdPath,
     [string]$NspDirectory,
     [string]$KeysFile,
@@ -44,6 +54,8 @@ Options:
   -KeepExtracted         Keep extracted game files after a successful build.
   -ReplaceOutput         Allow replacing the exact existing IPA named by -OutputPath.
   -NoWinget              Use official downloads instead of winget for missing tools.
+  -PipIndexUrl URL        HTTPS Python package index. Default: https://pypi.org/simple.
+                         Overrides the index for this run only; pip stays isolated.
   -SkipInstall           Reuse public tools without installing missing dependencies.
   -SkipVisualStudio      Do not install Visual Studio; reuse a working C++ compiler.
   -SkipSpirvCross        Reuse the pinned SPIRV-Cross checkout after verifying its saved hash.
@@ -473,7 +485,7 @@ $spirv = Ensure-SpirvCross -Root $ToolRoot
 
 Write-Step 'Creating the repository-local Python environment'
 New-Item -ItemType Directory -Force -Path $gameDir | Out-Null
-$python = Initialize-PackagingPython $pythonCommand
+$python = Initialize-PackagingPython $pythonCommand -IndexUrl $PipIndexUrl
 
 New-Item -ItemType Directory -Force -Path $buildWork | Out-Null
 $supportScript = Join-Path $RepoRoot 'scripts/player_support.py'
