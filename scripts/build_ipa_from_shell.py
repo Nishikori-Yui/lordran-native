@@ -100,6 +100,11 @@ def check_output_available(output, replace=False):
         raise FileExistsError(f"Output already exists; choose another path or pass --replace: {output}")
 
 
+def portable_shader_cas(repo):
+    # Keep digest and temporary filenames below Windows' legacy path limit.
+    return repo / "game" / "dmsh-cas"
+
+
 def main():
     args = parse_args()
     repo = Path(__file__).resolve().parents[1]
@@ -176,6 +181,7 @@ def main():
                          shaders / "pkg", env, logs, profile)
     cache = work / "build/cache/metal_shader_cache"
     portable_env = dict(env, XLATE=str(translator),
+                        DMSH_CAS=str(portable_shader_cas(repo)),
                         MAIN=str(game_dir / "ExeFS/main"),
                         # keep all translator scratch files inside the private work folder
                         WORK=str(work / "tmp"))

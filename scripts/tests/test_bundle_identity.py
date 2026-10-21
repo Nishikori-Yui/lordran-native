@@ -67,6 +67,13 @@ class BundleIdentityTests(unittest.TestCase):
         ])
         self.assertTrue(args.replace)
 
+    def test_portable_shader_cas_uses_a_shallow_private_path(self):
+        with tempfile.TemporaryDirectory() as folder:
+            repo = Path(folder) / "nested" / "checkout"
+            cache = shell.portable_shader_cas(repo)
+            self.assertEqual(cache, repo / "game" / "dmsh-cas")
+            self.assertTrue(cache.is_relative_to(repo / "game"))
+
     def test_native_packer_passes_resolved_identity_to_ios_build(self):
         with tempfile.TemporaryDirectory(dir=ROOT / "game") as folder:
             folder = Path(folder)
