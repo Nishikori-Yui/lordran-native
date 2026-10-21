@@ -20,7 +20,7 @@ class SourceFingerprintTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.repo = Path(self.temp.name)
+        self.repo = Path(self.temp.name).resolve()
         self.game = SimpleNamespace(dir=self.repo / "dm/games/01004AB00A260000")
         self.game.dir.mkdir(parents=True)
         for name in shell_common.SOURCE_PATHS:
