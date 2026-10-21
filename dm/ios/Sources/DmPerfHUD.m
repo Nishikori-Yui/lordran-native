@@ -1,4 +1,5 @@
 #import "DmPerfHUD.h"
+#import "DmGamepad.h"
 #import <QuartzCore/QuartzCore.h>
 #import <Metal/Metal.h>
 #include <mach/mach.h>
@@ -63,6 +64,19 @@
         [self.widthAnchor constraintLessThanOrEqualToConstant:320],
         [self.widthAnchor constraintLessThanOrEqualToAnchor:safe.widthAnchor constant:-28]
     ]];
+}
+
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
+    if (![super pointInside:point withEvent:event]) return NO;
+    DmGamepad *gamepad = self.gamepad;
+    // Keep the gamepad's transformed buttons and editor handles reachable beneath the HUD.
+    return !(gamepad && gamepad.window == self.window &&
+        [gamepad hasVisibleControlAtPoint:[self convertPoint:point toView:gamepad]]);
+}
+
+- (BOOL)accessibilityActivate {
+    [self toggleDetails];
+    return YES;
 }
 
 - (void)applyText:(NSString *)text toLabel:(UILabel *)label baseSize:(CGFloat)size weight:(UIFontWeight)weight color:(UIColor *)color {

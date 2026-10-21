@@ -16,6 +16,7 @@ FOUNDATION_EXPORT NSNotificationName const DmControllerChangedNotification;
 - (void)finishEditingControlsSaving:(BOOL)save;
 - (void)profileChanged;
 - (CGPoint)controlCenter:(NSInteger)control;
+- (BOOL)hasVisibleControlAtPoint:(CGPoint)point;
 - (CGPoint)controlResizeHandleCenter:(NSInteger)control;
 - (void)moveControl:(NSInteger)control toPoint:(CGPoint)point;
 - (void)setInputSuspended:(BOOL)suspended;

@@ -84,6 +84,7 @@ static CAMetalLayer *g_layer;
     if (self.controls.showsFPS && self.game) {
         if (self.performance) return;
         self.performance = [DmPerfHUD new];
+        self.performance.gamepad = self.pad;
         [self.performance attachToView:self.view belowSubview:self.controls];
     } else {
         [self.performance removeFromSuperview]; self.performance = nil;

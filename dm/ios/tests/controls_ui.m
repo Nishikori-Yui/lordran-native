@@ -150,10 +150,26 @@ static void performanceHUDFits(DmPerfHUD *hud, UIView *canvas) {
     assert(CGRectGetMaxY(hud.frame) <= CGRectGetMaxY(safe));
     assert(hud.frame.size.width <= 321 && !hud.hasAmbiguousLayout);
 }
-static void runPerformanceHUDTests(UIView *canvas, UIView *overlay) {
+static void performanceHUDTouches(DmPerfHUD *hud, DmGamepad *pad, UIView *canvas) {
+    const NSInteger controls[] = {5, 9};
+    const uint64_t expected[] = {DM_BTN_RS, DM_BTN_ZR};
+    for (unsigned i = 0; i < sizeof controls / sizeof controls[0]; i++) {
+        CGPoint center = [pad controlCenter:controls[i]];
+        CGPoint point = [pad convertPoint:center toView:canvas];
+        assert(CGRectContainsPoint(hud.bounds, [pad convertPoint:center toView:hud]));
+        UIView *hit = [canvas hitTest:point withEvent:nil];
+        assert(hit == pad);
+        TestTouch *touch = begin((DmGamepad *)hit, center);
+        assert(buttons == expected[i]); end(pad, touch); released();
+    }
+    CGPoint togglePoint = [hud convertPoint:CGPointMake(8, 8) toView:canvas];
+    assert([canvas hitTest:togglePoint withEvent:nil] == hud);
+}
+static void runPerformanceHUDTests(UIView *canvas, TestOverlay *overlay, DmGamepad *pad) {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     [defaults removeObjectForKey:@"DmPerfHUDCollapsed"];
     DmPerfHUD *hud = [DmPerfHUD new];
+    hud.gamepad = pad;
     [hud attachToView:canvas belowSubview:overlay];
     performanceHUDFits(hud, canvas);
     UILabel *headline = [hud valueForKey:@"headline"], *details = [hud valueForKey:@"details"];
@@ -173,6 +189,26 @@ static void runPerformanceHUDTests(UIView *canvas, UIView *overlay) {
     NSShadow *shadow = [headline.attributedText attribute:NSShadowAttributeName atIndex:0 effectiveRange:nil];
     assert(shadow && shadow.shadowBlurRadius == 2 && CGColorGetAlpha(((UIColor *)shadow.shadowColor).CGColor) > 0.9);
     assert([hud valueForKey:@"timer"] != nil);
+    performanceHUDTouches(hud, pad, canvas);
+    CGPoint rightStick = [pad controlCenter:5];
+    pad.hidden = YES;
+    assert([canvas hitTest:[pad convertPoint:rightStick toView:canvas] withEvent:nil] == hud);
+    pad.hidden = NO;
+    pad.profile.fullLayout = NO;
+    [pad setNeedsLayout]; [pad layoutIfNeeded];
+    assert([canvas hitTest:[pad convertPoint:rightStick toView:canvas] withEvent:nil] == hud);
+    pad.profile.fullLayout = YES;
+    [pad setNeedsLayout]; [pad layoutIfNeeded];
+    [overlay toggleMenu];
+    CGPoint togglePoint = [hud convertPoint:CGPointMake(8, 8) toView:canvas];
+    UIView *menuHit = [canvas hitTest:togglePoint withEvent:nil];
+    assert(menuHit == overlay || [menuHit isDescendantOfView:overlay]);
+    [overlay closeMenu];
+    [pad beginEditingControls]; [pad layoutIfNeeded];
+    CGPoint resizePoint = [pad controlResizeHandleCenter:5];
+    assert(CGRectContainsPoint(hud.bounds, [pad convertPoint:resizePoint toView:hud]));
+    assert([canvas hitTest:[pad convertPoint:resizePoint toView:canvas] withEvent:nil] == pad);
+    [pad finishEditingControlsSaving:NO]; [pad layoutIfNeeded];
     snapshot(canvas, @"controls-perf-hud.png");
     UIFont *defaultHeadlineFont = [headline.attributedText attribute:NSFontAttributeName atIndex:0 effectiveRange:nil];
     if (@available(iOS 17.0, *)) {
@@ -182,6 +218,7 @@ static void runPerformanceHUDTests(UIView *canvas, UIView *overlay) {
         assert(largeHeadlineFont.pointSize > defaultHeadlineFont.pointSize);
         assert([headline.text sizeWithAttributes:@{NSFontAttributeName: largeHeadlineFont}].width * headline.minimumScaleFactor <= headline.bounds.size.width);
         performanceHUDFits(hud, canvas);
+        performanceHUDTouches(hud, pad, canvas);
         snapshot(canvas, @"controls-perf-hud-accessibility.png");
         canvas.traitOverrides.preferredContentSizeCategory = UIContentSizeCategoryLarge;
     }
@@ -189,13 +226,16 @@ static void runPerformanceHUDTests(UIView *canvas, UIView *overlay) {
     overlay.frame = canvas.bounds;
     for (UIView *view in canvas.subviews) if ([view isKindOfClass:DmGamepad.class]) view.frame = canvas.bounds;
     [canvas setNeedsLayout]; [canvas layoutIfNeeded]; performanceHUDFits(hud, canvas);
-    [hud sendActionsForControlEvents:UIControlEventTouchUpInside];
+    performanceHUDTouches(hud, pad, canvas);
+    UIControl *hudTarget = (UIControl *)[canvas hitTest:[hud convertPoint:CGPointMake(8, 8) toView:canvas] withEvent:nil];
+    [hudTarget sendActionsForControlEvents:UIControlEventTouchUpInside];
     [canvas layoutIfNeeded]; performanceHUDFits(hud, canvas);
     assert(hud.bounds.size.height >= 44 && details.hidden && [defaults boolForKey:@"DmPerfHUDCollapsed"] &&
            [hud.accessibilityHint isEqualToString:@"Show performance details"] &&
            ![hud.accessibilityValue containsString:@"GPU"]);
     snapshot(canvas, @"controls-perf-hud-collapsed.png");
-    [hud sendActionsForControlEvents:UIControlEventTouchUpInside];
+    performanceHUDTouches(hud, pad, canvas);
+    assert([hud accessibilityActivate]);
     assert(!details.hidden && ![defaults boolForKey:@"DmPerfHUDCollapsed"]);
     performance.presented_frames = 0; performance.frame_ms = -1;
     [hud refresh];
@@ -246,7 +286,7 @@ static void runTests(UIViewController *presenter) {
     TestOverlay *overlay = [[TestOverlay alloc] initWithFrame:canvas.bounds];
     overlay.gamepad = pad; overlay.presenter = presenter; [canvas addSubview:overlay];
     [canvas layoutIfNeeded];
-    runPerformanceHUDTests(canvas, overlay);
+    runPerformanceHUDTests(canvas, overlay, pad);
     assert([overlay hitTest:CGPointMake(420, 150) withEvent:nil] == nil);
     UIButton *ball = [overlay valueForKey:@"ball"];
     assert(ball.bounds.size.width == 48 && CGRectGetMaxX(ball.frame) <= 800);
