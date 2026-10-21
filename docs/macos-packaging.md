@@ -34,8 +34,8 @@ bash scripts/setup_macos_packaging.sh --target setup-only
 
 Before setup, use USTC for Homebrew's update repository, bottle downloads, and
 metadata API, and TUNA for Python packages. These variables affect the current
-terminal and its child processes only; they do not rewrite shell configuration
-or Git remotes. Run subsequent IPA/app build commands in the same terminal.
+terminal and its child processes only; they do not rewrite shell configuration or the current project repository
+remote. Homebrew may update its own checkout remote while applying this setting. Run subsequent IPA/app build commands in the same terminal.
 
 ```bash
 export HOMEBREW_BREW_GIT_REMOTE="https://mirrors.ustc.edu.cn/brew.git"

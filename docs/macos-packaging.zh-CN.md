@@ -26,7 +26,7 @@ export PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
 bash scripts/setup_macos_packaging.sh --target setup-only
 ```
 
-这些设置也适用于同一窗口里后续的 `--target ipa`、`--target macos-app` 和手动 `brew` / pip 命令。它们不写入 shell 配置文件，也不修改 Homebrew 仓库的 Git remote；新开的终端不会继承本次设置。脚本不根据系统语言自动选择镜像。
+这些设置也适用于同一窗口里后续的 `--target ipa`、`--target macos-app` 和手动 `brew` / pip 命令。它们不写入 shell 配置文件，也不修改当前项目仓库的 remote；Homebrew 可能会在应用设置时更新自己的 checkout remote。新开的终端不会继承本次设置。脚本不根据系统语言自动选择镜像。
 
 ### 镜像覆盖范围与官方源回退
 
