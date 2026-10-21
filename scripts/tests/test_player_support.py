@@ -250,7 +250,7 @@ class SupportTests(unittest.TestCase):
         self.assertTrue(result["output"].endswith(".ipa"))
 
     def test_windows_build_delegates_to_existing_shell_packer(self):
-        args = self.build_args(shell=self.folder / "shell.zip", dry_run=False)
+        args = self.build_args(shell=self.folder / "shell.zip", dry_run=False, replace=True)
         with patch.object(support.sys, "platform", "win32"), \
                 patch.object(support, "doctor", return_value={"status": "environment-ready"}), \
                 patch.object(support, "verify", return_value={"status": "artifact-structure-verified"}) as verify, \
@@ -259,6 +259,7 @@ class SupportTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertTrue(command[1].endswith("build_ipa_from_shell.py"))
         self.assertIn("--shell", command)
+        self.assertIn("--replace", command)
         self.assertNotIn("shell", run.call_args.kwargs)
         self.assertEqual(result["status"], "build-complete")
         verify.assert_called_once()

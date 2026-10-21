@@ -308,6 +308,8 @@ def build(args):
         command += ["--shell", str(shell)]
         if args.spirv_cross_sha256:
             command += ["--spirv-cross-sha256", args.spirv_cross_sha256]
+        if args.replace:
+            command.append("--replace")
     if args.keep_extracted:
         command.append("--keep-extracted")
     if getattr(args, "bundle_id", None) is not None:
