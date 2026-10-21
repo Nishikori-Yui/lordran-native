@@ -47,6 +47,33 @@ class BundleIdentityTests(unittest.TestCase):
                 self.assertEqual(metadata["CFBundleIdentifier"], expected + ".guest")
         self.assertEqual(original["CFBundleIdentifier"], "org.example.custom-shell")
 
+    def test_shell_output_requires_explicit_replace_approval(self):
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "candidate.ipa"
+            shell.check_output_available(output)
+            output.write_bytes(b"previous IPA")
+            with self.assertRaisesRegex(FileExistsError, "--replace"):
+                shell.check_output_available(output)
+            shell.check_output_available(output, replace=True)
+            self.assertEqual(output.read_bytes(), b"previous IPA")
+
+            output.unlink()
+            output.mkdir()
+            with self.assertRaisesRegex(ValueError, "not a file"):
+                shell.check_output_available(output, replace=True)
+
+        args = shell.parse_args([
+            "game", "--keys", "prod.keys", "--shell", "shell.zip", "--replace"
+        ])
+        self.assertTrue(args.replace)
+
+    def test_portable_shader_cas_uses_a_shallow_private_path(self):
+        with tempfile.TemporaryDirectory() as folder:
+            repo = Path(folder) / "nested" / "checkout"
+            cache = shell.portable_shader_cas(repo)
+            self.assertEqual(cache, repo / "game" / "dmsh-cas")
+            self.assertTrue(cache.is_relative_to(repo / "game"))
+
     def test_native_packer_passes_resolved_identity_to_ios_build(self):
         with tempfile.TemporaryDirectory(dir=ROOT / "game") as folder:
             folder = Path(folder)

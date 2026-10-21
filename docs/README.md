@@ -10,6 +10,7 @@ version is [README.zh-CN.md](../README.zh-CN.md).
 |---|---|
 | Build and use the app | [Root README](../README.md) |
 | Prepare packaging or diagnostic feedback with an agent | [Player support skill](../skills/lordran-native-support/SKILL.md) and its linked guides |
+| Set up a Mac build, create an iOS IPA, or build a macOS app | [Mac setup and packaging](macos-packaging.md) |
 | Package on Windows without Xcode, or have an agent execute/debug that route | [Windows packaging and agent runbook](windows-packaging.md) |
 | Understand the architecture or build manually | [Development guide](development.md) |
 | Extract files and bring up the host | [Porting guide](porting/README.md) |
@@ -28,6 +29,7 @@ docs/
   README.md                       Documentation index
   agents/                         Task-specific agent guidance, loaded via AGENTS.md
   development.md                  Architecture, builds and regression checks
+  macos-packaging.md              Mac setup, iOS IPA and macOS app packaging
   windows-packaging.md             Experimental Windows shell-based packaging
   porting/
     README.md                     Porting and debugging overview

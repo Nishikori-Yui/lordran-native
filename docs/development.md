@@ -1,6 +1,6 @@
 # Lordran Native development
 
-The [README](../README.md) covers requirements, IPA packaging, controls and troubleshooting. This guide covers the Dark Souls: Remastered implementation (`01004AB00A260000`), packer options, manual Mac builds and regression checks. For extraction, bring-up failures and capture recipes, see the [porting and debugging guide](porting/README.md).
+The [README](../README.md) covers requirements, one-command Mac setup, IPA and macOS app packaging, controls and troubleshooting. This guide covers the Dark Souls: Remastered implementation (`01004AB00A260000`), packer options, manual Mac builds and regression checks. For first-time automated Mac setup, see [Mac setup and packaging](macos-packaging.md). For extraction, bring-up failures and capture recipes, see the [porting and debugging guide](porting/README.md).
 
 Player setup, unsigned artifact inspection, and issue-draft commands are
 collected in the [player support section](../README.md#local-support-commands)
@@ -34,6 +34,9 @@ python3 scripts/build_ipa_from_nsp.py game/01004AB00A260000 -k game/01004AB00A26
 
 # a diagnostic build with environment switches baked in (one KEY=VALUE per line)
 python3 scripts/build_ipa_from_nsp.py game/01004AB00A260000 -k game/01004AB00A260000/prod.keys --env-file game/01004AB00A260000/diag_env.txt
+
+# build a local macOS app bundle under game/ instead of an iOS IPA
+python3 scripts/build_ipa_from_nsp.py game/01004AB00A260000 -k game/01004AB00A260000/prod.keys --target macos-app -o game/01004AB00A260000/LordranNative.app
 ```
 
 In Spyder, open the script, fill in the settings at the top (`NSP_DIR`, `PROD_KEYS`, and optionally `PACKAGE`, `OUT_IPA`, `APP_NAME`, `BUNDLE_ID`), and press F5. Empty paths are asked for at run time.
@@ -41,7 +44,7 @@ In Spyder, open the script, fill in the settings at the top (`NSP_DIR`, `PROD_KE
 For the experimental shell-based Windows packager, Mac CI shell build and its
 release artifacts, see the [Windows packaging guide](windows-packaging.md).
 
-What the script does:
+For the standard unsigned iOS IPA, the script does:
 
 1. It finds the game profile from the title ID (the `[title ID]` in the file names, or the NSP's ticket; the update by its `[vN]` tag).
 2. It extracts the NSPs.
@@ -50,7 +53,15 @@ What the script does:
 5. It builds the iOS shader libraries.
 6. It calls `build_ipa.sh`.
 
-Everything it writes stays in the NSP folder: intermediate files and logs in `<id>_build/`, the IPA next to the NSPs. The extracted game files are deleted at the end unless you pass `--keep-extracted`. It exits with 0 when done and 1 on an error. The default app Bundle ID is `dev.nishikori.lordran-native`, read from the profile's `bundle_id`; `--app-name` / `--bundle-id` (or `APP_NAME` / `BUNDLE_ID` in Spyder) override the name and ID.
+With `--target macos-app`, it instead builds the native Mac host, compiles
+macOS Metal shader libraries, and assembles a local `.app` containing the
+rewritten modules, selected RomFS, shader resources, and fonts. Its writable
+saves, temporary files, and log live in the user's Application Support folder.
+The bundle contains private game data, stays under the ignored `game/`
+directory, and is unsigned. See the [Mac packaging guide](macos-packaging.md)
+for the setup script and launch details.
+
+For an iOS IPA build, intermediate files and logs stay in `<id>_build/` under the NSP folder, and the IPA is written next to the NSPs by default (or to `--out`). For a macOS `.app` build, the bundle is written to `--out` or `LordranNative.app` under `game/`; the launcher keeps saves, temporary files, and logs in `~/Library/Application Support/Lordran Native/`. Extracted game files are deleted after a successful build unless you pass `--keep-extracted`. The script exits with 0 when done and 1 on an error. The default app Bundle ID is `dev.nishikori.lordran-native`, read from the profile's `bundle_id`; `--app-name` / `--bundle-id` (or `APP_NAME` / `BUNDLE_ID` in Spyder) override the name and ID.
 
 The CI shell uses the same profile identity. Shell injection inherits the
 matching shell's Bundle ID unless `--bundle-id` is supplied; the generated

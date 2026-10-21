@@ -27,7 +27,87 @@ Windows 打包流程不需要 Xcode，可以生成未签名 iOS IPA：
 产物保留 30 天。如果 tag 已经有 GitHub Release，工作流还会将 ZIP 上传到
 该 Release。
 
-## 1. 安装工具
+## 快速配置（推荐）
+
+仓库提供了面向首次使用者的 `scripts/setup_windows_packaging.ps1`。它会优先复用兼容的已有工具，只安装缺少的依赖；如果系统中没有 `zstd.exe`，还会下载官方 zstd 命令行工具；随后构建指定版本的 SPIRV-Cross、创建仓库内的 Python 环境并执行只读环境检查。它不会下载或打开 NSP、`prod.keys` 或其他私人游戏数据。
+
+在仓库根目录的普通 PowerShell 中执行下面这一条命令。中国大陆网络的示例使用清华 PyPI 镜像安装 Python 依赖。它只对本次调用临时绕过执行策略，不会永久修改用户或系统策略：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -PipIndexUrl 'https://pypi.tuna.tsinghua.edu.cn/simple'
+```
+
+**不需要先安装 winget，也不需要 Microsoft Store。** 系统中有 `winget` 时，脚本会尝试用它安装缺少的工具；没有时自动改用官方便携下载，winget 安装失败也会转用该路径。如果想明确跳过 winget，可以直接复制这一条：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -NoWinget -PipIndexUrl 'https://pypi.tuna.tsinghua.edu.cn/simple'
+```
+
+不使用 winget 时，各项依赖的处理方式如下：
+
+| 依赖 | 缺少兼容版本时，脚本会怎么做 |
+| --- | --- |
+| Git | 解压 Git for Windows 官方 MinGit 2.56.0.2。 |
+| Python | 解压官方 Python 3.12.10 到 `game/01004AB00A260000/tools-python/`，从通过校验的 wheel 安装 pip，不依赖 Windows Installer 服务。 |
+| .NET | 解压官方 .NET SDK 10.0.402 ZIP，不修改系统 SDK 安装。 |
+| CMake / Ninja | 解压官方 CMake 3.31.12 和 Ninja 1.12.1 ZIP。 |
+| C++ 编译器 | 复用 Visual Studio 2022；或探测已有 Clang/MinGW，只有编译、链接、运行 x64 测试程序都成功才采用。没有可用编译器时，启动微软官方 Visual Studio 2022 Build Tools 安装程序。 |
+| zstd | 复用已有 `zstd.exe`，或解压固定的官方 1.5.7 归档。 |
+
+公开归档会在解压前检查固定的 SHA-256/SHA-512；Visual Studio 安装程序会在运行前检查有效的微软 Authenticode 签名。便携公共工具和下载缓存默认放在 `$HOME\src` 下，可用 `-ToolRoot` 修改；Python 和 Python 依赖保存在仓库被忽略的 `game/` 目录内。脚本只修改本次进程的 `PATH`，不永久修改用户或系统设置。重新打开 PowerShell 后再次运行脚本，也会找到并复用自己安装的工具。
+
+缺少的工具、Python 依赖和 SPIRV-Cross 源码需要联网下载。便携工具不需要管理员权限；如果没有可用 C++ 编译器，Visual Studio 安装可能弹出 UAC 管理员确认，或要求重启。按提示重启 Windows 后，再运行同一条命令即可。脚本不会绕过管理员权限或组织策略。自动下载面向 x64 Windows，不支持 Windows on ARM。
+
+脚本结束时会打印 SPIRV-Cross 程序路径、SHA-256 文件和实际使用的 Python 解释器路径，请保留这些信息供后续打包使用。自动流程不需要另外打开 Developer PowerShell。
+
+### 国内镜像的范围与官方源回退
+
+`-PipIndexUrl` 只为本次运行指定 Python 包索引，不修改全局 pip 配置；脚本仍使用隔离模式和仓库内的 Python 环境。**仅设置 `$env:PIP_INDEX_URL` 对此自动脚本不生效**，请保留命令中的参数。后续每次运行都需要带上它；不传时默认使用官方 `https://pypi.org/simple`。
+
+目前镜像覆盖 `lz4`、`capstone` 和 `fonttools` 的安装，不覆盖 Python 运行时、引导 pip 的固定 wheel、Git / CMake / Ninja / zstd / .NET 归档、Visual Studio 安装、NuGet、SPIRV-Cross GitHub 源码或 Release 壳 ZIP。这些仍使用原有官方渠道；`-NoWinget` 只是切换安装方式，不是国内镜像开关。不要把任意 GitHub 加速站当作官方镜像，也不要关闭 TLS 或删除归档哈希校验。
+
+如果清华镜像超时、返回 HTTP 403（当前网络可能受访问限制）或尚未同步某个版本，可直接复制下面的官方源命令重试；如果需要同时打包，在末尾追加 `-Build`。pip 出现 `No matching distribution` 时，也要查看前面是否有 `403` / `Could not fetch URL`，不要仅凭最后一行认定不支持该 Python 版本：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -PipIndexUrl 'https://pypi.org/simple'
+```
+
+镜像只接收公开依赖下载请求，不会接收 NSP、密钥或最终 IPA。清华镜像的维护方说明见 [PyPI 使用帮助](https://mirrors.tuna.tsinghua.edu.cn/help/pypi/)。如果组织要求特定软件源，请改用获准的 HTTPS 索引地址。
+
+### 一次完成环境配置和打包
+
+配置脚本也可以在依赖安装后直接继续打包。先把与当前源码 checkout 来自同一 Release 的公开壳 ZIP、你自己的游戏本体 NSP、`v196608` 更新 NSP 和 `prod.keys` 放入 `game/01004AB00A260000/`。壳和源码版本必须一致；脚本不会下载壳、游戏文件或密钥。然后执行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -PipIndexUrl 'https://pypi.tuna.tsinghua.edu.cn/simple' -Build
+```
+
+脚本会安装/检查公开工具链、准备 Python 环境、执行壳兼容性预检、构建未签名 IPA 并检查生成的归档。默认使用上面的输入路径，IPA 会以带时间戳的名称输出到 NSP 同目录。若之前已经完成环境配置，可加上 `-SkipInstall -SkipSpirvCross`，脚本会验证已保存的 SPIRV-Cross 程序及其指纹后直接构建：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -PipIndexUrl 'https://pypi.tuna.tsinghua.edu.cn/simple' -SkipInstall -SkipSpirvCross -Build
+```
+
+可用 `-NspDirectory`、`-KeysFile`、`-ShellZip` 和 `-OutputPath` 指定其他输入/输出路径（都必须位于当前 checkout 的 `game/` 目录下），用 `-Package v0` 选择打包版本，或用 `-KeepExtracted` 保留解包数据。若目标 IPA 已存在，脚本默认拒绝覆盖；确认后再加 `-ReplaceOutput`。
+
+脚本可以安全地再次运行。常用选项如下：
+
+```powershell
+# 复用已有工具，不安装缺少的公共工具；Python 依赖仍可能需要下载。
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -PipIndexUrl 'https://pypi.tuna.tsinghua.edu.cn/simple' -SkipInstall
+
+# 使用已有的 zstd.exe，不下载脚本提供的便携版本。
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -PipIndexUrl 'https://pypi.tuna.tsinghua.edu.cn/simple' -ZstdPath 'C:\tools\zstd.exe'
+
+# 将不符合要求的 SPIRV-Cross 目录移到备份目录，再重新克隆指定源码。
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -PipIndexUrl 'https://pypi.tuna.tsinghua.edu.cn/simple' -Force
+```
+
+`-SkipVisualStudio` 禁止安装编译器；重新构建 SPIRV-Cross 时，已有 C++ 编译器仍须通过探测。`-SkipSpirvCross` 会验证并复用指定源码 checkout 中的程序和已保存指纹；仅重新打包时，不再要求编译器、CMake 或 Ninja。这些选项都不会跳过壳与源码匹配检查或着色器指纹校验。
+
+配置完成后，继续执行第 5 节的壳下载和私有输入文件步骤。下面的手动安装流程是可选备用方案；缺少 winget 并不需要改用手动安装。
+
+## 1. 手动安装工具（备用流程）
 
 如果还没有 Git、Python 或 .NET，可以先在普通 PowerShell 中执行下面的可选命令。执行完后关闭并重新打开 PowerShell：
 
@@ -50,9 +130,11 @@ winget install --id Ninja-build.Ninja -e
 
 准备一台 64 位 Windows 10/11 电脑，并安装：
 
-- Python 3.12 或更高版本，可通过 `py -3` 调用。
+- x64 Python 3.12 或更高版本。手动命令使用 `py -3`；自动脚本也支持
+  `python.exe` 或自己下载的便携 Python。
 - .NET 10 SDK。
-- Git、CMake、Ninja 和 MSVC C++ 工具链。最方便的方式是使用
+- Git、CMake、Ninja 和可用的 C++ 工具链。手动示例采用 MSVC，自动脚本也可复用
+  通过探测的 Clang/MinGW。使用 MSVC 时，最方便的方式是打开
   **Visual Studio Developer PowerShell**，因为它会自动设置 CMake 所需的编译器环境。
 - 加入 `PATH` 的 `zstd.exe`，用于解压着色器容器。
 - 构建前至少约 15 GB 可用空间；如果要保留解包文件和缓存，建议至少保留 30 GB。
@@ -215,20 +297,36 @@ Get-ChildItem -LiteralPath $GameDir -File |
     Select-Object Name, Length, LastWriteTime
 ```
 
-创建仓库内的虚拟环境并安装 Python 依赖：
+如果已经运行自动配置脚本，使用它打印的 Python 路径，跳过下面的创建环境步骤。
+重新打开 PowerShell 后，可以这样恢复解释器路径：
+
+```powershell
+$Python = Join-Path $GameDir 'tools-venv\Scripts\python.exe'
+if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
+    $Python = Join-Path $GameDir 'tools-python\python.exe'
+}
+if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
+    throw 'Packaging Python is missing. Run the setup script first.'
+}
+& $Python --version
+```
+
+如果采用手动安装的常规 Python，则创建仓库内的虚拟环境并安装依赖：
 
 ```powershell
 $PythonVenv = Join-Path $GameDir 'tools-venv'
 py -3 -m venv $PythonVenv
 $Python = (Resolve-Path (Join-Path $PythonVenv 'Scripts\python.exe')).Path
 
-& $Python -m pip install --upgrade pip
-& $Python -m pip install lz4 capstone fonttools
+& $Python -m pip install --index-url 'https://pypi.tuna.tsinghua.edu.cn/simple' --upgrade pip
+& $Python -m pip install --index-url 'https://pypi.tuna.tsinghua.edu.cn/simple' lz4 capstone fonttools
 & $Python --version
 ```
 
 本次会话中始终使用 `& $Python ...` 调用脚本。这样不需要修改 PowerShell 执行策略，
 也不会把依赖安装到其他 Python 环境。
+
+上面两条手动 pip 命令如需切回官方源，将 `--index-url` 后的地址换为 `https://pypi.org/simple`。不需要执行全局 `pip config set` 或添加 `--trusted-host`。
 
 ## 6. 执行构建前检查
 
@@ -343,6 +441,11 @@ Windows 无法运行 Apple Metal 编译器，因此 IPA 内包含 MSL 源码，i
 
 ## 故障排查
 
+- **没有 winget 或 Microsoft Store：** 直接运行配置脚本，或加上 `-NoWinget`，
+  不需要先安装 App Installer。官方下载失败时，检查报错中的网址、网络/代理策略及
+  剩余磁盘空间，不要关闭哈希校验。
+- **没有管理员权限：** 已有 Clang/MinGW 通过编译器探测后，就无需安装 Visual Studio；
+  否则需要请管理员安装 C++ 工作负载。`-NoWinget` 不会绕过 UAC。
 - **找不到命令：** 重新打开与构建相同类型的 PowerShell，重新执行第 1 节检查。
   构建 SPIRV-Cross 时不要混用普通 PowerShell 和 Developer PowerShell。
 - **壳与源码不匹配：** 下载与当前 checkout 相同 Release tag 的壳，不要把 `main`
@@ -350,8 +453,8 @@ Windows 无法运行 Apple Metal 编译器，因此 IPA 内包含 MSL 源码，i
 - **SPIRV-Cross 指纹不符：** 检查 `Get-Command spirv-cross`、`$SpirvCrossExe`
   和 `$env:DM_SPIRV_CROSS_SHA256`。必要时重新构建指定提交，不要修改仓库着色器锁。
 - **缺少 Python 依赖：** 确认 `$Python` 位于
-  `game/01004AB00A260000/tools-venv` 内，再执行
-  `& $Python -m pip install lz4 capstone fonttools`。
+  `game/01004AB00A260000/tools-venv` 或 `tools-python` 内，再执行
+  `& $Python -m pip install --index-url 'https://pypi.tuna.tsinghua.edu.cn/simple' lz4 capstone fonttools`；镜像不可用时将索引地址换为 `https://pypi.org/simple`。
 - **标题号或构建号不受支持：** 使用标题 `01004AB00A260000` 和
   `dm/games/01004AB00A260000/game.tsv` 中登记的版本，不要绕过检查。
 - **解包失败：** 查看 `$BuildWork` 下的 `nx_extract_build.log` 和

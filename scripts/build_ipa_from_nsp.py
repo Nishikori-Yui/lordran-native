@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# Unsigned Dark Souls: Remastered IPA straight from the NSPs: identify the
+# Unsigned Dark Souls: Remastered IPA or macOS app straight from the NSPs: identify the
 # title → extract (nx_extract) → rewrite the code modules (patch_nso.py) →
 # split and validate shaders (shader_split.py) → iOS shader libraries
-# (dmsh_build.py) → build_ipa.sh. This repository intentionally has no survey
+# (dmsh_build.py) → package for iOS or macOS. This repository has no survey
 # or fallback path for other titles.
 # Two ways to run it: open this file in Spyder and press F5 (it uses the values under "Settings" below; an empty NSP folder or prod.keys is asked for at run time);
 #   or in a terminal: python3 scripts/build_ipa_from_nsp.py <NSP folder> -k <prod.keys> [options] (values given on the command line override "Settings", -h lists every option;
@@ -10,7 +10,7 @@
 # Uses only three things: this repository, a folder holding the Dark Souls NSPs
 # (the base game plus the updates listed in the profile's shader_versions), and
 # prod.keys.
-# Every intermediate file is under <id>_build/ in the NSP folder: extract/ (the extracted game files, deleted after the IPA is built by default), tools/, patched_*/, shader/ (shader package and caches, kept so the next build is fast), logs/ (each step's full output), tmp/, ipa/. The finished IPA also goes to the NSP folder by default.
+# Every intermediate file is under <id>_build/ in the NSP folder: extract/ (deleted after a successful build by default), tools/, patched_*/, shader/ (shader package and caches, kept so the next build is fast), logs/, tmp/, and IPA build staging. The IPA or macOS .app is written to the selected output path.
 # The shader translator is the in-repo dm/gfx/tools/dmsh_xlate_bin (the build whose fingerprints match dmsh_chain.lock; a rebuilt dll has different fingerprints and dmsh_build refuses it).
 # The Python running this file needs lz4, capstone and fonttools; also needed:
 # Xcode, xcodegen, .NET SDK 10, zstd and spirv-cross. Key values are never
@@ -19,13 +19,14 @@ import collections, ctypes, getpass, os, re, shutil, struct, subprocess, sys, te
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'dm/tools'))
 import cheat_patches
+import macos_app
 
 # ---- Settings ----
 NSP_DIR = ''                            # folder holding the NSPs (empty = ask at run time)
 PROD_KEYS = ''                          # path of prod.keys (empty = ask at run time)
 PACKAGE = ''                            # version packed into the IPA (empty = the profile's package)
-OUT_IPA = ''                            # output IPA (empty = <the profile's ipa> in the NSP folder)
-APP_NAME = ''                           # app name on the home screen (empty = the game name in the base NSP)
+OUT_IPA = ''                            # output IPA / app bundle (empty = profile default in the NSP folder)
+APP_NAME = ''                           # app display name (empty = the game name in the base NSP)
 BUNDLE_ID = ''                          # the app's bundle ID (empty = the profile's bundle_id)
 KEEP_EXTRACTED = False                  # keep the extracted game files after the IPA is built (saves extraction next time; as big as the game files)
 DM_ENV_FILE = ''                        # optional: environment switches for a diagnostic build (one KEY=VALUE per line)
@@ -263,16 +264,21 @@ def split_shaders(py, repo, roms, mains, pkg, env, logs, g):
     swap_in(tmp / 'pkg', pkg); rmtree(tmp)
 
 
-def build_shaders(py, repo, sh, xlate, env, logs, g):
-    say('出 iOS 着色器库 | building the iOS shader libraries')
+def build_shaders(py, repo, sh, xlate, env, logs, g, target='ipa'):
+    say('出 Metal 着色器库 | building the Metal shader libraries')
     ios = sh / 'ios'
-    run([py, repo / 'dm/gfx/tools/dmsh_build.py', sh / 'pkg', sh / 'cache'], logs / 'dmsh_build.log', env=dict(env, XLATE=str(xlate), IOSOUT=str(ios)), quiet=True)
+    shader_env = dict(env, XLATE=str(xlate))
+    shader_env.pop('IOSOUT', None)
+    if target == 'ipa':
+        shader_env['IOSOUT'] = str(ios)
+    run([py, repo / 'dm/gfx/tools/dmsh_build.py', sh / 'pkg', sh / 'cache'], logs / 'dmsh_build.log', env=shader_env, quiet=True)
     chain = re.search(r'#define DMSH_CHAIN "(.*)"', g.table('dmsh_chain.h').read_text()).group(1)
-    libs = ios / f'b-{chain}'
+    libs = (ios if target == 'ipa' else sh / 'cache') / f'b-{chain}'
     n = sum(1 for _ in libs.glob('*_b.metallib')) if libs.is_dir() else 0
-    if n == 0: raise BuildError(f'没出 iOS 着色器库 | no iOS shader libraries in {libs}')
-    say(f'iOS 着色器库 {n} 个 | {n} iOS shader libraries ({libs})')
-    return ios
+    if n == 0: raise BuildError(f'没出 {target} Metal 着色器库 | no {target} Metal shader libraries in {libs}')
+    platform = 'iOS' if target == 'ipa' else 'macOS'
+    say(f'{platform} Metal 着色器库 {n} 个 | {n} {platform} Metal shader libraries ({libs})')
+    return ios if target == 'ipa' else sh / 'cache'
 
 
 def find_repo(here):   # this file lives in the repository's scripts/; walk up to the level that has dm/tools/nx_extract/Program.cs
@@ -285,12 +291,15 @@ def parse_args(argv):
     """Command-line options: when given they override "Settings"; F5 in Spyder passes none, so "Settings" is used as is. -h shows the help"""
     import argparse
     ap = argparse.ArgumentParser(prog='build_ipa_from_nsp.py',
-        description='从黑暗之魂：重制版 NSP 出未签名 IPA | Build an unsigned Dark Souls: Remastered IPA from NSPs.',
+        description='从黑暗之魂：重制版 NSP 构建未签名 IPA 或 macOS App | Build an unsigned iOS IPA or macOS app from Dark Souls: Remastered NSPs.',
         epilog='例 | example: python3 scripts/build_ipa_from_nsp.py ~/nsp/DarkSoulsRemastered -k ~/keys/prod.keys')
     ap.add_argument('nsp_dir', nargs='?', help='放一个游戏 NSP 的文件夹（缺省 = 设置 NSP_DIR，再没有就问）| folder holding one game\'s NSPs (default: the NSP_DIR setting, else asked)')
     ap.add_argument('-k', '--keys', help='prod.keys 的路径（缺省 = 设置 PROD_KEYS，再没有就问）| path of prod.keys (default: the PROD_KEYS setting, else asked)')
-    ap.add_argument('-p', '--package', help='打进 IPA 的版本，如 v327680 / v0（缺省 = 游戏档案的 package）| version packed into the IPA, e.g. v327680 / v0 (default: the profile\'s package)')
-    ap.add_argument('-o', '--out', help='输出的 IPA（缺省 = NSP 文件夹里的 <档案的 ipa>）| output IPA (default: <the profile\'s ipa> in the NSP folder)')
+    ap.add_argument('-p', '--package', help='要打包的游戏版本，如 v196608 / v0（缺省 = 游戏档案的 package）| game version to package, e.g. v196608 / v0 (default: the profile\'s package)')
+    ap.add_argument('--target', choices=('ipa', 'macos-app'), default='ipa',
+                    help='构建未签名 iOS IPA（默认）或 macOS .app | build an unsigned iOS IPA (default) or macOS .app')
+    ap.add_argument('-o', '--out', help='输出的 IPA 或 .app（缺省 = NSP 文件夹里的默认产物）| output IPA or .app (default: standard artifact in the NSP folder)')
+    ap.add_argument('--replace', action='store_true', help='替换已存在的 macOS .app | replace an existing macOS .app')
     ap.add_argument('--app-name', help='主屏上的 App 名（缺省 = 基础版 NSP 里的游戏名）| app name on the home screen (default: the game name in the base NSP)')
     ap.add_argument('--bundle-id', help="App bundle ID (default: the profile's bundle_id)")
     ap.add_argument('--keep-extracted', action='store_true', help='出包后保留解出的游戏文件 | keep the extracted game files after the IPA is built')
@@ -324,8 +333,21 @@ def main(args=None):
     pkg_ver = args.package or PACKAGE or g.get('package')
     if pkg_ver not in builds: raise BuildError(f"打进 IPA 的版本（-p / PACKAGE）只能是游戏档案登记的 | the version to pack (-p / PACKAGE) must be one the game profile registers: {', '.join(builds)}")
     versions = need + ([pkg_ver] if pkg_ver not in need else [])
-    out_ipa = Path(os.path.expanduser(args.out or OUT_IPA)).resolve() if (args.out or OUT_IPA) else nsp_dir / g.get('ipa')   # by default in the NSP folder, next to the NSPs and <id>_build/
-    say(f'输出 IPA | output IPA: {out_ipa}')
+    if args.replace and args.target != 'macos-app':
+        raise BuildError('--replace is available only with --target macos-app')
+    if args.target == 'macos-app' and (args.env_file or DM_ENV_FILE):
+        raise BuildError('--env-file is currently supported only for iOS IPA builds')
+    default_output = nsp_dir / (g.get('ipa') if args.target == 'ipa' else 'LordranNative.app')
+    output = Path(os.path.expanduser(args.out or OUT_IPA)).resolve() if (args.out or OUT_IPA) else default_output
+    if args.target == 'macos-app':
+        private = (repo / 'game').resolve()
+        if output.suffix != '.app':
+            raise BuildError('macOS app output must use the .app suffix')
+        if not output.is_relative_to(private):
+            raise BuildError("Keep the macOS app and its included game data under this checkout's game/ directory")
+        if output.exists() and not args.replace:
+            raise BuildError(f'Output already exists; choose another path or pass --replace: {output}')
+    say(f'输出产物 | output artifact: {output}')
     work = nsp_dir / f'{g.id}_build'
     say(f'工作目录（解出的游戏文件在 extract/，出包后删掉，--keep-extracted 保留）| work folder (extracted game files in extract/, deleted after the IPA is built unless --keep-extracted): {work}')
     xlate = repo / 'dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate'
@@ -356,23 +378,44 @@ def main(args=None):
     rewrite(py, repo, game / 'ExeFS', patched, env, logs, g, args)
     sh = work / 'shader'
     split_shaders(py, repo, [dirs[v] / 'RomFS' for v in need], [dirs[v] / 'ExeFS/main' for v in need], sh / 'pkg', env, logs, g)
-    ios = build_shaders(py, repo, sh, xlate, env, logs, g)
+    shader_cache = build_shaders(py, repo, sh, xlate, env, logs, g, target=args.target)
 
-    if free_gb(out_ipa.parent) < 5: raise BuildError(f'{out_ipa.parent} 所在的卷剩余不足 5 GB | less than 5 GB free on the volume of {out_ipa.parent}')
-    say(f'出 IPA | building the IPA → {out_ipa}')
-    ipa_env = dict(env, GAME=g.id, W=str(work / 'ipa'), PATCHED=str(patched), ROMFS=str(game / 'RomFS'), MSL_IOS=str(ios), FONT_PY=py, DM_DISPLAY_NAME=app_name, DM_BUNDLE_ID=bundle_id)
-    # app icon: the game icon nx_extract saved from the control data (English, icon.jpg); the packed version's first, then the base game's
-    icon = next((d / 'icon.jpg' for d in (game, base) if (d / 'icon.jpg').exists()), None)
-    if icon: ipa_env['DM_ICON'] = str(icon); say(f'App 图标 | app icon: {icon}')
-    else: say('【红】解包里没有游戏图标（之前的解包没存图标：删掉 extract/ 重跑即可补上）；主屏图标会是空白 | no game icon in the extraction (an older extraction did not save it: delete extract/ and run again); the home-screen icon will be blank')
-    env_file = args.env_file or DM_ENV_FILE
-    if env_file: ipa_env['DM_ENV_FILE'] = str(Path(os.path.expanduser(env_file)).resolve())
-    run(['bash', repo / 'dm/ios/tools/build_ipa.sh', out_ipa], logs / 'build_ipa.log', env=ipa_env)
-    if not out_ipa.is_file(): raise BuildError(f'没出 IPA | no IPA at {out_ipa}')
+    if free_gb(output.parent) < 5: raise BuildError(f'{output.parent} 所在的卷剩余不足 5 GB | less than 5 GB free on the volume of {output.parent}')
+    if args.target == 'ipa':
+        say(f'出 IPA | building the IPA → {output}')
+        ipa_env = dict(env, GAME=g.id, W=str(work / 'ipa'), PATCHED=str(patched), ROMFS=str(game / 'RomFS'), MSL_IOS=str(shader_cache), FONT_PY=py, DM_DISPLAY_NAME=app_name, DM_BUNDLE_ID=bundle_id)
+        # Prefer the game icon extracted from the packaged version, then the base game.
+        icon = next((d / 'icon.jpg' for d in (game, base) if (d / 'icon.jpg').exists()), None)
+        if icon: ipa_env['DM_ICON'] = str(icon); say(f'App 图标 | app icon: {icon}')
+        else: say('【红】解包里没有游戏图标（之前的解包没存图标：删掉 extract/ 重跑即可补上）；主屏图标会是空白 | no game icon in the extraction (an older extraction did not save the icon: delete extract/ and run again); the home-screen icon will be blank')
+        env_file = args.env_file or DM_ENV_FILE
+        if env_file: ipa_env['DM_ENV_FILE'] = str(Path(os.path.expanduser(env_file)).resolve())
+        run(['bash', repo / 'dm/ios/tools/build_ipa.sh', output], logs / 'build_ipa.log', env=ipa_env)
+        if not output.is_file(): raise BuildError(f'没出 IPA | no IPA at {output}')
+    else:
+        say('编译 Mac 宿主 | building the macOS host')
+        run(['make', '-C', repo / 'dm/host', f'GAME={g.id}', 'dmhost'],
+            logs / 'build_macos_host.log', env=env)
+        font_dir = work / 'build/font'
+        font_dir.mkdir(parents=True, exist_ok=True)
+        run([py, repo / 'dm/tools/make_ext_font.py', font_dir / 'nintendo_ext.ttf'],
+            logs / 'make_ext_font.log', env=env)
+        standard_font = Path('/System/Library/Fonts/Supplemental/Arial Unicode.ttf')
+        if not standard_font.is_file():
+            raise BuildError(f'Mac shared font is missing: {standard_font}')
+        shutil.copy2(standard_font, font_dir / 'standard.ttf')
+        say(f'组装 macOS App | assembling the macOS app → {output}')
+        macos_app.build_app(
+            repo=repo, profile=g, host=repo / 'dm/host/dmhost', patched=patched,
+            romfs=game / 'RomFS', shader_cache=sh / 'cache', fonts=font_dir,
+            output=output, app_name=app_name, bundle_id=bundle_id,
+            replace=args.replace)
+        if not output.is_dir(): raise BuildError(f'没出 macOS App | no macOS app at {output}')
     rmtree(work / 'tmp')
     if not (args.keep_extracted or KEEP_EXTRACTED):
         say(f'删掉解出的游戏文件 | deleting the extracted game files: {ex}'); rmtree(ex)
-    say(f'完成 | done: {out_ipa}（{out_ipa.stat().st_size / 2**30:.1f} GB）')
+    size = sum(p.stat().st_size for p in output.rglob('*') if p.is_file()) if output.is_dir() else output.stat().st_size
+    say(f'完成 | done: {output}（{size / 2**30:.1f} GB）')
 
 
 def cli(argv):   # returns the exit code: 0 done, 1 error, 130 interrupted

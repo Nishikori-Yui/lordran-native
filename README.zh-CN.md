@@ -12,11 +12,48 @@ Lordran Native 将 **《黑暗之魂：重制版》**（`01004AB00A260000`）原
 
 ## 准备条件
 
-- 一台 Apple 芯片 Mac，安装 Xcode 和 Homebrew，用于构建移植版本。
+- 常规构建路径：一台安装 Xcode 和 Homebrew 的 Apple 芯片 Mac。
+  [Mac 打包说明](docs/macos-packaging.zh-CN.md)提供了一键环境配置脚本，可生成
+  iOS IPA 或本地 macOS App。
+- Windows 实验性壳构建路径：64 位 Windows 10/11，以及包含自动化
+  PowerShell 配置脚本的[Windows 打包说明](docs/windows-packaging.zh-CN.md)。
 - 游戏本体 NSP 和 **1.0.3 更新**（`v196608`）。即使打包本体版本，也需要这两份文件来提取着色器。
 - 你自己的 `prod.keys`。
 - 如需使用 IPA：运行 **iOS / iPadOS 26 或更高版本**的 iPhone 或 iPad，以及侧载工具。
 - 空闲磁盘空间约为 NSP 总大小的两倍，再加 10 GB。
+
+## Mac 一键配置
+
+请先从 Mac App Store 安装 Xcode，并安装 Homebrew。在仓库根目录执行下面整段，即可安装其余公开工具并检查环境；该命令不会读取游戏文件。中国大陆网络建议使用以下中科大 Homebrew 和清华 PyPI 镜像设置，仅影响当前终端及其子进程：
+
+```bash
+export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles"
+export HOMEBREW_API_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles/api"
+export PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+bash scripts/setup_macos_packaging.sh --target setup-only
+```
+
+请在同一终端中执行后续命令。镜像不覆盖 Xcode、部分 cask 和上游源码下载；镜像同步延迟或不可用时，按 [Mac 打包说明](docs/macos-packaging.zh-CN.md#镜像覆盖范围与官方源回退)切回官方源，不要关闭校验。
+
+如需一次完成配置并构建未签名 iOS IPA：
+
+```bash
+bash scripts/setup_macos_packaging.sh \
+  --target ipa \
+  --nsp-dir "$PWD/game/01004AB00A260000" \
+  --keys "$PWD/game/01004AB00A260000/prod.keys"
+```
+
+如需改为构建本地 macOS `.app`，更换目标参数：
+
+```bash
+bash scripts/setup_macos_packaging.sh \
+  --target macos-app \
+  --nsp-dir "$PWD/game/01004AB00A260000" \
+  --keys "$PWD/game/01004AB00A260000/prod.keys"
+```
+
+构建前请把自己的游戏本体 NSP、`v196608` 更新 NSP 和 `prod.keys` 放入私有目录 `game/01004AB00A260000/`。脚本只安装公开工具，不会下载游戏文件或密钥。Xcode 要求、产物位置、存档、覆盖已有 App 和故障排查见 [Mac 打包说明](docs/macos-packaging.zh-CN.md)。
 
 ## 让 agent 帮你完成
 
@@ -78,6 +115,9 @@ Doctor 会报告缺少的依赖、提取工具项目所需的 SDK、profile/chai
 ```sh
 git clone https://github.com/Nishikori-Yui/lordran-native.git lordran-native
 cd lordran-native
+export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles"
+export HOMEBREW_API_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles/api"
+export PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
 brew install xcodegen zstd spirv-cross
 brew install --cask dotnet-sdk
 python3 -m venv game/01004AB00A260000/tools-venv
@@ -118,14 +158,32 @@ python3 scripts/build_ipa_from_nsp.py game/01004AB00A260000 -k game/01004AB00A26
 
 ### 在 Windows 上打包（无需 Xcode）
 
-Actions 仅在手动运行或推送 tag 时构建不含游戏内容的未签名 iOS「壳」。从对应的工作流产物或 Release 下载 `LordranNative-shell-build-input.zip`。Windows 需要 Python 3.12 或更高版本、.NET 10 SDK、`zstd`，以及 `spirv-cross` 1.4.357.0（Vulkan SDK 标签 `vulkan-sdk-1.4.357.0`）。把游戏本体 NSP、1.0.3 更新 NSP 和你自己的 `prod.keys` 放在 `game/` 下的私有文件夹中（该目录已被 Git 忽略）。
+这是一条不需要 Xcode 的实验性路径。完整步骤见[Windows 打包说明](docs/windows-packaging.zh-CN.md)，其中提供了一个 PowerShell 脚本：它会安装公开构建依赖、构建指定版本的 SPIRV-Cross、创建仓库内的 Python 环境并执行只读环境检查。脚本不会下载 NSP、密钥或其他私人游戏数据。
 
-先按 [Windows 文档](docs/windows-packaging.zh-CN.md#环境要求)配置指定版本的 SPIRV-Cross，记录 `$spirvCrossSha256`。建议在仓库的私有 `game/` 目录中创建虚拟环境，并直接调用其解释器；这样无需修改 PowerShell 执行策略，也不会把依赖装到其他 Python 环境：
+在仓库根目录的 PowerShell 中直接执行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -PipIndexUrl 'https://pypi.tuna.tsinghua.edu.cn/simple'
+```
+
+这里显式选择清华 PyPI 镜像，仅用于 Python 依赖，不会修改全局 pip 设置。Windows 脚本使用 pip 隔离模式，不能只设置 `PIP_INDEX_URL`。其他工具仍从原有官方渠道下载；官方源重试命令和覆盖范围见 [Windows 镜像说明](docs/windows-packaging.zh-CN.md#国内镜像的范围与官方源回退)。
+
+不需要先安装 winget 或 Microsoft Store：脚本优先复用兼容工具，只为缺少的依赖使用 winget 或通过校验的官方便携下载；加上 `-NoWinget` 可明确使用官方下载。已有 Clang/MinGW 编译器通过探测后也可复用；只有没有可用 C++ 编译器时才需要 Visual Studio 安装程序，此时可能请求管理员确认。公开工具和 SPIRV-Cross 需要联网下载。运行结束后会打印后续打包所需的程序路径和 SHA-256。然后从同一个 Release 下载匹配的壳 ZIP，并把游戏本体 NSP、1.0.3 更新 NSP 和自己的 `prod.keys` 放入私有的 `game/01004AB00A260000/` 目录（该目录已被 Git 忽略）。
+
+准备好这 4 个输入文件后，也可以在一次运行中完成依赖配置和 IPA 构建：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -PipIndexUrl 'https://pypi.tuna.tsinghua.edu.cn/simple' -Build
+```
+
+如果已经完成环境配置，加上 `-SkipInstall -SkipSpirvCross -Build` 即可重新检查已保存的工具链并打包，无需重复安装。脚本会校验生成的 IPA；签名和侧载仍由你自行完成。
+
+如果不使用上面的自动配置脚本、而是按照 [Windows 文档](docs/windows-packaging.zh-CN.md#2-环境要求)的备用流程操作，请先配置指定版本的 SPIRV-Cross 并记录 `$spirvCrossSha256`。建议在仓库的私有 `game/` 目录中创建虚拟环境，并直接调用其解释器；这样无需修改 PowerShell 执行策略，也不会把依赖装到其他 Python 环境：
 
 ```powershell
 py -3 -m venv game/01004AB00A260000/tools-venv
 $python = (Resolve-Path game/01004AB00A260000/tools-venv/Scripts/python.exe).Path
-& $python -m pip install lz4 capstone fonttools
+& $python -m pip install --index-url 'https://pypi.tuna.tsinghua.edu.cn/simple' lz4 capstone fonttools
 & $python scripts/player_support.py doctor --route shell
 & $python scripts/build_ipa_from_shell.py game/01004AB00A260000 `
   --keys game/01004AB00A260000/prod.keys `

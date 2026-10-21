@@ -12,11 +12,54 @@ You need your own game NSPs and `prod.keys`. The repository contains no game fil
 
 ## Requirements
 
-- An Apple silicon Mac with Xcode and Homebrew to build the port.
+- For the standard build route: an Apple silicon Mac with Xcode and Homebrew.
+  The [Mac packaging guide](docs/macos-packaging.md) includes a setup script
+  for building an iOS IPA or a local macOS app.
+- For the experimental Windows shell route: 64-bit Windows 10/11 and the
+  [Windows packaging guide](docs/windows-packaging.md), which includes an
+  automated PowerShell setup script.
 - The base game NSP and the **1.0.3 update** (`v196608`). Both are required for shader extraction, even when packing the base version.
 - Your own `prod.keys`.
 - For the IPA: an iPhone or iPad running **iOS / iPadOS 26 or later**, and a sideloading tool.
 - Free disk space of roughly twice the total NSP size plus 10 GB.
+
+## One-command Mac setup
+
+Install Xcode from the Mac App Store and Homebrew first. From the repository
+root, this command installs the remaining public tools and checks the
+environment without reading any game files:
+
+```bash
+bash scripts/setup_macos_packaging.sh --target setup-only
+```
+
+For networks in mainland China, the [Chinese Mac guide](docs/macos-packaging.zh-CN.md#配置构建环境)
+provides session-only USTC Homebrew and TUNA PyPI settings, their coverage limits,
+and commands to retry with official sources. The script does not choose mirrors by locale.
+
+To configure the environment and build an unsigned iOS IPA in one run:
+
+```bash
+bash scripts/setup_macos_packaging.sh \
+  --target ipa \
+  --nsp-dir "$PWD/game/01004AB00A260000" \
+  --keys "$PWD/game/01004AB00A260000/prod.keys"
+```
+
+To build a local macOS `.app` instead, change the target:
+
+```bash
+bash scripts/setup_macos_packaging.sh \
+  --target macos-app \
+  --nsp-dir "$PWD/game/01004AB00A260000" \
+  --keys "$PWD/game/01004AB00A260000/prod.keys"
+```
+
+Put your own base-game NSP, `v196608` update NSP, and `prod.keys` under the
+private `game/01004AB00A260000/` folder before building. The script installs
+public tools only; it never downloads game files or keys. See the
+[Mac packaging guide](docs/macos-packaging.md) for Xcode requirements, output
+locations, savedata, replacement, and troubleshooting.
 
 ## Let an agent help
 
@@ -157,9 +200,48 @@ For an experimental Apple silicon iOS Simulator build, follow the [Simulator bui
 
 ### Build on Windows without Xcode
 
-GitHub Actions builds an unsigned, game-free iOS shell when run manually or when a tag is pushed. Download `LordranNative-shell-build-input.zip` from the matching workflow run or release, then on Windows install Python 3.12+, the .NET 10 SDK, `zstd`, and `spirv-cross` 1.4.357.0 (Vulkan SDK tag `vulkan-sdk-1.4.357.0`). Put the base game NSP, the 1.0.3 update NSP, and your own `prod.keys` in a private folder under `game/` (that folder is ignored by Git).
+This is an experimental route for users who do not have access to Xcode. The
+[Windows packaging guide](docs/windows-packaging.md) is the complete runbook.
+It includes a PowerShell script that installs the public build dependencies,
+builds the pinned SPIRV-Cross tool, creates the repository-local Python
+environment, and runs the read-only preflight check. It never downloads NSPs,
+keys, or other private game data.
 
-First follow the pinned SPIRV-Cross setup in the [Windows guide](docs/windows-packaging.md#requirements), which records `$spirvCrossSha256`. Create a private Python environment, then use its interpreter for the preflight and build. This avoids changing PowerShell's activation policy or installing dependencies into another Python environment:
+From the repository root, run this in PowerShell:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1
+```
+
+Use `-PipIndexUrl 'https://pypi.tuna.tsinghua.edu.cn/simple'` to select TUNA PyPI
+for this run, or another approved HTTPS index. Windows setup keeps pip isolated,
+so `PIP_INDEX_URL` alone does not change its index. The default is official PyPI;
+public tool archives still use their existing official sources. See the
+[Windows guide](docs/windows-packaging.md#python-package-mirrors).
+
+winget and Microsoft Store are optional: the script reuses compatible tools,
+then uses winget or verified official portable downloads for missing ones.
+Add `-NoWinget` to use official downloads explicitly. A working Clang/MinGW
+compiler can be reused; only machines without a usable C++ compiler need the
+Visual Studio installer, which may request administrator approval. Public
+downloads and SPIRV-Cross require an Internet connection. The script also
+prints the exact path and SHA-256 needed by the later packaging command. After
+it finishes, download the matching shell ZIP from the same release, then put
+the base game NSP, the 1.0.3 update NSP, and your own `prod.keys` in the
+private `game/01004AB00A260000/` directory (that directory is ignored by Git).
+
+To install dependencies and build the unsigned IPA in one run after placing all
+four inputs above, use `-Build`:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_packaging.ps1 -Build
+```
+
+If setup has already completed, add `-SkipInstall -SkipSpirvCross -Build` to
+recheck the saved toolchain and build without reinstalling it. The script
+verifies the resulting IPA; signing and sideloading remain your steps.
+
+If you are following the manual fallback in the [Windows guide](docs/windows-packaging.md#2-requirements) instead of the setup script, first build the pinned SPIRV-Cross executable and record `$spirvCrossSha256`. Create a private Python environment, then use its interpreter for the preflight and build. This avoids changing PowerShell's activation policy or installing dependencies into another Python environment:
 
 ```powershell
 py -3 -m venv game/01004AB00A260000/tools-venv

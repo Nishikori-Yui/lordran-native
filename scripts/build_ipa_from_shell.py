@@ -73,7 +73,7 @@ def application_info(info, profile, name, bundle_id=None):
     return dict(info, CFBundleDisplayName=name, CFBundleIdentifier=identity)
 
 
-def main():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("nsp_dir", type=Path, help="Folder containing the base and update NSP")
     parser.add_argument("-k", "--keys", required=True, type=Path, help="Path to your prod.keys")
@@ -83,10 +83,30 @@ def main():
                              "(default: DM_SPIRV_CROSS_SHA256)")
     parser.add_argument("-p", "--package", help="Profile package version (default: v196608)")
     parser.add_argument("-o", "--out", type=Path, help="Output IPA path")
+    parser.add_argument("--replace", action="store_true",
+                        help="Allow replacing the exact existing output IPA")
     parser.add_argument("--bundle-id", help="Override app identity (default: retain the matching shell's Bundle ID)")
     parser.add_argument("--keep-extracted", action="store_true")
     cheat_patches.add_arguments(parser)
-    args = parser.parse_args()
+    return parser.parse_args(argv)
+
+
+def check_output_available(output, replace=False):
+    if not output.exists():
+        return
+    if not output.is_file():
+        raise ValueError(f"Output exists but is not a file: {output}")
+    if not replace:
+        raise FileExistsError(f"Output already exists; choose another path or pass --replace: {output}")
+
+
+def portable_shader_cas(repo):
+    # Keep digest and temporary filenames below Windows' legacy path limit.
+    return repo / "game" / "dmsh-cas"
+
+
+def main():
+    args = parse_args()
     repo = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(repo / "dm/games"))
     sys.path.insert(0, str(repo / "dm/tools"))
@@ -99,9 +119,10 @@ def main():
     private = (repo / "game").resolve()
     output = args.out.resolve() if args.out else nsp_dir / profile.get("ipa")
     if not nsp_dir.is_dir() or not keys.is_file() or not shell.is_file():
-        parser.error("NSP folder, prod.keys, or shell file does not exist")
+        raise ValueError("NSP folder, prod.keys, or shell file does not exist")
     if any(not path.is_relative_to(private) for path in (nsp_dir, keys, shell, output)):
-        parser.error("NSP folder, keys, shell, and output IPA must remain under this repository's game/ directory")
+        raise ValueError("NSP folder, keys, shell, and output IPA must remain under this repository's game/ directory")
+    check_output_available(output, args.replace)
     info, shell_manifest, shell_files = validate_shell(shell, repo, profile)
     # Reject an incomplete toolchain before scanning or extracting private inputs.
     dotnet = check_tools(args.spirv_cross_sha256)
@@ -111,7 +132,7 @@ def main():
         raise ValueError(f"Unsupported title ID: {app:016X}")
     package = args.package or profile.get("package")
     if package not in profile.builds():
-        parser.error("--package must be a build registered in the Dark Souls profile")
+        raise ValueError("--package must be a build registered in the Dark Souls profile")
     versions = profile.words("shader_versions")
     versions = versions + ([package] if package not in versions else [])
     picks = source.pick_nsps(family, versions)
@@ -160,6 +181,7 @@ def main():
                          shaders / "pkg", env, logs, profile)
     cache = work / "build/cache/metal_shader_cache"
     portable_env = dict(env, XLATE=str(translator),
+                        DMSH_CAS=str(portable_shader_cas(repo)),
                         MAIN=str(game_dir / "ExeFS/main"),
                         # keep all translator scratch files inside the private work folder
                         WORK=str(work / "tmp"))
