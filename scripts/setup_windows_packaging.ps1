@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path,
+    [string]$RepoRoot,
     [string]$ToolRoot = (Join-Path $env:USERPROFILE 'src'),
     [string]$ZstdPath,
     [string]$NspDirectory,
@@ -19,6 +19,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
+    $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+}
 . (Join-Path $PSScriptRoot 'windows_packaging_common.ps1')
 
 if ($Help) {
