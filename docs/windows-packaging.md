@@ -285,7 +285,6 @@ Set-Location 'C:\src\lordran-native'
 $Repo = (Get-Location).Path
 $GameDir = Join-Path $Repo 'game\01004AB00A260000'
 $Keys = Join-Path $GameDir 'prod.keys'
-$Shell = Join-Path $GameDir 'LordranNative-shell-build-input.zip'
 $Output = Join-Path $GameDir 'LordranNative-Windows.ipa'
 $BuildWork = Join-Path $GameDir '01004AB00A260000_shell_build'
 
@@ -382,10 +381,26 @@ fingerprints.
 ### Download the shell ZIP
 
 On GitHub, open the **Releases** page for the same tag checked out above and
-download `LordranNative-shell-build-input.zip`. If the release does not contain
-it, open the repository's **Actions** tab, select **Build unsigned iOS shell**,
-open a successful run for the same tag, and download the artifact named
-`LordranNative-shell-build-input`.
+download its shell ZIP. New builds use
+`LordranNative-shell-build-input-<exact-tag>.zip`, for example
+`LordranNative-shell-build-input-v0.2.0.zip` (a naming example, not a release
+availability claim). Development builds use
+`LordranNative-shell-build-input-dev-<12-character-commit>.zip` instead.
+Tags containing filename-unsafe characters are sanitized and get a short hash;
+ordinary tags such as `v0.2.0` are preserved exactly. Keep the downloaded name.
+
+If the release does not contain a shell, open the repository's **Actions** tab,
+select **Build unsigned iOS shell**, and open a successful run for the same tag
+or development commit. New artifact names match the ZIP basename without
+`.zip`. Extract the artifact download to obtain the shell ZIP inside it.
+Historical releases, including `v0.1.0`, keep
+`LordranNative-shell-build-input.zip` and the old
+`LordranNative-shell-build-input` artifact name; those assets are not renamed.
+
+Local `scripts/build_shell.py --work game/<work-directory>` builds use the same
+names: an exact tag at HEAD, otherwise `dev-<commit>`. Multiple tags at HEAD
+require an explicit `--out` or tag ref in `GITHUB_REF`. A non-tag Actions run
+always uses the development name, even if that commit also has a tag.
 
 Do not use a shell from a different tag. A mismatch is one of the most common
 causes of a failed build.
@@ -393,6 +408,22 @@ causes of a failed build.
 Copy the shell ZIP, the two NSPs, and your own `prod.keys` into `$GameDir`.
 The exact NSP filenames do not matter, but the directory must contain one
 supported base version and its `v196608` update.
+
+Select the shell after downloading it. The setup script's `-Build` option uses
+the same discovery: exactly one versioned or legacy shell ZIP is accepted.
+Multiple candidates fail rather than choosing the newest or preferring a
+versioned name. Set `$Shell` explicitly (or pass `-ShellZip` to setup) when
+keeping multiple versions. Discovery and filenames never bypass manifest,
+source, shader-chain, or title validation.
+
+```powershell
+$ShellName = Read-Host 'Enter the exact downloaded shell ZIP filename'
+$Shell = Join-Path $GameDir $ShellName
+```
+
+This explicit selection also works with historical source checkouts that do not
+have the new discovery helper. For the `v0.1.0` example above, enter
+`LordranNative-shell-build-input.zip`.
 
 Check that the private inputs exist:
 

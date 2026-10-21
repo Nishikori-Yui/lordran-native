@@ -230,6 +230,14 @@ it finishes, download the matching shell ZIP from the same release, then put
 the base game NSP, the 1.0.3 update NSP, and your own `prod.keys` in the
 private `game/01004AB00A260000/` directory (that directory is ignored by Git).
 
+New shell filenames include the exact release tag, for example
+`LordranNative-shell-build-input-v0.2.0.zip`, or `dev-<12-character-commit>`
+for development builds. This is a naming example, not a recommendation to use
+an unreleased tag. Keep the downloaded filename. `-Build` discovers a single
+versioned or legacy shell ZIP in that directory; if more than one exists, pass
+`-ShellZip <matching-file>` explicitly. Historical releases keep their original
+unversioned assets. Filenames do not replace the source/manifest checks.
+
 To install dependencies and build the unsigned IPA in one run after placing all
 four inputs above, use `-Build`:
 
@@ -248,13 +256,14 @@ py -3 -m venv game/01004AB00A260000/tools-venv
 $python = (Resolve-Path game/01004AB00A260000/tools-venv/Scripts/python.exe).Path
 & $python -m pip install lz4 capstone fonttools
 & $python scripts/player_support.py doctor --route shell
+$Shell = 'game/01004AB00A260000/LordranNative-shell-build-input-v0.2.0.zip' # Use your downloaded filename.
 & $python scripts/build_ipa_from_shell.py game/01004AB00A260000 `
   --keys game/01004AB00A260000/prod.keys `
-  --shell game/01004AB00A260000/LordranNative-shell-build-input.zip `
+  --shell $Shell `
   --spirv-cross-sha256 $spirvCrossSha256
 ```
 
-Once the shell is downloaded, add `--shell game/01004AB00A260000/LordranNative-shell-build-input.zip` to the doctor check. The [support build command](#local-support-commands) can preview a build with `--dry-run` and structurally verify its output.
+Once the shell is downloaded, add `--shell $Shell` to the doctor check. The [support build command](#local-support-commands) can preview a build with `--dry-run` and structurally verify its output.
 
 The shell and source checkout must come from the same release. Before building, follow the [Windows packaging notes](docs/windows-packaging.md) to build the pinned SPIRV-Cross source and record its SHA-256 in `DM_SPIRV_CROSS_SHA256` (or pass `--spirv-cross-sha256`). The script checks the title and registered module builds, rewrites the game modules locally, and creates an unsigned IPA. It does not upload NSPs, keys, extracted files or the finished IPA. This no-Xcode route ships translated Metal source, so the iPhone compiles shaders on first launch; the first visit can take several minutes. The normal Mac route still compiles shaders ahead of time. The shell ZIP is build input, not an installable app; sideload and sign only the resulting IPA.
 

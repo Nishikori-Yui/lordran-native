@@ -170,6 +170,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_
 
 不需要先安装 winget 或 Microsoft Store：脚本优先复用兼容工具，只为缺少的依赖使用 winget 或通过校验的官方便携下载；加上 `-NoWinget` 可明确使用官方下载。已有 Clang/MinGW 编译器通过探测后也可复用；只有没有可用 C++ 编译器时才需要 Visual Studio 安装程序，此时可能请求管理员确认。公开工具和 SPIRV-Cross 需要联网下载。运行结束后会打印后续打包所需的程序路径和 SHA-256。然后从同一个 Release 下载匹配的壳 ZIP，并把游戏本体 NSP、1.0.3 更新 NSP 和自己的 `prod.keys` 放入私有的 `game/01004AB00A260000/` 目录（该目录已被 Git 忽略）。
 
+新的壳文件名包含准确的 Release tag，例如 `LordranNative-shell-build-input-v0.2.0.zip`；开发构建则使用 `dev-<12 位 commit>`。这里只是命名示例，并非建议使用尚未发布的 tag。保留下载时的文件名。`-Build` 会在上述目录中查找唯一的新版或旧版壳 ZIP；如果存在多个候选文件，必须用 `-ShellZip <匹配的文件>` 明确选择。历史 Release 的无版本资产保持不变，文件名也不能代替源码与 manifest 兼容性检查。
+
 准备好这 4 个输入文件后，也可以在一次运行中完成依赖配置和 IPA 构建：
 
 ```powershell
@@ -185,13 +187,14 @@ py -3 -m venv game/01004AB00A260000/tools-venv
 $python = (Resolve-Path game/01004AB00A260000/tools-venv/Scripts/python.exe).Path
 & $python -m pip install --index-url 'https://pypi.tuna.tsinghua.edu.cn/simple' lz4 capstone fonttools
 & $python scripts/player_support.py doctor --route shell
+$Shell = 'game/01004AB00A260000/LordranNative-shell-build-input-v0.2.0.zip' # Use your downloaded filename.
 & $python scripts/build_ipa_from_shell.py game/01004AB00A260000 `
   --keys game/01004AB00A260000/prod.keys `
-  --shell game/01004AB00A260000/LordranNative-shell-build-input.zip `
+  --shell $Shell `
   --spirv-cross-sha256 $spirvCrossSha256
 ```
 
-下载空壳后，用同一解释器运行 `scripts/player_support.py doctor --route shell --shell <匹配的壳.zip>`。也可以先用 `scripts/player_support.py build ... --dry-run` 预览，再执行构建；使用 `verify <IPA> --full-crc` 检查归档。命令选项和校验边界见上方「本地辅助命令」及 [Windows 打包说明](docs/windows-packaging.zh-CN.md)。
+下载空壳后，用同一解释器运行 `scripts/player_support.py doctor --route shell --shell $Shell`。也可以先用 `scripts/player_support.py build ... --dry-run` 预览，再执行构建；使用 `verify <IPA> --full-crc` 检查归档。命令选项和校验边界见上方「本地辅助命令」及 [Windows 打包说明](docs/windows-packaging.zh-CN.md)。
 
 壳和源码必须来自同一个 Release。构建前先按 [Windows 打包说明](docs/windows-packaging.zh-CN.md) 从指定源码构建 SPIRV-Cross，并将其 SHA-256 保存到 `DM_SPIRV_CROSS_SHA256`，或通过 `--spirv-cross-sha256` 传入。脚本会校验游戏标题及档案登记的模块构建号，在本机改写游戏模块并生成未签名 IPA。NSP、密钥、解包文件和生成的 IPA 都不会上传。此无 Xcode 流程会把着色器源码放进 IPA，首次启动时由 iPhone 编译；首次进入场景可能需要等待数分钟。Mac 的常规流程仍会预先编译着色器。壳 ZIP 只是打包输入，不是可安装 App；请对最终生成的 IPA 进行签名和侧载。
 

@@ -184,7 +184,6 @@ Set-Location 'C:\src\lordran-native'
 $Repo = (Get-Location).Path
 $GameDir = Join-Path $Repo 'game\01004AB00A260000'
 $Keys = Join-Path $GameDir 'prod.keys'
-$Shell = Join-Path $GameDir 'LordranNative-shell-build-input.zip'
 $Output = Join-Path $GameDir 'LordranNative-Windows.ipa'
 $BuildWork = Join-Path $GameDir '01004AB00A260000_shell_build'
 
@@ -274,14 +273,38 @@ Write-Host "已恢复 SPIRV-Cross SHA-256：$SpirvCrossSha256"
 
 ### 下载壳 ZIP
 
-在 GitHub 仓库的 **Releases** 页面打开与上面 checkout 相同的 tag，下载
-`LordranNative-shell-build-input.zip`。如果 Release 中没有该文件，就打开仓库的
-**Actions** 页面，选择 **Build unsigned iOS shell**，进入同一个 tag 的成功运行记录，
-下载名为 `LordranNative-shell-build-input` 的 artifact。
+在 GitHub 仓库的 **Releases** 页面打开与上面 checkout 相同的 tag，下载对应的壳 ZIP。
+新构建使用 `LordranNative-shell-build-input-<准确的 tag>.zip`，例如
+`LordranNative-shell-build-input-v0.2.0.zip`（只是命名示例，不表示该版本已经发布）。
+开发构建使用 `LordranNative-shell-build-input-dev-<12 位 commit>.zip`。
+tag 含有文件名不安全字符时会经过清理并附加短哈希；`v0.2.0` 这样的普通 tag 会原样保留。
+请保留下载时的文件名。
+
+如果 Release 中没有壳，就打开仓库的 **Actions** 页面，选择 **Build unsigned iOS shell**，
+进入同一个 tag 或开发 commit 的成功运行记录。新的 artifact 名与 ZIP 去掉 `.zip` 后的名称一致。
+解压 artifact 下载包，取出里面的壳 ZIP。历史 Release（包括 `v0.1.0`）仍使用
+`LordranNative-shell-build-input.zip` 以及旧 artifact 名 `LordranNative-shell-build-input`；
+这些历史资产不会被重命名。
+
+在本地运行 `scripts/build_shell.py --work game/<工作目录>` 时使用相同规则：HEAD 上有准确的
+tag 就用该 tag，否则用 `dev-<commit>`。HEAD 对应多个 tag 时，必须明确指定 `--out`，或在
+`GITHUB_REF` 中指定 tag ref。Actions 的非 tag 运行始终使用开发构建名，即使该 commit 同时有 tag。
 
 不要使用其他 tag 的壳。壳与源码版本不匹配是构建失败最常见的原因之一。
 
 把壳 ZIP、两个 NSP 和自己的 `prod.keys` 复制到 `$GameDir`。文件名可以不同，但该目录必须包含一个受支持的本体版本及其 `v196608` 更新版本。
+
+下载后再选择壳。自动配置脚本的 `-Build` 也使用同样的查找规则：目录中必须只有一个新版或旧版壳 ZIP。
+存在多个候选文件时会报错，不会选择最新文件或优先选择新版名称。保留多个版本时，请明确设置
+`$Shell`，或向配置脚本传入 `-ShellZip`。查找规则和文件名都不会跳过 manifest、源码、着色器链或标题检查。
+
+```powershell
+$ShellName = Read-Host 'Enter the exact downloaded shell ZIP filename'
+$Shell = Join-Path $GameDir $ShellName
+```
+
+这种明确选择的方式也适用于尚无新版查找函数的历史源码。对于上面的 `v0.1.0` 示例，输入
+`LordranNative-shell-build-input.zip`。
 
 检查私有输入是否存在：
 
