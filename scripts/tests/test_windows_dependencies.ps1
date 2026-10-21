@@ -113,6 +113,7 @@ foreach ($mode in @('winget-absent', 'winget-disabled', 'winget-fails', 'winget-
     }
     $result = Initialize-PackagingPython @($python)
     Assert-True ($result -eq $python) 'Python initialization must return only its interpreter path'
+    Assert-True ('Pillow' -in $script:pipArguments) 'Packaging Python must include the icon converter'
     Assert-True ('--isolated' -in $script:pipArguments -and '--no-user' -in $script:pipArguments) 'pip must not install into user-site packages'
     $indexPosition = [Array]::IndexOf($script:pipArguments, '--index-url')
     Assert-True ($indexPosition -ge 0 -and $script:pipArguments[$indexPosition + 1] -eq 'https://pypi.org/simple') 'Default index must be explicit'

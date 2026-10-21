@@ -217,7 +217,7 @@ function Initialize-PackagingPython {
         }
     }
     Invoke-Checked $python @('-m', 'pip', '--isolated', 'install', '--no-user',
-        '--index-url', $IndexUrl, 'lz4', 'capstone', 'fonttools') | Out-Host
+        '--index-url', $IndexUrl, 'lz4', 'capstone', 'fonttools', 'Pillow') | Out-Host
     return $python
 }
 

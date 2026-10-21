@@ -115,7 +115,7 @@ Repeat `-PipIndexUrl` on subsequent setup/build invocations, including `-Build` 
 does not work here. Without the option, the default is `https://pypi.org/simple`.
 URLs must use HTTPS and cannot contain credentials, a query, or a fragment.
 
-This selects the index for `lz4`, `capstone`, and `fonttools` only. It does not
+This selects the index for `lz4`, `capstone`, `fonttools`, and `Pillow` only. It does not
 mirror Python itself, the pinned bootstrap pip wheel, portable tools, Visual
 Studio, NuGet, GitHub source, or shell ZIP downloads. `-NoWinget` changes the
 installation route, not the download region. Pinned archive hashes, installer
@@ -468,7 +468,7 @@ py -3 -m venv $PythonVenv
 $Python = (Resolve-Path (Join-Path $PythonVenv 'Scripts\python.exe')).Path
 
 & $Python -m pip install --upgrade pip
-& $Python -m pip install lz4 capstone fonttools
+& $Python -m pip install lz4 capstone fonttools Pillow
 & $Python --version
 ```
 
@@ -595,6 +595,12 @@ subsequent launches reuse the system cache.
 
 ## Troubleshooting
 
+- **App icon:** packaging uses the icon extracted from the selected NSP version,
+  falling back to the base game's icon, and embeds iPhone/iPad PNG resources and
+  `Info.plist` declarations. Pillow performs the conversion on Windows; no Xcode
+  is required. A missing or unreadable extracted icon stops the build. If an old
+  extraction cache lacks `icon.jpg`, move the `extract` folder under `$BuildWork`
+  aside and rebuild. Keep your original NSPs and keys.
 - **No winget or Microsoft Store:** run setup normally or add `-NoWinget`.
   App Installer is not a prerequisite. If an official download fails, check the
   URL, network/proxy policy, and available disk space; do not disable hash checks.
@@ -611,7 +617,7 @@ subsequent launches reuse the system cache.
   if necessary; do not change the repository shader lock.
 - **Missing Python package:** verify that `$Python` points inside
   `game/01004AB00A260000/tools-venv` or `tools-python`, then rerun `& $Python -m pip install
-  lz4 capstone fonttools`.
+  lz4 capstone fonttools Pillow`.
 - **Unsupported title or build ID:** use title `01004AB00A260000` and a version
   registered in `dm/games/01004AB00A260000/game.tsv`. Do not bypass the check.
 - **Extraction failure:** inspect `nx_extract_build.log` and

@@ -269,6 +269,15 @@ static CGPathRef arm(CGFloat angle) {
     for (int i = 0; i < DmControlCount; i++) if ([self hit:priority[i] point:p padding:_editingControls ? 0 : 6 * self.unit]) return priority[i];
     return -1;
 }
+- (BOOL)hasVisibleControlAtPoint:(CGPoint)point {
+    if (self.hidden || self.alpha <= 0.01 || !self.userInteractionEnabled || !CGRectContainsPoint(self.bounds, point)) return NO;
+    [self layoutIfNeeded];
+    if (_editingControls) {
+        BOOL resizing = NO;
+        return [self editControlAt:point resizing:&resizing] >= 0;
+    }
+    return [self controlAt:point] >= 0;
+}
 - (NSInteger)editControlAt:(CGPoint)p resizing:(BOOL *)resizing {
     // A selected control wins overlaps; every resize handle remains a separate target.
     *resizing = NO;

@@ -64,7 +64,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows_
 
 `-PipIndexUrl` 只为本次运行指定 Python 包索引，不修改全局 pip 配置；脚本仍使用隔离模式和仓库内的 Python 环境。**仅设置 `$env:PIP_INDEX_URL` 对此自动脚本不生效**，请保留命令中的参数。后续每次运行都需要带上它；不传时默认使用官方 `https://pypi.org/simple`。
 
-目前镜像覆盖 `lz4`、`capstone` 和 `fonttools` 的安装，不覆盖 Python 运行时、引导 pip 的固定 wheel、Git / CMake / Ninja / zstd / .NET 归档、Visual Studio 安装、NuGet、SPIRV-Cross GitHub 源码或 Release 壳 ZIP。这些仍使用原有官方渠道；`-NoWinget` 只是切换安装方式，不是国内镜像开关。不要把任意 GitHub 加速站当作官方镜像，也不要关闭 TLS 或删除归档哈希校验。
+目前镜像覆盖 `lz4`、`capstone`、`fonttools` 和 `Pillow` 的安装，不覆盖 Python 运行时、引导 pip 的固定 wheel、Git / CMake / Ninja / zstd / .NET 归档、Visual Studio 安装、NuGet、SPIRV-Cross GitHub 源码或 Release 壳 ZIP。这些仍使用原有官方渠道；`-NoWinget` 只是切换安装方式，不是国内镜像开关。不要把任意 GitHub 加速站当作官方镜像，也不要关闭 TLS 或删除归档哈希校验。
 
 如果清华镜像超时、返回 HTTP 403（当前网络可能受访问限制）或尚未同步某个版本，可直接复制下面的官方源命令重试；如果需要同时打包，在末尾追加 `-Build`。pip 出现 `No matching distribution` 时，也要查看前面是否有 `403` / `Could not fetch URL`，不要仅凭最后一行认定不支持该 Python 版本：
 
@@ -346,7 +346,7 @@ py -3 -m venv $PythonVenv
 $Python = (Resolve-Path (Join-Path $PythonVenv 'Scripts\python.exe')).Path
 
 & $Python -m pip install --index-url 'https://pypi.tuna.tsinghua.edu.cn/simple' --upgrade pip
-& $Python -m pip install --index-url 'https://pypi.tuna.tsinghua.edu.cn/simple' lz4 capstone fonttools
+& $Python -m pip install --index-url 'https://pypi.tuna.tsinghua.edu.cn/simple' lz4 capstone fonttools Pillow
 & $Python --version
 ```
 
@@ -468,6 +468,7 @@ Windows 无法运行 Apple Metal 编译器，因此 IPA 内包含 MSL 源码，i
 
 ## 故障排查
 
+- **应用图标：** 打包时优先使用所选 NSP 版本提取出的图标，再回退到本体图标，生成 iPhone/iPad PNG 文件和对应的 `Info.plist` 声明。Windows 使用 Pillow 转换，不需要 Xcode。缺失或损坏的图标会中止构建；若旧解包缓存没有 `icon.jpg`，将 `$BuildWork` 下的 `extract` 文件夹移到其他位置，再重新构建。保留原始 NSP 和密钥文件。
 - **没有 winget 或 Microsoft Store：** 直接运行配置脚本，或加上 `-NoWinget`，
   不需要先安装 App Installer。官方下载失败时，检查报错中的网址、网络/代理策略及
   剩余磁盘空间，不要关闭哈希校验。
@@ -481,7 +482,7 @@ Windows 无法运行 Apple Metal 编译器，因此 IPA 内包含 MSL 源码，i
   和 `$env:DM_SPIRV_CROSS_SHA256`。必要时重新构建指定提交，不要修改仓库着色器锁。
 - **缺少 Python 依赖：** 确认 `$Python` 位于
   `game/01004AB00A260000/tools-venv` 或 `tools-python` 内，再执行
-  `& $Python -m pip install --index-url 'https://pypi.tuna.tsinghua.edu.cn/simple' lz4 capstone fonttools`；镜像不可用时将索引地址换为 `https://pypi.org/simple`。
+  `& $Python -m pip install --index-url 'https://pypi.tuna.tsinghua.edu.cn/simple' lz4 capstone fonttools Pillow`；镜像不可用时将索引地址换为 `https://pypi.org/simple`。
 - **标题号或构建号不受支持：** 使用标题 `01004AB00A260000` 和
   `dm/games/01004AB00A260000/game.tsv` 中登记的版本，不要绕过检查。
 - **解包失败：** 查看 `$BuildWork` 下的 `nx_extract_build.log` 和
