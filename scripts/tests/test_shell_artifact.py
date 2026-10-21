@@ -94,7 +94,7 @@ class ShellNameTests(unittest.TestCase):
                 fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
                 self.assertEqual(fields["filename"], shell_artifact.shell_filename(self.repo))
                 self.assertEqual(fields["artifact_name"] + ".zip", fields["filename"])
-                self.assertEqual(Path(fields["path"]), work / fields["filename"])
+                self.assertEqual(Path(fields["path"]), work.resolve() / fields["filename"])
 
 
 class ShellProducerTests(unittest.TestCase):
