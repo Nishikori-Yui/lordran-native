@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -14,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import shell_common
 import build_ipa_from_shell
 import app_version
+from PIL import Image
+from ios_icons import PHONE_ICONS, IPAD_ICONS
 
 
 class SourceFingerprintTests(unittest.TestCase):
@@ -158,6 +161,8 @@ class SourceFingerprintTests(unittest.TestCase):
             romfs = root / package / "RomFS"
             romfs.mkdir(parents=True, exist_ok=True)
             (romfs / "synthetic.bin").write_bytes(b"synthetic game data")
+            Image.new("RGB", (256, 256), "red" if package == "v196608" else "blue").save(
+                romfs.parent / "icon.jpg")
             return romfs.parent
 
         def run(command, _log, env=None, cwd=None):
@@ -224,6 +229,13 @@ class SourceFingerprintTests(unittest.TestCase):
                     packaged = plistlib.loads(archive.read("Payload/DmIOS.app/Info.plist"))
                     self.assertEqual(packaged["CFBundleShortVersionString"], expected["marketing_version"])
                     self.assertEqual(packaged["CFBundleVersion"], expected["build_version"])
+                    for key, icons in (("CFBundleIcons", PHONE_ICONS), ("CFBundleIcons~ipad", IPAD_ICONS)):
+                        declared = packaged[key]["CFBundlePrimaryIcon"]["CFBundleIconFiles"]
+                        self.assertEqual(declared, [name for name, _ in icons])
+                        for name, size in icons:
+                            with Image.open(BytesIO(archive.read("Payload/DmIOS.app/" + name + ".png"))) as icon:
+                                self.assertEqual(icon.size, (size, size))
+                                self.assertGreater(icon.getpixel((0, 0))[0], 240)
 
 
 class C1GuardTests(unittest.TestCase):

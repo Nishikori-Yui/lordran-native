@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from shell_common import check_c1_table, check_manifest, chain_id, shader_keys
 from app_version import legacy_identity, validate_embedded
 from portable_shaders import verify_spirv_cross
+from ios_icons import add_extracted_icons, check_pillow
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dm/tools"))
 import cheat_patches
 
@@ -72,6 +73,7 @@ def check_tools(expected_hash=None):
     if not shutil.which("zstd"):
         raise ValueError("Install zstd and add it to PATH")
     verify_spirv_cross(expected_hash)
+    check_pillow()
     return dotnet
 
 
@@ -184,6 +186,9 @@ def main():
     name = nacp.name(base_dir / "control.nacp")
     if not name:
         raise ValueError("Could not read the game name from base control.nacp")
+    app_files = dict(shell_files)
+    app_info = add_extracted_icons(app_info, app_files, game_dir, base_dir)
+    print("App icon: embedded iPhone and iPad PNGs from the extracted game icon")
     patched = work / f"patched_{package}"
     source.rewrite(sys.executable, repo, game_dir / "ExeFS", patched, env, logs, profile, args)
     shaders = work / "shader"
@@ -213,7 +218,6 @@ def main():
          str(repo / "scripts"), str(patched), str(guest_dir),
          " ".join(profile.words("modules")), app_info["CFBundleIdentifier"] + ".guest"],
         logs / "guest_dylib.log", env)
-    app_files = dict(shell_files)
     app_files["Info.plist"] = plistlib.dumps(dict(app_info, CFBundleDisplayName=name))
     app_files["dm/app-version.json"] = json.dumps(version_info, sort_keys=True).encode("utf-8")
     app_files.update({f"Frameworks/Guest.framework/{path.name}": path.read_bytes()
