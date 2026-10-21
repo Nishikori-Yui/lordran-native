@@ -217,6 +217,47 @@ access to Core Audio; a sandbox that denies AudioUnit creation cannot validate
 that test. The tests do not require game files or the old D2R Python test
 environment.
 
+### Synthetic AVC references (macOS)
+
+With FFmpeg/FFprobe (including the `libx264` encoder and software `h264`
+decoder), run this without game data or a Simulator:
+
+```sh
+python3 dm/host/tests/t_movie_avc_fixtures.py
+```
+
+This generates five 24-frame `testsrc2` fixtures: 64x64 with and without B
+frames, 64x64 with explicit limited-range BT.709 metadata, a cropped 80x50
+stream, and a 720p B-frame control. It builds the existing movie test targets
+without changing the shared test Makefile, runs the SPS checks, and compares
+every visible Y, U and V sample against FFmpeg's software decode in both AVCC
+and Annex-B modes. Software references must match byte-for-byte; there is no
+RGB round trip, scaling or chroma resampling in the reference generation.
+One-sample negative controls independently corrupt Y, U and V to verify the
+strict comparator, including the final chroma pair. In-process checks also
+cover different row strides/padding and patterned UV output copies.
+
+Generated videos, raw references, binaries and timestamped validation logs stay
+under `game/01004AB00A260000-work/issue-16/`. `--work-dir` accepts another folder
+under this checkout's ignored `game/`. No generated fixture is committed.
+
+Use `--apple-reference` to additionally diagnose the legacy AVAssetReader
+pixel reference. That comparison retains the 2-code-value mean-error limit,
+now separately enforced over all Y/U/V samples rather than sparsely sampling
+only Y and U. A mismatch is reported but does not invalidate a successful
+independent software comparison. The software-reference mode still uses
+AVAssetReader's decoded sample timestamps to check edit-list mapping; it does
+not use its pixel bytes as the oracle.
+
+[Issue #16](https://github.com/Nishikori-Yui/lordran-native/issues/16) tracks a
+reproduced 64x64 case where production output matches the software decoder
+exactly while AVAssetReader differs only in chroma despite matching NV12
+format, stride, range and chroma-location metadata. The original historical
+fixture/run revision and the internal reference transformation remain
+unconfirmed. Do not treat a wider tolerance or the 720p control alone as a fix.
+These are macOS decoder/reference tests, not iOS, gameplay or performance
+acceptance.
+
 For a game regression, use a separate copy of the player's save directory
 under the game's work folder. Keep its `.work` and `.new` transaction siblings
 separate from the player's live save. A windowless run omits `DM_WINDOW`;
