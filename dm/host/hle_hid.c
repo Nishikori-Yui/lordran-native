@@ -3,6 +3,7 @@
 // Vibration, six-axis, mouse, keyboard: not provided by the host (device count 0 / not connected); the controller applet reports "1 player, current controller selected".
 #include "hle.h"
 #include "dm_input.h"
+#include "dm_input_motion.h"
 #include <stdatomic.h>
 #include <unistd.h>
 #include <strings.h>
@@ -22,6 +23,20 @@ _Static_assert(sizeof(NpadState) == 0x28, "NpadState");
 // Front-end publishing: the keyboard / touch path (dm_input_set) and the physical controller path (dm_pad_set) are ORed; press edges are latched until the game's next read so short presses are not lost
 static _Atomic uint64_t g_btn, g_axes, g_latch, g_pad_btn, g_pad_axes, g_pad_latch;
 static _Atomic int64_t g_sampling;
+static pthread_mutex_t g_motion_mu = PTHREAD_MUTEX_INITIALIZER;
+static dm_input_motion g_motion[2];
+void dm_input_swipe_add(int side, double x, double y) {
+    if (side < 0 || side > 1) return;
+    pthread_mutex_lock(&g_motion_mu);
+    dm_input_motion_add(&g_motion[side], x, y, now_ns());
+    pthread_mutex_unlock(&g_motion_mu);
+}
+void dm_input_swipe_cancel(int side) {
+    if (side < 0 || side > 1) return;
+    pthread_mutex_lock(&g_motion_mu);
+    dm_input_motion_cancel(&g_motion[side]);
+    pthread_mutex_unlock(&g_motion_mu);
+}
 static uint64_t pack(int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
     return (uint64_t)(uint16_t)lx | (uint64_t)(uint16_t)ly << 16 | (uint64_t)(uint16_t)rx << 32 | (uint64_t)(uint16_t)ry << 48;
 }
@@ -84,6 +99,17 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
     uint64_t b = atomic_load(&g_btn) | atomic_exchange(&g_latch, 0) | atomic_load(&g_pad_btn) | atomic_exchange(&g_pad_latch, 0);
     uint64_t k = atomic_load(&g_axes), p = atomic_load(&g_pad_axes);
     s->lx = pick(ax(k, 0), ax(p, 0)); s->ly = pick(ax(k, 1), ax(p, 1)); s->rx = pick(ax(k, 2), ax(p, 2)); s->ry = pick(ax(k, 3), ax(p, 3));
+    int32_t motion[4];
+    pthread_mutex_lock(&g_motion_mu);
+    uint64_t time = now_ns();
+    for (int side = 0; side < 2; side++) {
+        if (side ? (s->rx || s->ry) : (s->lx || s->ly)) dm_input_motion_cancel(&g_motion[side]);
+        dm_input_motion_read(&g_motion[side], time, &motion[side * 2], &motion[side * 2 + 1]);
+    }
+    pthread_mutex_unlock(&g_motion_mu);
+    // An active analog stick wins as a pair. Consume hidden swipe input, never replay it later.
+    if (!s->lx && !s->ly) { s->lx = motion[0]; s->ly = motion[1]; }
+    if (!s->rx && !s->ry) { s->rx = motion[2]; s->ry = motion[3]; }
     b &= 0xffffull;
     if (s->lx < -STICK_THRESH) b |= 1u << 16;
     if (s->ly > STICK_THRESH) b |= 1u << 17;

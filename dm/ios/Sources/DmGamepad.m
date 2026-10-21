@@ -24,6 +24,7 @@ static void publish(void) {
     int32_t a[4];
     for (int i = 0; i < 4; i += 2) {
         BOOL physical = g_pad_axis[i] || g_pad_axis[i + 1];
+        if (physical) dm_input_swipe_cancel(i / 2);
         a[i] = physical ? g_pad_axis[i] : g_touch_axis[i];
         a[i + 1] = physical ? g_pad_axis[i + 1] : g_touch_axis[i + 1];
     }
@@ -79,8 +80,6 @@ static CGPathRef arm(CGFloat angle) {
     CGFloat _resizeStartScale;
     BOOL _editResizing;
     dm_camera_swipe _swipe[2];
-    int32_t _swipeAxis[4];
-    CADisplayLink *_swipeLink;
     NSArray<GCController *> *_controllers;
     GCController *_activeController;
     BOOL _editingControls, _inputSuspended, _foreground;
@@ -317,8 +316,7 @@ static CGPathRef arm(CGFloat angle) {
     int32_t axes[4] = {0};
     for (int side = 0; side < 2; side++) {
         DmStickMode mode = side ? _profile.rightMode : _profile.leftMode;
-        if (mode == DmStickSwipe) { axes[side * 2] = _swipeAxis[side * 2]; axes[side * 2 + 1] = _swipeAxis[side * 2 + 1]; }
-        else {
+        if (mode == DmStickJoystick) {
             // Rotation changes the visible shape, while stick movement follows screen directions.
             CGPoint c = [self controlCenter:DmControlLeftStick + side];
             double radius = 66 * self.unit * [_profile styleForControl:DmControlLeftStick + side].scale * 0.8;
@@ -330,17 +328,15 @@ static CGPathRef arm(CGFloat angle) {
     pthread_mutex_lock(&g_mu); g_touch_btn = buttons; memcpy(g_touch_axis, axes, sizeof axes); pthread_mutex_unlock(&g_mu);
     publish(); [self refresh:buttons];
 }
-- (void)swipeTick:(CADisplayLink *)link {
-    dm_camera_swipe_sample(&_swipe[0], link.targetTimestamp - link.timestamp, &_swipeAxis[0], &_swipeAxis[1]);
-    dm_camera_swipe_sample_tuned(&_swipe[1], link.targetTimestamp - link.timestamp, _profile.lookSensitivity,
-                                _profile.lookInvertX, _profile.lookInvertY, &_swipeAxis[2], &_swipeAxis[3]);
-    [self recompute];
-}
-- (void)startSwipeLink {
-    if (_swipeLink) return;
-    _swipeLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(swipeTick:)];
-    _swipeLink.preferredFrameRateRange = CAFrameRateRangeMake(60, 60, 60);
-    [_swipeLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+- (void)publishSwipe:(int)side {
+    double dx, dy;
+    dm_camera_swipe_take(&_swipe[side], &dx, &dy);
+    double gain = side ? fmax(0.05, fmin(3, _profile.lookSensitivity)) : 1;
+    double scale = side ? 200 : 600;
+    double x = dx / scale * gain, y = -dy / scale * gain;
+    if (side && _profile.lookInvertX) x = -x;
+    if (side && _profile.lookInvertY) y = -y;
+    dm_input_swipe_add(side, x, y);
 }
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     if (_editingControls) {
@@ -370,7 +366,7 @@ static CGPathRef arm(CGFloat angle) {
             DmStickMode mode = side ? _profile.rightMode : _profile.leftMode;
             if (mode == DmStickSwipe && !_swipeTouch[side]) {
                 _swipeTouch[side] = t; dm_camera_swipe_begin(&_swipe[side], p.x, p.y);
-                [_owners setObject:@(C_SWIPE | (side << 8)) forKey:t]; [self startSwipeLink];
+                [_owners setObject:@(C_SWIPE | (side << 8)) forKey:t];
             }
         }
     }
@@ -394,28 +390,35 @@ static CGPathRef arm(CGFloat angle) {
         unsigned v = [_owners objectForKey:t].unsignedIntValue; int side = v >> 8;
         if ((v & 255) == C_FACE) [_faceTouches setObject:@([self faceAt:p]) forKey:t];
         if ((v & 255) == C_STICK) _stickNow[side] = p;
-        if ((v & 255) == C_SWIPE) dm_camera_swipe_move(&_swipe[side], p.x, p.y);
+        if ((v & 255) == C_SWIPE) {
+            dm_camera_swipe_move(&_swipe[side], p.x, p.y); [self publishSwipe:side];
+        }
     }
     if (!_editingControls) [self recompute];
 }
-- (void)endTouches:(NSSet<UITouch *> *)touches {
+- (void)endTouches:(NSSet<UITouch *> *)touches cancelled:(BOOL)cancelled {
     for (UITouch *t in touches) {
         if (t == _editTouch) { _editTouch = nil; _editResizing = NO; }
         [_owners removeObjectForKey:t]; [_faceTouches removeObjectForKey:t];
         for (int side = 0; side < 2; side++) {
             if (_stickTouch[side] == t) _stickTouch[side] = nil;
-            if (_swipeTouch[side] == t) { _swipeTouch[side] = nil; dm_camera_swipe_end(&_swipe[side]); _swipeAxis[side * 2] = _swipeAxis[side * 2 + 1] = 0; }
+            if (_swipeTouch[side] == t) {
+                if (cancelled) dm_input_swipe_cancel(side);
+                else {
+                    CGPoint p = [t locationInView:self];
+                    dm_camera_swipe_move(&_swipe[side], p.x, p.y); [self publishSwipe:side];
+                }
+                _swipeTouch[side] = nil; dm_camera_swipe_end(&_swipe[side]);
+            }
         }
     }
-    if (!_swipeTouch[0] && !_swipeTouch[1]) { [_swipeLink invalidate]; _swipeLink = nil; }
     if (!_editingControls) [self recompute];
 }
-- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { [self endTouches:touches]; }
-- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { [self endTouches:touches]; }
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { [self endTouches:touches cancelled:NO]; }
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { [self endTouches:touches cancelled:YES]; }
 - (void)resetTouches {
     [_owners removeAllObjects]; [_faceTouches removeAllObjects]; _editTouch = nil; _editResizing = NO;
-    for (int i = 0; i < 2; i++) { _stickTouch[i] = _swipeTouch[i] = nil; dm_camera_swipe_end(&_swipe[i]); }
-    memset(_swipeAxis, 0, sizeof _swipeAxis); [_swipeLink invalidate]; _swipeLink = nil;
+    for (int i = 0; i < 2; i++) { _stickTouch[i] = _swipeTouch[i] = nil; dm_camera_swipe_end(&_swipe[i]); dm_input_swipe_cancel(i); }
     pthread_mutex_lock(&g_mu); g_touch_btn = 0; memset(g_touch_axis, 0, sizeof g_touch_axis); pthread_mutex_unlock(&g_mu);
     publish(); [self refresh:0];
 }
@@ -507,7 +510,8 @@ static CGPathRef arm(CGFloat angle) {
     [NSNotificationCenter.defaultCenter postNotificationName:DmControllerChangedNotification object:self];
 }
 - (void)dealloc {
-    [_swipeLink invalidate]; [NSNotificationCenter.defaultCenter removeObserver:self];
+    dm_input_swipe_cancel(0); dm_input_swipe_cancel(1);
+    [NSNotificationCenter.defaultCenter removeObserver:self];
     for (GCController *c in _controllers) c.extendedGamepad.valueChangedHandler = nil;
 }
 @end

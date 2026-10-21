@@ -192,6 +192,23 @@ focused metric, menu, mode, hit-testing, color, placement and lifecycle checks, 
 The AppKit test uses synthetic active/minimized states; native user input,
 VoiceOver and window behavior still need manual checks.
 
+## Touch swipe sampling and sensitivity
+
+Touch swipes publish normalized relative stick-seconds to the HID consumer,
+independent of display-link cadence. The guest polling interval converts pending
+travel to an axis velocity; multiple HID state/style queries in one 4.17 ms
+batch see the same sample. A fresh analog or physical stick takes precedence
+and drains hidden swipe travel. Unconsumed travel expires after 100 ms, gesture
+cancellation clears it, and a normal lift permits the next HID sample to consume
+the final pending movement. These rules prevent idle UI ticks from overwriting
+short swipes or leaving a long post-stall tail.
+
+Touch camera sensitivity version 2 defines 1x as three times the previous
+version-1 scale. Existing version-1 values are divided by three once when the
+profile is read, preserving their response; new profiles and reset use 1x. The
+range is 0.05x to 3x. This preference applies only to touch camera input, not
+physical controller axes.
+
 ## Profile scope
 
 This checkout is dedicated to Dark Souls: Remastered (`01004AB00A260000`). The only

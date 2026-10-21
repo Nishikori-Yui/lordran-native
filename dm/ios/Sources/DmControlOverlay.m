@@ -17,6 +17,7 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
     UIScrollView *_scroll;
     UIStackView *_stack;
     UISlider *_sliders[SliderCount];
+    UIButton *_lookPresets;
     UILabel *_values[SliderCount], *_controllerLabel;
     NSInteger _page, _edge;
     CGFloat _fraction;
@@ -180,7 +181,7 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
     _page = page; _panelMoved = NO; [_panel removeFromSuperview];
     _panel = nil;
     for (int i = 0; i < SliderCount; i++) { _sliders[i] = nil; _values[i] = nil; }
-    _selection = nil; _export = nil; _controllerLabel = nil;
+    _selection = nil; _export = nil; _controllerLabel = nil; _lookPresets = nil;
     [_confirm removeFromSuperview]; _confirm = nil;
     _ball.hidden = page != PageClosed;
     if (page == PageEditor) {
@@ -364,7 +365,7 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
 }
 - (void)sliderChanged:(UISlider *)slider {
     if (slider.tag == SliderLookSensitivity) {
-        slider.value = roundf(slider.value * 20) / 20;
+        slider.value = roundf(slider.value * 100) / 100;
         _gamepad.profile.lookSensitivity = slider.value; [_gamepad profileChanged];
         [self updateLookSensitivity];
         return;
@@ -394,9 +395,20 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
     [self addText:T(@"Touch camera", @"触屏视角") small:NO];
     [self addSwitch:T(@"Invert horizontal", @"横轴反转") on:_gamepad.profile.lookInvertX action:@selector(lookInvertXToggled:)];
     [self addSwitch:T(@"Invert vertical", @"纵轴反转") on:_gamepad.profile.lookInvertY action:@selector(lookInvertYToggled:)];
-    [self addSlider:SliderLookSensitivity title:T(@"Sensitivity", @"灵敏度") min:0.25 max:3 value:_gamepad.profile.lookSensitivity];
+    [self addSlider:SliderLookSensitivity title:T(@"Sensitivity", @"灵敏度") min:0.05 max:3 value:_gamepad.profile.lookSensitivity];
     [self updateLookSensitivity];
-    [self addText:T(@"1x is the default. Higher values turn faster.", @"1 倍为默认值，数值越大转动越快。") small:YES];
+    NSArray *speeds = DmAppUsesChinese() ? @[@"慢速 0.5 倍", @"标准 1 倍", @"快速 2 倍"] :
+                                         @[@"Slow 0.5x", @"Standard 1x", @"Fast 2x"];
+    CGFloat sensitivity = _gamepad.profile.lookSensitivity;
+    NSInteger preset = fabs(sensitivity - 0.5) < 0.001 ? 0 : fabs(sensitivity - 1) < 0.001 ? 1 :
+                       fabs(sensitivity - 2) < 0.001 ? 2 : UISegmentedControlNoSegment;
+    _lookPresets = [self addChoice:T(@"Camera speed", @"视角速度") choices:speeds selected:preset change:^(NSInteger index) {
+        const CGFloat values[] = {0.5, 1, 2};
+        weakSelf.gamepad.profile.lookSensitivity = values[index];
+        [weakSelf.gamepad profileChanged]; [weakSelf showPage:PageInput];
+    }];
+    [self updateLookSensitivity];
+    [self addText:T(@"1x matches the previous 3x. Fine-tune from 0.05x to 3x; saved settings keep their previous response.", @"新 1 倍相当于旧 3 倍，可在 0.05–3 倍间微调；已保存的设置保留原来的响应强度。") small:YES];
     [self addButton:T(@"Reset touch camera", @"重置触屏视角") symbol:@"arrow.counterclockwise" action:@selector(resetTouchCamera)];
     [self addSwitch:T(@"D-pad & L3/R3", @"十字键与按压键") on:_gamepad.profile.fullLayout action:@selector(layoutToggled:)];
     _controllerLabel = [self addText:_gamepad.controllerStatus small:YES];
@@ -416,6 +428,19 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
     NSString *value = [NSString stringWithFormat:T(@"%.2fx", @"%.2f 倍"), _gamepad.profile.lookSensitivity];
     _values[SliderLookSensitivity].text = [NSString stringWithFormat:@"%@: %@", T(@"Sensitivity", @"灵敏度"), value];
     _sliders[SliderLookSensitivity].accessibilityValue = value;
+    CGFloat sensitivity = _gamepad.profile.lookSensitivity;
+    NSInteger preset = fabs(sensitivity - 0.5) < 0.001 ? 0 : fabs(sensitivity - 1) < 0.001 ? 1 :
+                       fabs(sensitivity - 2) < 0.001 ? 2 : -1;
+    NSArray *names = DmAppUsesChinese() ? @[@"慢速 0.5 倍", @"标准 1 倍", @"快速 2 倍"] :
+                                        @[@"Slow 0.5x", @"Standard 1x", @"Fast 2x"];
+    UIButtonConfiguration *config = _lookPresets.configuration;
+    config.title = [NSString stringWithFormat:@"%@: %@", T(@"Camera speed", @"视角速度"),
+                    preset < 0 ? T(@"Custom", @"自定义") : names[preset]];
+    _lookPresets.configuration = config;
+    for (NSInteger i = 0; i < (NSInteger)_lookPresets.menu.children.count; i++) {
+        UIAction *action = (UIAction *)_lookPresets.menu.children[i];
+        action.state = i == preset ? UIMenuElementStateOn : UIMenuElementStateOff;
+    }
 }
 - (void)lookInvertXToggled:(UISwitch *)toggle { _gamepad.profile.lookInvertX = toggle.on; [_gamepad profileChanged]; }
 - (void)lookInvertYToggled:(UISwitch *)toggle { _gamepad.profile.lookInvertY = toggle.on; [_gamepad profileChanged]; }

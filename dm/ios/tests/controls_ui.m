@@ -5,6 +5,7 @@
 #import <GameController/GameController.h>
 #import <QuartzCore/QuartzCore.h>
 #include "../../host/dm_input.h"
+#include "../../host/dm_input_motion.h"
 #include "../../host/cheats.h"
 #include "../../host/gen/01004AB00A260000/game_profile.h"
 #include <assert.h>
@@ -19,7 +20,6 @@
 - (void)becomeActive;
 - (void)resignActive;
 - (void)readController;
-- (void)swipeTick:(id)tick;
 @end
 @interface DmControlOverlay (TestCalls)
 - (void)toggleMenu;
@@ -39,11 +39,26 @@
 - (void)resetTouchCamera;
 @end
 static uint64_t buttons;
-static int32_t axes[4];
+static int32_t axes[4], absoluteAxes[4];
+static dm_input_motion motion[2];
+static uint64_t inputTime = 1000000000ull;
 static UIButton *exportAnchor;
 static uint32_t cheatFlags[2];
 void dm_input_set(uint64_t b, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
     buttons = b; axes[0] = lx; axes[1] = ly; axes[2] = rx; axes[3] = ry;
+    memcpy(absoluteAxes, axes, sizeof axes);
+}
+void dm_input_swipe_add(int side, double x, double y) { dm_input_motion_add(&motion[side], x, y, inputTime); }
+void dm_input_swipe_cancel(int side) { dm_input_motion_cancel(&motion[side]); }
+static void sampleInput(void) {
+    inputTime += 16666667;
+    memcpy(axes, absoluteAxes, sizeof axes);
+    for (int side = 0; side < 2; side++) {
+        int32_t x, y;
+        if (axes[side * 2] || axes[side * 2 + 1]) dm_input_motion_cancel(&motion[side]);
+        dm_input_motion_read(&motion[side], inputTime, &x, &y);
+        if (!axes[side * 2] && !axes[side * 2 + 1]) { axes[side * 2] = x; axes[side * 2 + 1] = y; }
+    }
 }
 void DmDiagnosticsShare(UIViewController *presenter, UIButton *button) { assert(presenter); exportAnchor = button; }
 
@@ -62,12 +77,6 @@ void DmDiagnosticsShare(UIViewController *presenter, UIButton *button) { assert(
 @end
 @implementation TestTouch
 - (CGPoint)locationInView:(UIView *)view { return self.point; }
-@end
-@interface TestTick : NSObject
-@end
-@implementation TestTick
-- (CFTimeInterval)timestamp { return 1; }
-- (CFTimeInterval)targetTimestamp { return 1 + 1.0 / 60; }
 @end
 @interface TestPan : UIPanGestureRecognizer
 @property CGPoint movement;
@@ -188,10 +197,22 @@ static void runTests(UIViewController *presenter) {
     [overlay exportLog]; assert(exportAnchor == exportButton && exportButton.window);
     snapshot(canvas, @"controls-menu.png"); [overlay closeMenu];
 
+    // A normal lift preserves a short swipe for one poll; cancellation does not.
+    TestTouch *flick = begin(pad, CGPointMake(500, 150));
+    move(pad, flick, CGPointMake(505, 150)); end(pad, flick);
+    sampleInput(); assert(axes[2] > 0); sampleInput(); released();
+    for (int i = 0; i < 2; i++) {
+        flick = begin(pad, CGPointMake(500, 150));
+        move(pad, flick, CGPointMake(502, 150)); end(pad, flick);
+    }
+    sampleInput(); assert(axes[2] == 32767); sampleInput(); released();
+    flick = begin(pad, CGPointMake(500, 150)); move(pad, flick, CGPointMake(505, 150));
+    [pad touchesCancelled:touchSet(flick) withEvent:nil]; sampleInput(); released();
+
     // Opening the editor releases both held buttons and pending camera motion.
     TestTouch *key = begin(pad, [pad controlCenter:0]); assert(buttons & DM_BTN_A);
     TestTouch *camera = begin(pad, CGPointMake(500, 150)); move(pad, camera, CGPointMake(510, 145));
-    [pad swipeTick:(id)[TestTick new]]; assert(axes[2] > 0 && axes[3] > 0);
+    sampleInput(); assert(axes[2] > 0 && axes[3] > 0);
     [overlay toggleMenu]; released(); [overlay editControls]; assert(pad.editingControls);
     assert(ball.hidden && [overlay valueForKey:@"panel"] == nil);
     UIButton *confirm = [overlay valueForKey:@"confirm"];
@@ -222,9 +243,9 @@ static void runTests(UIViewController *presenter) {
         CGPoint r = right ? CGPointMake(510, 150) : [pad controlCenter:DmControlRightStick];
         TestTouch *lt = begin(pad, l), *rt = begin(pad, r);
         move(pad, lt, CGPointMake(l.x + 10, l.y - 5)); move(pad, rt, CGPointMake(r.x + 10, r.y - 5));
-        [pad swipeTick:(id)[TestTick new]];
+        sampleInput();
         assert(axes[0] > 0 && axes[1] > 0 && axes[2] > 0 && axes[3] > 0);
-        [pad swipeTick:(id)[TestTick new]];
+        sampleInput();
         if (left) assert(axes[0] == 0 && axes[1] == 0);
         if (right) assert(axes[2] == 0 && axes[3] == 0);
         end(pad, lt); end(pad, rt); released();
@@ -237,7 +258,7 @@ static void runTests(UIViewController *presenter) {
         CGPoint r = mode ? CGPointMake(510, 150) : [pad controlCenter:DmControlRightStick];
         TestTouch *left = begin(pad, CGPointMake(340, 150)), *right = begin(pad, r);
         move(pad, left, CGPointMake(350, 145)); move(pad, right, CGPointMake(r.x + 10, r.y - 5));
-        [pad swipeTick:(id)[TestTick new]];
+        sampleInput();
         assert(axes[0] > 0 && axes[1] > 0 && axes[2] < 0 && axes[3] < 0);
         end(pad, left); end(pad, right); released();
     }
@@ -246,10 +267,23 @@ static void runTests(UIViewController *presenter) {
     UISwitch *inversion = [UISwitch new]; inversion.on = YES;
     [overlay lookInvertXToggled:inversion]; [overlay lookInvertYToggled:inversion];
     UISlider *sensitivity = [[overlay valueForKey:@"panel"] viewWithTag:6];
-    assert([sensitivity isKindOfClass:UISlider.class] && sensitivity.minimumValue == 0.25 && sensitivity.maximumValue == 3);
+    assert([sensitivity isKindOfClass:UISlider.class] && sensitivity.minimumValue == 0.05f && sensitivity.maximumValue == 3);
     sensitivity.value = 1.75; [sensitivity sendActionsForControlEvents:UIControlEventValueChanged];
+    UIButton *presets = [overlay valueForKey:@"lookPresets"];
+    assert([presets.configuration.title containsString:@"Custom"] && presets.menu.children.count == 3);
+    for (UIAction *action in presets.menu.children) assert(action.state == UIMenuElementStateOff);
     loaded = [DmControlProfile loadWithDefaultFull:YES];
     assert(fabs(loaded.lookSensitivity - 1.75) < 0.001 && loaded.lookInvertX && loaded.lookInvertY);
+    [presets sendAction:(UIAction *)presets.menu.children[1]];
+    assert(fabs(pad.profile.lookSensitivity - 1) < 0.001);
+    presets = [overlay valueForKey:@"lookPresets"];
+    assert([presets.configuration.title containsString:@"Standard"] &&
+           ((UIAction *)presets.menu.children[1]).state == UIMenuElementStateOn);
+    UISlider *updated = [[overlay valueForKey:@"panel"] viewWithTag:6];
+    assert(fabs(updated.value - 1) < 0.001);
+    [overlay setNeedsLayout]; [overlay layoutIfNeeded]; panelFits(overlay);
+    UIScrollView *inputScroll = [overlay valueForKey:@"scroll"];
+    [inputScroll scrollRectToVisible:[presets convertRect:presets.bounds toView:inputScroll] animated:NO];
     snapshot(canvas, @"controls-input.png");
     [overlay resetTouchCamera]; assert(pad.profile.lookSensitivity == 1 && !pad.profile.lookInvertX && !pad.profile.lookInvertY);
     [overlay closeMenu];
