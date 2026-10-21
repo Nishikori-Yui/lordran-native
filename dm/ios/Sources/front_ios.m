@@ -84,13 +84,7 @@ static CAMetalLayer *g_layer;
     if (self.controls.showsFPS && self.game) {
         if (self.performance) return;
         self.performance = [DmPerfHUD new];
-        self.performance.translatesAutoresizingMaskIntoConstraints = NO;
-        [self.view insertSubview:self.performance belowSubview:self.controls];
-        [NSLayoutConstraint activateConstraints:@[
-            [self.performance.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:56],
-            [self.performance.centerXAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.centerXAnchor],
-            [self.performance.widthAnchor constraintLessThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.widthAnchor constant:-24]
-        ]];
+        [self.performance attachToView:self.view belowSubview:self.controls];
     } else {
         [self.performance removeFromSuperview]; self.performance = nil;
     }
