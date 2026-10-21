@@ -230,6 +230,14 @@ it finishes, download the matching shell ZIP from the same release, then put
 the base game NSP, the 1.0.3 update NSP, and your own `prod.keys` in the
 private `game/01004AB00A260000/` directory (that directory is ignored by Git).
 
+New shell filenames include the exact release tag, for example
+`LordranNative-shell-build-input-v0.2.0.zip`, or `dev-<12-character-commit>`
+for development builds. This is a naming example, not a recommendation to use
+an unreleased tag. Keep the downloaded filename. `-Build` discovers a single
+versioned or legacy shell ZIP in that directory; if more than one exists, pass
+`-ShellZip <matching-file>` explicitly. Historical releases keep their original
+unversioned assets. Filenames do not replace the source/manifest checks.
+
 To install dependencies and build the unsigned IPA in one run after placing all
 four inputs above, use `-Build`:
 
@@ -248,15 +256,37 @@ py -3 -m venv game/01004AB00A260000/tools-venv
 $python = (Resolve-Path game/01004AB00A260000/tools-venv/Scripts/python.exe).Path
 & $python -m pip install lz4 capstone fonttools
 & $python scripts/player_support.py doctor --route shell
+$Shell = 'game/01004AB00A260000/LordranNative-shell-build-input-v0.2.0.zip' # Use your downloaded filename.
 & $python scripts/build_ipa_from_shell.py game/01004AB00A260000 `
   --keys game/01004AB00A260000/prod.keys `
-  --shell game/01004AB00A260000/LordranNative-shell-build-input.zip `
+  --shell $Shell `
   --spirv-cross-sha256 $spirvCrossSha256
 ```
 
-Once the shell is downloaded, add `--shell game/01004AB00A260000/LordranNative-shell-build-input.zip` to the doctor check. The [support build command](#local-support-commands) can preview a build with `--dry-run` and structurally verify its output.
+Once the shell is downloaded, add `--shell $Shell` to the doctor check. The [support build command](#local-support-commands) can preview a build with `--dry-run` and structurally verify its output.
 
 The shell and source checkout must come from the same release. Before building, follow the [Windows packaging notes](docs/windows-packaging.md) to build the pinned SPIRV-Cross source and record its SHA-256 in `DM_SPIRV_CROSS_SHA256` (or pass `--spirv-cross-sha256`). The script checks the title and registered module builds, rewrites the game modules locally, and creates an unsigned IPA. It does not upload NSPs, keys, extracted files or the finished IPA. This no-Xcode route ships translated Metal source, so the iPhone compiles shaders on first launch; the first visit can take several minutes. The normal Mac route still compiles shaders ahead of time. The shell ZIP is build input, not an installable app; sideload and sign only the resulting IPA.
+
+### App Version And Build Identity
+
+Native iOS, Simulator, macOS app, and new shell builds share the same version
+resolver. At the exact `v0.2.0` tag, the displayed app version is `0.2.0`.
+The Apple build version is `1.2.0`: its first component is the tag's major
+version plus one because Apple requires a positive first build component.
+Prerelease/build suffixes (for example `v0.2.0-rc.1+build.7`) stay in the full
+source identity, not the numeric Apple fields. Arbitrary non-SemVer tags use
+display version `0.0.0` / build `1.0.0`, with the full tag still recorded.
+
+Development commits use `0.0.0` / `1.0.0` and `dev-<commit>`; the resolver never
+uses the nearest older tag. Modified code uses `dev-<commit>-dirty-<content-hash>`
+and the numeric development fallback. A source download without `.git` uses
+`dev-source-<content-hash>`, not a guessed release. Windows packaging retains
+the prebuilt shell's identity even without Git. Old shells keep their original
+versions and are identified by their source fingerprint rather than a guessed
+tag. The complete identity is stored in `dm/app-version.json`, included in iOS
+diagnostic exports and logged by the macOS app launcher. See the
+[Mac guide](docs/macos-packaging.md#app-version-metadata) and
+[Windows guide](docs/windows-packaging.md#app-version-metadata) for constraints.
 
 ### 4. Sideload the IPA
 

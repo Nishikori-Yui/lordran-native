@@ -40,6 +40,45 @@ try {
     }
 
     Write-Host 'Windows SPIRV-Cross rerun status checks passed.'
+
+    $shellDirectory = Join-Path $root 'shells with spaces'
+    New-Item -ItemType Directory -Path $shellDirectory | Out-Null
+    function Assert-ShellDiscoveryFails {
+        param([string]$Message)
+        try {
+            Get-PackagingShellZip -GameDirectory $shellDirectory | Out-Null
+        } catch {
+            if ($_.Exception.Message -like "*$Message*") { return }
+            throw
+        }
+        throw "Expected shell discovery failure containing: $Message"
+    }
+    Assert-ShellDiscoveryFails 'No shell ZIP'
+    $legacy = Join-Path $shellDirectory 'LordranNative-shell-build-input.zip'
+    $versioned = Join-Path $shellDirectory 'LordranNative-shell-build-input-v0.2.0.zip'
+    $dev = Join-Path $shellDirectory 'LordranNative-shell-build-input-dev-123456789abc.zip'
+    $partialTag = Join-Path $shellDirectory 'LordranNative-shell-build-input-v0.2.0.partial.zip'
+    foreach ($candidate in @($legacy, $versioned, $dev, $partialTag)) {
+        Set-Content -LiteralPath $candidate -Value 'synthetic archive'
+        if ((Get-PackagingShellZip -GameDirectory $shellDirectory) -ne $candidate) {
+            throw 'A single legacy, release, or development shell must be discovered.'
+        }
+        Remove-Item -LiteralPath $candidate
+    }
+    Set-Content -LiteralPath $legacy -Value 'synthetic legacy archive'
+    Set-Content -LiteralPath $versioned -Value 'synthetic release archive'
+    Assert-ShellDiscoveryFails '-ShellZip PATH'
+    Remove-Item -LiteralPath $legacy
+    Set-Content -LiteralPath $dev -Value 'synthetic development archive'
+    Assert-ShellDiscoveryFails 'Multiple shell ZIPs'
+    Remove-Item -LiteralPath $dev
+    New-Item -ItemType Directory -Path $dev | Out-Null
+    Set-Content -LiteralPath (Join-Path $shellDirectory 'unrelated.zip') -Value 'not a shell'
+    Set-Content -LiteralPath (Join-Path $shellDirectory 'LordranNative-shell-build-input-v0.3.0.zip.partial') -Value 'partial'
+    if ((Get-PackagingShellZip -GameDirectory $shellDirectory) -ne $versioned) {
+        throw 'Discovery must ignore directories, unrelated ZIPs, and incomplete shell outputs.'
+    }
+    Write-Host 'Windows shell ZIP discovery checks passed.'
 } finally {
     Remove-Item -LiteralPath $root -Recurse -Force
 }

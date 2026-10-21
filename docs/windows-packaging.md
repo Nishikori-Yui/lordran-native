@@ -285,7 +285,6 @@ Set-Location 'C:\src\lordran-native'
 $Repo = (Get-Location).Path
 $GameDir = Join-Path $Repo 'game\01004AB00A260000'
 $Keys = Join-Path $GameDir 'prod.keys'
-$Shell = Join-Path $GameDir 'LordranNative-shell-build-input.zip'
 $Output = Join-Path $GameDir 'LordranNative-Windows.ipa'
 $BuildWork = Join-Path $GameDir '01004AB00A260000_shell_build'
 
@@ -382,10 +381,32 @@ fingerprints.
 ### Download the shell ZIP
 
 On GitHub, open the **Releases** page for the same tag checked out above and
-download `LordranNative-shell-build-input.zip`. If the release does not contain
-it, open the repository's **Actions** tab, select **Build unsigned iOS shell**,
-open a successful run for the same tag, and download the artifact named
-`LordranNative-shell-build-input`.
+download its shell ZIP. New builds use
+`LordranNative-shell-build-input-<exact-tag>.zip`, for example
+`LordranNative-shell-build-input-v0.2.0.zip` (a naming example, not a release
+availability claim). Development builds use
+`LordranNative-shell-build-input-dev-<12-character-commit>.zip` instead.
+Tags containing filename-unsafe characters are sanitized and get a short hash;
+ordinary tags such as `v0.2.0` are preserved exactly. Keep the downloaded name.
+
+If the release does not contain a shell, open the repository's **Actions** tab,
+select **Build unsigned iOS shell**, and open a successful run for the same tag
+or development commit. New artifact names match the ZIP basename without
+`.zip`. Extract the artifact download to obtain the shell ZIP inside it.
+Historical releases, including `v0.1.0`, keep
+`LordranNative-shell-build-input.zip` and the old
+`LordranNative-shell-build-input` artifact name; those assets are not renamed.
+
+Local `scripts/build_shell.py --work game/<work-directory>` builds use the same
+names: an exact tag at HEAD, otherwise `dev-<commit>`. Multiple tags at HEAD
+require `GITHUB_REF=refs/tags/<tag>` to select the release identity. `--out`
+changes only the output path; it cannot resolve ambiguous app metadata.
+A non-tag Actions run always uses the development name, even if that commit
+also has a tag.
+
+Without `.git`, a newly built shell uses `dev-source-<content-hash>` in both the
+ZIP filename and embedded app identity. It does not infer a tag from a source
+folder name or reuse a previous generated version record.
 
 Do not use a shell from a different tag. A mismatch is one of the most common
 causes of a failed build.
@@ -393,6 +414,22 @@ causes of a failed build.
 Copy the shell ZIP, the two NSPs, and your own `prod.keys` into `$GameDir`.
 The exact NSP filenames do not matter, but the directory must contain one
 supported base version and its `v196608` update.
+
+Select the shell after downloading it. The setup script's `-Build` option uses
+the same discovery: exactly one versioned or legacy shell ZIP is accepted.
+Multiple candidates fail rather than choosing the newest or preferring a
+versioned name. Set `$Shell` explicitly (or pass `-ShellZip` to setup) when
+keeping multiple versions. Discovery and filenames never bypass manifest,
+source, shader-chain, or title validation.
+
+```powershell
+$ShellName = Read-Host 'Enter the exact downloaded shell ZIP filename'
+$Shell = Join-Path $GameDir $ShellName
+```
+
+This explicit selection also works with historical source checkouts that do not
+have the new discovery helper. For the `v0.1.0` example above, enter
+`LordranNative-shell-build-input.zip`.
 
 Check that the private inputs exist:
 
@@ -591,3 +628,46 @@ subsequent launches reuse the system cache.
 
 This route is experimental. Mac/Xcode remains the recommended path when
 available because it compiles shaders before installation.
+
+## App version metadata
+
+The app version identifies Lordran Native, not the Nintendo game update selected
+by `--package`. Fresh native iOS, Simulator, macOS app and shell builds share
+`scripts/app_version.py`; `dm/ios/project.yml` takes its numeric values through
+the build scripts rather than hardcoding a version. The shell workflow fetches
+tag/history metadata and verifies that a selected tag points at HEAD.
+
+- Exact `vMAJOR.MINOR.PATCH` or `MAJOR.MINOR.PATCH` tags set
+  `CFBundleShortVersionString` to `MAJOR.MINOR.PATCH`, with no `v` prefix.
+- `CFBundleVersion` is `(MAJOR + 1).MINOR.PATCH`, so `v0.2.0` uses `1.2.0`.
+  This positive-major mapping is deterministic, not a CI run counter. Supported
+  tag components are major 0-9998 and minor/patch 0-99; out-of-range numeric tags
+  fail rather than emitting an invalid Apple bundle version.
+- Prerelease and build suffixes do not enter Apple's numeric fields. For
+  `v0.2.0-rc.1+build.7`, those fields are `0.2.0` and `1.2.0`; the complete tag
+  remains in `dm/app-version.json` alongside the full commit ID. Different
+  prereleases may share Apple's numeric versions; this is not an App Store
+  build-number allocation mechanism.
+- Non-SemVer tags retain their complete identity but use numeric fallback
+  `0.0.0` / `1.0.0`. Untagged commits and branch Actions runs use that same
+  numeric fallback with `dev-<12-character-commit>`, never a nearest older tag.
+  Multiple exact local tags require an explicit `GITHUB_REF=refs/tags/<tag>`.
+- A checkout with changes under `dm/` or `scripts/` uses the development
+  numeric fallback and `dev-<commit>-dirty-<content-hash>`. Its full fingerprint
+  and any selected base tag are retained, rather than claiming a clean release.
+- Source-only downloads without `.git` use `dev-source-<content-hash>` and the
+  numeric development fallback. Build-generated version files are not inputs
+  to version resolution; an extracted tree inside another checkout does not
+  inherit the enclosing checkout's tag. New shell ZIP names and embedded
+  metadata use the same source identity.
+- Windows/prebuilt-shell packaging retains the shell's embedded identity and
+  numeric versions even when Git is absent. It checks agreement with the shell
+  plist and keeps all manifest/source/profile checks. A legacy shell without
+  version metadata retains its old plist version and records its manifest
+  fingerprint as a legacy identity; the current checkout's tag is not guessed.
+
+The metadata file is `dm/app-version.json` inside the iOS app and
+`Contents/Resources/dm/app-version.json` inside the Mac app. iOS diagnostic
+exports include the full source identity; the Mac app launcher logs it on each
+launch. These records identify a build but do not prove gameplay compatibility,
+signing validity, or that a locally modified checkout matches a clean release.

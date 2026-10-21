@@ -1,3 +1,20 @@
+function Get-PackagingShellZip {
+    param([Parameter(Mandatory = $true)][string]$GameDirectory)
+
+    $candidates = @(Get-ChildItem -LiteralPath $GameDirectory -File | Where-Object {
+        $_.Name -eq 'LordranNative-shell-build-input.zip' -or
+        $_.Name -like 'LordranNative-shell-build-input-*.zip'
+    } | Sort-Object Name)
+    if ($candidates.Count -eq 0) {
+        throw 'No shell ZIP found. Download the matching shell into the game directory or pass -ShellZip PATH.'
+    }
+    if ($candidates.Count -ne 1) {
+        throw "Multiple shell ZIPs found: $($candidates.Name -join ', '). Pass -ShellZip PATH to select the matching one."
+    }
+    # Discovery never establishes compatibility; the Python builder checks the manifest.
+    return $candidates[0].FullName
+}
+
 function Get-UnexpectedGitChanges {
     param(
         [Parameter(Mandatory = $true)][string]$Path,

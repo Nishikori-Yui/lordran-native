@@ -11,12 +11,15 @@ import zipfile
 from pathlib import Path
 
 from shell_common import check_c1_table, make_manifest
+from shell_artifact import shell_filename
+from app_version import resolve as resolve_app_version, write_metadata
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work", required=True, type=Path, help="Private work directory under game/")
-    parser.add_argument("-o", "--out", type=Path, help="Output shell .zip under game/")
+    parser.add_argument("-o", "--out", type=Path,
+                        help="Output shell .zip under game/ (default: exact tag or dev-<commit> name)")
     parser.add_argument("--bundle-id", help="App bundle ID (default: the profile's bundle_id)")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
@@ -25,13 +28,14 @@ def main():
     profile = game.load()
     bundle_id = profile.bundle_id(args.bundle_id)
     work = args.work.resolve()
-    output = args.out.resolve() if args.out else work / "LordranNative-shell-build-input.zip"
+    output = args.out.resolve() if args.out else work / shell_filename(repo)
     private = (repo / "game").resolve()
     if not work.is_relative_to(private) or not output.is_relative_to(private):
         parser.error("Shell work and output paths must be under game/")
     if output.suffix != ".zip":
         parser.error("Shell build input must use .zip")
     manifest = make_manifest(repo, profile)
+    version_info = resolve_app_version(repo)
     work.mkdir(parents=True, exist_ok=True)
     tree = work / f"tree-{manifest['source'][:12]}"
     if tree.exists():
@@ -56,9 +60,12 @@ def main():
     subprocess.run([sys.executable, str(repo / "dm/tools/make_ext_font.py"),
                     str(font_dir / "nintendo_ext.ttf")], check=True)
     (gen / "dm/shell.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    write_metadata(gen / "dm/app-version.json", version_info)
     env = dict(os.environ, GAME=profile.id, DM_GAME=profile.id,
                DM_BUNDLE_ID=bundle_id,
                DM_DISPLAY_NAME="Lordran Native", DM_APP_CATEGORY=profile.get("app_category"),
+               DM_MARKETING_VERSION=version_info["marketing_version"],
+               DM_BUILD_VERSION=version_info["build_version"],
                DM_TEAM_ID="0000000000", DM_ROOT=str(work), WORK=str(work / "tmp"))
     (work / "tmp").mkdir(exist_ok=True)
     with (work / "generate.log").open("w", encoding="utf-8") as log:
@@ -90,11 +97,15 @@ def main():
         raise ValueError("Built shell Bundle ID does not match the requested identity")
     if info.get("CFBundleSupportedPlatforms") != ["iPhoneOS"]:
         raise ValueError("Shell executable was not built for iPhoneOS")
+    if (info.get("CFBundleShortVersionString"), info.get("CFBundleVersion")) != (
+            version_info["marketing_version"], version_info["build_version"]):
+        raise ValueError("Built shell versions do not match the resolved source version")
     check_c1_table(profile, (app / "dm/c1_full.tsv").read_bytes())
     # A strict resource allowlist prevents generated or private content from
     # leaking into a redistributable shell.
     allowed = {"Info.plist", "PkgInfo", "DmIOS", "Assets.car",
-               "dm/shader_map.tsv", "dm/pso_manifest.tsv", "dm/c1_full.tsv", "dm/shell.json"}
+               "dm/shader_map.tsv", "dm/pso_manifest.tsv", "dm/c1_full.tsv", "dm/shell.json",
+               "dm/app-version.json"}
     allowed |= {"dm/font/standard.ttf", "dm/font/nintendo_ext.ttf"}
     files = sorted(p for p in app.rglob("*") if p.is_file())
     for path in files:
@@ -107,7 +118,7 @@ def main():
            for name in profile.words("modules")):
         raise ValueError("Shell executable contains embedded game modules")
     output.parent.mkdir(parents=True, exist_ok=True)
-    partial = output.with_suffix(".partial.zip")
+    partial = output.with_suffix(".zip.partial")
     try:
         with zipfile.ZipFile(partial, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
             for path in files:

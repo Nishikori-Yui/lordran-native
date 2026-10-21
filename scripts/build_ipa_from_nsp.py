@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'dm/tools'))
 import cheat_patches
 import macos_app
+import app_version
 
 # ---- Settings ----
 NSP_DIR = ''                            # folder holding the NSPs (empty = ask at run time)
@@ -337,6 +338,10 @@ def main(args=None):
         raise BuildError('--replace is available only with --target macos-app')
     if args.target == 'macos-app' and (args.env_file or DM_ENV_FILE):
         raise BuildError('--env-file is currently supported only for iOS IPA builds')
+    try:
+        version_info = app_version.resolve(repo)
+    except ValueError as error:
+        raise BuildError(str(error)) from error
     default_output = nsp_dir / (g.get('ipa') if args.target == 'ipa' else 'LordranNative.app')
     output = Path(os.path.expanduser(args.out or OUT_IPA)).resolve() if (args.out or OUT_IPA) else default_output
     if args.target == 'macos-app':
@@ -409,6 +414,7 @@ def main(args=None):
             repo=repo, profile=g, host=repo / 'dm/host/dmhost', patched=patched,
             romfs=game / 'RomFS', shader_cache=sh / 'cache', fonts=font_dir,
             output=output, app_name=app_name, bundle_id=bundle_id,
+            version_info=version_info,
             replace=args.replace)
         if not output.is_dir(): raise BuildError(f'没出 macOS App | no macOS app at {output}')
     rmtree(work / 'tmp')

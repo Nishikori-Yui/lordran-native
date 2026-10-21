@@ -13,6 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from shell_common import check_c1_table, check_manifest, chain_id, shader_keys
+from app_version import legacy_identity, validate_embedded
 from portable_shaders import verify_spirv_cross
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dm/tools"))
 import cheat_patches
@@ -34,7 +35,7 @@ def safe_shell(shell):
         root = "Payload/DmIOS.app/"
         allowed = {root + name for name in (
             "Info.plist", "PkgInfo", "DmIOS", "Assets.car", "dm/shader_map.tsv",
-            "dm/pso_manifest.tsv", "dm/c1_full.tsv", "dm/shell.json",
+            "dm/pso_manifest.tsv", "dm/c1_full.tsv", "dm/shell.json", "dm/app-version.json",
             "dm/font/standard.ttf", "dm/font/nintendo_ext.ttf")}
         required = {root + name for name in (
             "Info.plist", "DmIOS", "dm/shader_map.tsv", "dm/pso_manifest.tsv",
@@ -46,16 +47,22 @@ def safe_shell(shell):
         payload = {name[len(root):]: archive.read(name) for name in names}
     info = plistlib.loads(payload["Info.plist"])
     manifest = json.loads(payload["dm/shell.json"])
-    return info, manifest, payload
+    version = (validate_embedded(json.loads(payload["dm/app-version.json"]))
+               if "dm/app-version.json" in payload else legacy_identity(manifest, info))
+    return info, manifest, payload, version
 
 
 def validate_shell(shell, repo, profile):
-    info, manifest, files = safe_shell(shell)
+    info, manifest, files, version = safe_shell(shell)
     check_manifest(manifest, repo, profile)
     check_c1_table(profile, files["dm/c1_full.tsv"])
     if info.get("CFBundleSupportedPlatforms") != ["iPhoneOS"]:
         raise ValueError("The input shell is not an iPhoneOS build")
-    return info, manifest, files
+    if "dm/app-version.json" in files and (
+            info.get("CFBundleShortVersionString"), info.get("CFBundleVersion")) != (
+            version["marketing_version"], version["build_version"]):
+        raise ValueError("Shell Info.plist and embedded app version disagree")
+    return info, manifest, files, version
 
 
 def check_tools(expected_hash=None):
@@ -68,9 +75,13 @@ def check_tools(expected_hash=None):
     return dotnet
 
 
-def application_info(info, profile, name, bundle_id=None):
+def application_info(info, profile, name, bundle_id=None, version=None):
     identity = profile.bundle_id(info.get("CFBundleIdentifier") if bundle_id is None else bundle_id)
-    return dict(info, CFBundleDisplayName=name, CFBundleIdentifier=identity)
+    result = dict(info, CFBundleDisplayName=name, CFBundleIdentifier=identity)
+    if version:
+        result.update(CFBundleShortVersionString=version["marketing_version"],
+                      CFBundleVersion=version["build_version"])
+    return result
 
 
 def parse_args(argv=None):
@@ -123,10 +134,11 @@ def main():
     if any(not path.is_relative_to(private) for path in (nsp_dir, keys, shell, output)):
         raise ValueError("NSP folder, keys, shell, and output IPA must remain under this repository's game/ directory")
     check_output_available(output, args.replace)
-    info, shell_manifest, shell_files = validate_shell(shell, repo, profile)
+    info, shell_manifest, shell_files, version_info = validate_shell(shell, repo, profile)
     # Reject an incomplete toolchain before scanning or extracting private inputs.
     dotnet = check_tools(args.spirv_cross_sha256)
-    app_info = application_info(info, profile, info.get("CFBundleDisplayName", ""), args.bundle_id)
+    app_info = application_info(info, profile, info.get("CFBundleDisplayName", ""), args.bundle_id, version_info)
+    print(f"App source version: {version_info['source_version']} ({version_info['source_kind']}); commit: {version_info['commit'] or 'legacy shell fingerprint'}")
     app, family = source.scan_nsps(nsp_dir)
     if app != profile.title_id:
         raise ValueError(f"Unsupported title ID: {app:016X}")
@@ -203,6 +215,7 @@ def main():
         logs / "guest_dylib.log", env)
     app_files = dict(shell_files)
     app_files["Info.plist"] = plistlib.dumps(dict(app_info, CFBundleDisplayName=name))
+    app_files["dm/app-version.json"] = json.dumps(version_info, sort_keys=True).encode("utf-8")
     app_files.update({f"Frameworks/Guest.framework/{path.name}": path.read_bytes()
                       for path in (guest_dir / "Guest.framework").iterdir()})
     root = game_dir / "RomFS"

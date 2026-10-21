@@ -35,6 +35,12 @@ case "${DM_IOS_TARGET:-device}" in
 esac
 DD=$O/dd
 MODS=$(gp modules); MARKER=$(gp romfs_marker)
+VERSION_FILE=$O/app-version.json
+python3 "$DM/../scripts/app_version.py" --repo "$DM/.." --output "$VERSION_FILE" > /dev/null || die "app version resolution"
+[ -f "$VERSION_FILE" ] || die "missing app version metadata $VERSION_FILE"
+DM_MARKETING_VERSION=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["marketing_version"])' "$VERSION_FILE") || die "read marketing version"
+DM_BUILD_VERSION=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["build_version"])' "$VERSION_FILE") || die "read build version"
+export DM_MARKETING_VERSION DM_BUILD_VERSION
 NACP=$W/data/v0/control.nacp; [ -f "$NACP" ] || NACP=$(dirname "$ROMFS")/control.nacp
 [ -n "${DM_DISPLAY_NAME:-}" ] || DM_DISPLAY_NAME=$(python3 "$DM/tools/nacp.py" "$NACP") || die "no game name in $NACP (re-extract with nx_extract, or set DM_DISPLAY_NAME)"
 export LC_ALL=C DM_BUNDLE_ID=${DM_BUNDLE_ID:-$(gp bundle_id)} DM_DISPLAY_NAME DM_APP_CATEGORY=$(gp app_category) DM_TEAM_ID=${DM_TEAM_ID:-0000000000}   # placeholder identity: unsigned, the install tool replaces it
@@ -63,6 +69,7 @@ fi
 t "app: $DM_DISPLAY_NAME ($DM_BUNDLE_ID)"
 t "generate Gen/ (host sources, embedded modules, tables, shader libraries)"
 rm -rf Gen && mkdir -p Gen/dm Gen/msl || die "mkdir Gen"
+cp "$VERSION_FILE" Gen/dm/app-version.json || die "copy app version metadata"
 python3 tools/gen_build.py ../host Gen > Gen/dm.xcconfig || die "gen_build"
 F=$(python3 tools/gen_embed.py "$PATCHED" Gen/embed.S $MODS) || die "gen_embed"
 echo "OTHER_LDFLAGS = \$(inherited) \$(DM_FRAMEWORKS) $F" >> Gen/dm.xcconfig

@@ -180,3 +180,46 @@ bash scripts/setup_macos_packaging.sh \
 If setup or packaging fails, run `game/01004AB00A260000/tools-venv-mac/bin/python
 scripts/player_support.py doctor --route mac` and follow the reported checks.
 Detailed manual build steps are in the [development guide](development.md#build-by-hand-mac).
+
+## App version metadata
+
+The app version identifies Lordran Native, not the Nintendo game update selected
+by `--package`. Fresh native iOS, Simulator, macOS app and shell builds share
+`scripts/app_version.py`; `dm/ios/project.yml` takes its numeric values through
+the build scripts rather than hardcoding a version. The shell workflow fetches
+tag/history metadata and verifies that a selected tag points at HEAD.
+
+- Exact `vMAJOR.MINOR.PATCH` or `MAJOR.MINOR.PATCH` tags set
+  `CFBundleShortVersionString` to `MAJOR.MINOR.PATCH`, with no `v` prefix.
+- `CFBundleVersion` is `(MAJOR + 1).MINOR.PATCH`, so `v0.2.0` uses `1.2.0`.
+  This positive-major mapping is deterministic, not a CI run counter. Supported
+  tag components are major 0-9998 and minor/patch 0-99; out-of-range numeric tags
+  fail rather than emitting an invalid Apple bundle version.
+- Prerelease and build suffixes do not enter Apple's numeric fields. For
+  `v0.2.0-rc.1+build.7`, those fields are `0.2.0` and `1.2.0`; the complete tag
+  remains in `dm/app-version.json` alongside the full commit ID. Different
+  prereleases may share Apple's numeric versions; this is not an App Store
+  build-number allocation mechanism.
+- Non-SemVer tags retain their complete identity but use numeric fallback
+  `0.0.0` / `1.0.0`. Untagged commits and branch Actions runs use that same
+  numeric fallback with `dev-<12-character-commit>`, never a nearest older tag.
+  Multiple exact local tags require an explicit `GITHUB_REF=refs/tags/<tag>`.
+- A checkout with changes under `dm/` or `scripts/` uses the development
+  numeric fallback and `dev-<commit>-dirty-<content-hash>`. Its full fingerprint
+  and any selected base tag are retained, rather than claiming a clean release.
+- Source-only downloads without `.git` use `dev-source-<content-hash>` and the
+  numeric development fallback. Build-generated version files are not inputs
+  to version resolution; an extracted tree inside another checkout does not
+  inherit the enclosing checkout's tag. New shell ZIP names and embedded
+  metadata use the same source identity.
+- Windows/prebuilt-shell packaging retains the shell's embedded identity and
+  numeric versions even when Git is absent. It checks agreement with the shell
+  plist and keeps all manifest/source/profile checks. A legacy shell without
+  version metadata retains its old plist version and records its manifest
+  fingerprint as a legacy identity; the current checkout's tag is not guessed.
+
+The metadata file is `dm/app-version.json` inside the iOS app and
+`Contents/Resources/dm/app-version.json` inside the Mac app. iOS diagnostic
+exports include the full source identity; the Mac app launcher logs it on each
+launch. These records identify a build but do not prove gameplay compatibility,
+signing validity, or that a locally modified checkout matches a clean release.

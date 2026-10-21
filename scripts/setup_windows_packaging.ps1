@@ -48,7 +48,8 @@ Options:
   -NspDirectory PATH     Folder containing your base and update NSPs.
                          Default: game\01004AB00A260000.
   -KeysFile PATH         Your prod.keys file. Default: game\01004AB00A260000\prod.keys.
-  -ShellZip PATH         Matching game-free shell ZIP. Default: game\01004AB00A260000\LordranNative-shell-build-input.zip.
+  -ShellZip PATH         Matching game-free shell ZIP. Default: the only versioned or legacy
+                         shell ZIP in game\01004AB00A260000. Multiple choices require this option.
   -OutputPath PATH       IPA output under game\. Default: a timestamped name beside the NSPs.
   -Package VERSION       Registered game version, e.g. v196608 or v0.
   -KeepExtracted         Keep extracted game files after a successful build.
@@ -491,7 +492,6 @@ New-Item -ItemType Directory -Force -Path $buildWork | Out-Null
 $supportScript = Join-Path $RepoRoot 'scripts/player_support.py'
 $defaultNspDirectory = $gameDir
 $defaultKeysFile = Join-Path $gameDir 'prod.keys'
-$defaultShellZip = Join-Path $gameDir 'LordranNative-shell-build-input.zip'
 
 if ($Build) {
     Write-Step 'Building and verifying the unsigned iOS IPA'
@@ -500,7 +500,11 @@ if ($Build) {
     }
     $buildNspDirectory = Resolve-PrivatePath $NspDirectory $defaultNspDirectory
     $buildKeysFile = Resolve-PrivatePath $KeysFile $defaultKeysFile
-    $buildShellZip = Resolve-PrivatePath $ShellZip $defaultShellZip
+    if ($ShellZip) {
+        $buildShellZip = Resolve-PrivatePath $ShellZip ''
+    } else {
+        $buildShellZip = Resolve-PrivatePath (Get-PackagingShellZip -GameDirectory $gameDir) ''
+    }
     foreach ($item in @(
         @{ Path = $buildNspDirectory; Kind = 'Container'; Label = 'NSP folder' },
         @{ Path = $buildKeysFile; Kind = 'Leaf'; Label = 'prod.keys file' },

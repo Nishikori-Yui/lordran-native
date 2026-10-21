@@ -184,7 +184,6 @@ Set-Location 'C:\src\lordran-native'
 $Repo = (Get-Location).Path
 $GameDir = Join-Path $Repo 'game\01004AB00A260000'
 $Keys = Join-Path $GameDir 'prod.keys'
-$Shell = Join-Path $GameDir 'LordranNative-shell-build-input.zip'
 $Output = Join-Path $GameDir 'LordranNative-Windows.ipa'
 $BuildWork = Join-Path $GameDir '01004AB00A260000_shell_build'
 
@@ -274,14 +273,42 @@ Write-Host "已恢复 SPIRV-Cross SHA-256：$SpirvCrossSha256"
 
 ### 下载壳 ZIP
 
-在 GitHub 仓库的 **Releases** 页面打开与上面 checkout 相同的 tag，下载
-`LordranNative-shell-build-input.zip`。如果 Release 中没有该文件，就打开仓库的
-**Actions** 页面，选择 **Build unsigned iOS shell**，进入同一个 tag 的成功运行记录，
-下载名为 `LordranNative-shell-build-input` 的 artifact。
+在 GitHub 仓库的 **Releases** 页面打开与上面 checkout 相同的 tag，下载对应的壳 ZIP。
+新构建使用 `LordranNative-shell-build-input-<准确的 tag>.zip`，例如
+`LordranNative-shell-build-input-v0.2.0.zip`（只是命名示例，不表示该版本已经发布）。
+开发构建使用 `LordranNative-shell-build-input-dev-<12 位 commit>.zip`。
+tag 含有文件名不安全字符时会经过清理并附加短哈希；`v0.2.0` 这样的普通 tag 会原样保留。
+请保留下载时的文件名。
+
+如果 Release 中没有壳，就打开仓库的 **Actions** 页面，选择 **Build unsigned iOS shell**，
+进入同一个 tag 或开发 commit 的成功运行记录。新的 artifact 名与 ZIP 去掉 `.zip` 后的名称一致。
+解压 artifact 下载包，取出里面的壳 ZIP。历史 Release（包括 `v0.1.0`）仍使用
+`LordranNative-shell-build-input.zip` 以及旧 artifact 名 `LordranNative-shell-build-input`；
+这些历史资产不会被重命名。
+
+在本地运行 `scripts/build_shell.py --work game/<工作目录>` 时使用相同规则：HEAD 上有准确的
+tag 就用该 tag，否则用 `dev-<commit>`。HEAD 对应多个 tag 时，必须通过
+`GITHUB_REF=refs/tags/<tag>` 选择 Release 身份。`--out` 只改变输出路径，不能消除 App 元数据
+的 tag 歧义。Actions 的非 tag 运行始终使用开发构建名，即使该 commit 同时有 tag。
+
+没有 `.git` 时，新构建的壳会在 ZIP 文件名及 App 身份中一致使用 `dev-source-<内容哈希>`。
+不会根据源码目录名猜测 tag，也不会复用之前生成的版本记录。
 
 不要使用其他 tag 的壳。壳与源码版本不匹配是构建失败最常见的原因之一。
 
 把壳 ZIP、两个 NSP 和自己的 `prod.keys` 复制到 `$GameDir`。文件名可以不同，但该目录必须包含一个受支持的本体版本及其 `v196608` 更新版本。
+
+下载后再选择壳。自动配置脚本的 `-Build` 也使用同样的查找规则：目录中必须只有一个新版或旧版壳 ZIP。
+存在多个候选文件时会报错，不会选择最新文件或优先选择新版名称。保留多个版本时，请明确设置
+`$Shell`，或向配置脚本传入 `-ShellZip`。查找规则和文件名都不会跳过 manifest、源码、着色器链或标题检查。
+
+```powershell
+$ShellName = Read-Host 'Enter the exact downloaded shell ZIP filename'
+$Shell = Join-Path $GameDir $ShellName
+```
+
+这种明确选择的方式也适用于尚无新版查找函数的历史源码。对于上面的 `v0.1.0` 示例，输入
+`LordranNative-shell-build-input.zip`。
 
 检查私有输入是否存在：
 
@@ -468,3 +495,35 @@ Windows 无法运行 Apple Metal 编译器，因此 IPA 内包含 MSL 源码，i
 
 该流程仍属实验性。如果可以使用 Mac/Xcode，建议优先使用常规流程，因为它会在安装
 前预先编译着色器。
+
+## App 版本元数据
+
+App 版本标识 Lordran Native，不是 `--package` 选择的 Nintendo 游戏更新版本。
+原生 iOS、Simulator、macOS App 和壳构建共用 `scripts/app_version.py`；
+`dm/ios/project.yml` 通过构建脚本接收数字版本，不再写死版本号。
+壳工作流会获取 tag/历史元数据，并检查所选 tag 确实指向 HEAD。
+
+- 准确的 `vMAJOR.MINOR.PATCH` 或 `MAJOR.MINOR.PATCH` tag 将
+  `CFBundleShortVersionString` 设为不带 `v` 的 `MAJOR.MINOR.PATCH`。
+- `CFBundleVersion` 使用 `(MAJOR + 1).MINOR.PATCH`，因此 `v0.2.0` 对应 `1.2.0`。
+  这是确定性的正主版本映射，不是 CI 运行计数。支持 tag 主版本 0-9998、次版本和补丁版本
+  0-99；超出范围的数字 tag 会报错，不会生成不符合 Apple 约束的版本号。
+- 预发布和构建后缀不进入 Apple 数字字段。`v0.2.0-rc.1+build.7` 的数字字段为
+  `0.2.0` 和 `1.2.0`；完整 tag 与完整 commit ID 保存在 `dm/app-version.json`。
+  不同预发布可能共享数字版本；此机制不负责 App Store 构建号分配。
+- 非 SemVer tag 保留完整身份，但数字字段回退到 `0.0.0` / `1.0.0`。无 tag 的 commit
+  和 Actions 分支运行也使用该数字回退，并以 `dev-<12 位 commit>` 标识，绝不沿用最近的旧 tag。
+  本地存在多个准确 tag 时必须通过 `GITHUB_REF=refs/tags/<tag>` 明确选择。
+- `dm/` 或 `scripts/` 有本地修改时，使用开发数字回退和
+  `dev-<commit>-dirty-<内容哈希>`，保留完整指纹及所选的基础 tag，不冒充干净 Release。
+- 没有 `.git` 的纯源码下载使用 `dev-source-<内容哈希>` 和开发数字回退。之前构建生成的版本
+  文件不参与解析；解压在其他 checkout 内的源码也不会继承外层 checkout 的 tag。
+  新壳 ZIP 文件名和嵌入元数据使用同一份源码身份。
+- Windows/预编译壳打包即使没有 Git，也保留壳内的身份和数字版本，并检查它们与壳 plist 一致；
+  manifest、源码及游戏档案检查保持不变。没有版本元数据的旧壳保留旧 plist 版本，以 manifest
+  源码指纹标记为旧壳，不会猜测当前 checkout 的 tag。
+
+元数据位于 iOS App 的 `dm/app-version.json` 和 Mac App 的
+`Contents/Resources/dm/app-version.json`。iOS 诊断导出包含完整源码身份；Mac App 启动器
+每次启动都会记录它。它们标识构建，但不能证明游戏兼容性、签名有效性，也不证明本地修改过的源码
+与干净 Release 一致。
