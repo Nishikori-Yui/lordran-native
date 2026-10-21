@@ -134,11 +134,11 @@ def main():
     if any(not path.is_relative_to(private) for path in (nsp_dir, keys, shell, output)):
         raise ValueError("NSP folder, keys, shell, and output IPA must remain under this repository's game/ directory")
     check_output_available(output, args.replace)
-    info, shell_manifest, shell_files, version = validate_shell(shell, repo, profile)
+    info, shell_manifest, shell_files, version_info = validate_shell(shell, repo, profile)
     # Reject an incomplete toolchain before scanning or extracting private inputs.
     dotnet = check_tools(args.spirv_cross_sha256)
-    app_info = application_info(info, profile, info.get("CFBundleDisplayName", ""), args.bundle_id, version)
-    print(f"App source version: {version['source_version']} ({version['source_kind']}); commit: {version['commit'] or 'legacy shell fingerprint'}")
+    app_info = application_info(info, profile, info.get("CFBundleDisplayName", ""), args.bundle_id, version_info)
+    print(f"App source version: {version_info['source_version']} ({version_info['source_kind']}); commit: {version_info['commit'] or 'legacy shell fingerprint'}")
     app, family = source.scan_nsps(nsp_dir)
     if app != profile.title_id:
         raise ValueError(f"Unsupported title ID: {app:016X}")
@@ -215,7 +215,7 @@ def main():
         logs / "guest_dylib.log", env)
     app_files = dict(shell_files)
     app_files["Info.plist"] = plistlib.dumps(dict(app_info, CFBundleDisplayName=name))
-    app_files["dm/app-version.json"] = json.dumps(version, sort_keys=True).encode("utf-8")
+    app_files["dm/app-version.json"] = json.dumps(version_info, sort_keys=True).encode("utf-8")
     app_files.update({f"Frameworks/Guest.framework/{path.name}": path.read_bytes()
                       for path in (guest_dir / "Guest.framework").iterdir()})
     root = game_dir / "RomFS"

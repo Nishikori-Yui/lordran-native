@@ -1,5 +1,6 @@
 """Compatibility checks must depend on source, not local build products."""
 import json
+import os
 import plistlib
 import sys
 import tempfile
@@ -134,6 +135,95 @@ class SourceFingerprintTests(unittest.TestCase):
                         archive.writestr("Payload/DmIOS.app/" + name, contents)
                 with self.assertRaisesRegex(ValueError, "Info.plist.*disagree"):
                     build_ipa_from_shell.validate_shell(shell, self.repo, self.game)
+
+    def test_final_ipa_preserves_source_identity_after_package_extraction(self):
+        self.game.id = "01004AB00A260000"
+        self.game.title_id = int(self.game.id, 16)
+        self.game.table = lambda name: self.game.dir / name
+        self.game.bundle_id = lambda value: value
+        self.game.get = {"package": "v196608", "ipa": "out.ipa", "zip_store": ".bin"}.__getitem__
+        self.game.words = {"shader_versions": ["v0", "v196608"], "modules": ["main"]}.__getitem__
+        self.game.builds = lambda: ["v0", "v196608"]
+        chain, shader = "123456789abc", "12345678abcdef01"
+        self.write("dm/games/01004AB00A260000/dmsh_chain.h", f'#define DMSH_CHAIN "{chain}"\n'.encode())
+        self.write("dm/games/01004AB00A260000/c1_full.tsv", f"# chain b-{chain} date\n".encode())
+        self.write("dm/games/01004AB00A260000/shader_map.tsv", f"v0\tvs\t0\t{shader}\n".encode())
+        manifest = shell_common.make_manifest(self.repo, self.game)
+        private = self.repo / "game"
+        private.mkdir()
+        keys, shell = private / "synthetic.keys", private / "shell.zip"
+        keys.touch()
+
+        def extract(_nx, _keys, root, package, *_args):
+            romfs = root / package / "RomFS"
+            romfs.mkdir(parents=True, exist_ok=True)
+            (romfs / "synthetic.bin").write_bytes(b"synthetic game data")
+            return romfs.parent
+
+        def run(command, _log, env=None, cwd=None):
+            if command[0] == "synthetic-dotnet":
+                target = Path(command[command.index("-o") + 1])
+                target.mkdir(parents=True, exist_ok=True)
+                name = ("nx_extract.exe" if os.name == "nt" else "nx_extract") if target.name == "nx_extract" else "dmsh_xlate.dll"
+                (target / name).touch()
+            elif str(command[1]).endswith("portable_shaders.py"):
+                target = Path(command[-1]) / f"b-{chain}"
+                target.mkdir(parents=True, exist_ok=True)
+                for suffix in ("metal", "metallib", "json"):
+                    (target / f"{shader}_b.{suffix}").write_bytes(b"synthetic shader")
+            elif command[1] == "-c":
+                framework = Path(command[5]) / "Guest.framework"
+                framework.mkdir(parents=True, exist_ok=True)
+                (framework / "Guest").write_bytes(b"synthetic guest")
+            else:
+                raise AssertionError(f"Unexpected external command: {command}")
+
+        source = SimpleNamespace(
+            scan_nsps=lambda _: (self.game.title_id, {}),
+            pick_nsps=lambda _family, versions: {v: ("synthetic-base", None if v == "v0" else "synthetic-update") for v in versions},
+            extract=extract, can_clone=lambda _: False,
+            rewrite=lambda *_: None, split_shaders=lambda *_: None)
+        modules = {"game": SimpleNamespace(load=lambda: self.game), "build_ipa_from_nsp": source,
+                   "nacp": SimpleNamespace(name=lambda _: "Synthetic app")}
+        versions = [dict(schema=1, source_version=tag, source_kind="release", commit="b" * 40,
+                         marketing_version="0.2.0", build_version="1.2.0")
+                    for tag in ("v0.2.0", "v0.2.0-rc.1+build.7")]
+        versions += [dict(schema=1, source_version="dev-" + "b" * 12, source_kind="development",
+                          commit="b" * 40, marketing_version="0.0.0", build_version="1.0.0"),
+                     app_version.resolve(self.repo, {}), None]
+        for index, version in enumerate(versions):
+            with self.subTest(source_version=version["source_version"] if version else "legacy-shell"):
+                info = dict(CFBundleIdentifier="dev.example.shell", CFBundleSupportedPlatforms=["iPhoneOS"],
+                            CFBundleShortVersionString=version["marketing_version"] if version else "1.0",
+                            CFBundleVersion=version["build_version"] if version else "1")
+                payload = dict.fromkeys(("DmIOS", "dm/shader_map.tsv", "dm/pso_manifest.tsv",
+                                         "dm/font/standard.ttf", "dm/font/nintendo_ext.ttf"), b"synthetic")
+                payload.update({"Info.plist": plistlib.dumps(info),
+                                "dm/shell.json": json.dumps(manifest).encode(),
+                                "dm/c1_full.tsv": self.game.table("c1_full.tsv").read_bytes()})
+                if version:
+                    payload["dm/app-version.json"] = json.dumps(version).encode()
+                expected = version or app_version.legacy_identity(manifest, info)
+                with zipfile.ZipFile(shell, "w") as archive:
+                    for name, contents in payload.items():
+                        archive.writestr("Payload/DmIOS.app/" + name, contents)
+                output = private / f"synthetic-{index}.ipa"
+                with patch.dict(sys.modules, modules), \
+                        patch.object(build_ipa_from_shell, "__file__", str(self.repo / "scripts/build_ipa_from_shell.py")), \
+                        patch.object(sys, "path", sys.path.copy()), \
+                        patch.object(sys, "argv", ["build_ipa_from_shell.py", str(private), "-k", str(keys),
+                                                  "--shell", str(shell), "-o", str(output)]), \
+                        patch.object(build_ipa_from_shell, "check_tools", return_value="synthetic-dotnet"), \
+                        patch.object(build_ipa_from_shell, "run", side_effect=run), \
+                        patch.object(app_version, "resolve", side_effect=AssertionError("Do not resolve local Git")):
+                    build_ipa_from_shell.main()
+                with zipfile.ZipFile(output) as archive:
+                    self.assertIsNone(archive.testzip())
+                    actual = json.loads(archive.read("Payload/DmIOS.app/dm/app-version.json"))
+                    self.assertEqual(actual, expected)
+                    packaged = plistlib.loads(archive.read("Payload/DmIOS.app/Info.plist"))
+                    self.assertEqual(packaged["CFBundleShortVersionString"], expected["marketing_version"])
+                    self.assertEqual(packaged["CFBundleVersion"], expected["build_version"])
 
 
 class C1GuardTests(unittest.TestCase):
