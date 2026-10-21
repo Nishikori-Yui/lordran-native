@@ -22,9 +22,23 @@ int main(void) {
         assert(near(invalid.deadzone, 0.12) && !invalid.fullLayout);
         assert(near(invalid.lookSensitivity, 1) && !invalid.lookInvertX && !invalid.lookInvertY);
         invalid = [[DmControlProfile alloc] initWithDictionary:@{@"look_sensitivity": @100} defaultFull:NO];
-        assert(near(invalid.lookSensitivity, 3));
+        assert(near(invalid.lookSensitivity, 1));
         invalid = [[DmControlProfile alloc] initWithDictionary:@{@"look_sensitivity": @-1} defaultFull:NO];
-        assert(near(invalid.lookSensitivity, 0.25));
+        assert(near(invalid.lookSensitivity, 0.25 / 3));
+        DmControlProfile *legacy = [[DmControlProfile alloc] initWithDictionary:@{@"version": @1,
+            @"look_sensitivity": @3, @"look_invert_x": @YES} defaultFull:YES];
+        assert(near(legacy.lookSensitivity, 1) && legacy.lookInvertX);
+        legacy = [[DmControlProfile alloc] initWithDictionary:@{@"look_sensitivity": @1} defaultFull:YES];
+        assert(near(legacy.lookSensitivity, 1.0 / 3));
+        DmControlProfile *migrated = [[DmControlProfile alloc] initWithDictionary:legacy.dictionary defaultFull:YES];
+        assert([migrated.dictionary[@"version"] intValue] == 2 && near(migrated.lookSensitivity, 1.0 / 3));
+        for (NSNumber *value in @[@0.05, @0.5, @1, @2, @3]) {
+            DmControlProfile *modern = [[DmControlProfile alloc] initWithDictionary:@{@"version": @2,
+                @"look_sensitivity": value} defaultFull:YES];
+            assert(near(modern.lookSensitivity, value.doubleValue));
+            DmControlProfile *copied = [modern copy];
+            assert(near(copied.lookSensitivity, modern.lookSensitivity));
+        }
         invalid = [[DmControlProfile alloc] initWithDictionary:(id)@[] defaultFull:YES];
         assert(invalid.fullLayout);
         s = DmControlStyleDefault(); s.positioned = YES; s.x = 0.27; s.y = 0.68;

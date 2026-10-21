@@ -37,7 +37,11 @@ NSString *DmControlName(NSInteger c) {
         _rightMode = (DmStickMode)number(d[@"right"], DmStickSwipe, 0, 1);
         _faceMapping = (DmFaceMapping)number(d[@"mapping"], DmFacePosition, 0, 2);
         _deadzone = number(d[@"deadzone"], 0.12, 0.05, 0.35);
-        _lookSensitivity = number(d[@"look_sensitivity"], 1, 0.25, 3);
+        BOOL legacyLook = number(d[@"version"], 1, 1, 2) < 2 &&
+                          [d[@"look_sensitivity"] isKindOfClass:NSNumber.class] &&
+                          isfinite([d[@"look_sensitivity"] doubleValue]);
+        _lookSensitivity = legacyLook ? number(d[@"look_sensitivity"], 1, 0.25, 3) / 3 :
+                                       number(d[@"look_sensitivity"], 1, 0.05, 3);
         _lookInvertX = number(d[@"look_invert_x"], NO, 0, 1) != 0;
         _lookInvertY = number(d[@"look_invert_y"], NO, 0, 1) != 0;
         _hideWithController = number(d[@"hide"], YES, 0, 1) != 0;
@@ -73,8 +77,8 @@ NSString *DmControlName(NSInteger c) {
         if (s.positioned) { v[@"x"] = @(s.x); v[@"y"] = @(s.y); }
         [styles addObject:v];
     }
-    return @{@"version": @1, @"styles": styles, @"left": @(_leftMode), @"right": @(_rightMode),
-             @"look_sensitivity": @(number(@(_lookSensitivity), 1, 0.25, 3)),
+    return @{@"version": @2, @"styles": styles, @"left": @(_leftMode), @"right": @(_rightMode),
+             @"look_sensitivity": @(number(@(_lookSensitivity), 1, 0.05, 3)),
              @"look_invert_x": @(_lookInvertX), @"look_invert_y": @(_lookInvertY),
              @"mapping": @(_faceMapping), @"deadzone": @(_deadzone), @"hide": @(_hideWithController), @"full": @(_fullLayout)};
 }

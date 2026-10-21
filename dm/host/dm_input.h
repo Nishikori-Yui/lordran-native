@@ -11,6 +11,10 @@ enum {
 };
 #define DM_STICK_MAX 32767
 void dm_input_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);
+// Relative touchscreen travel, in normalized stick-seconds; side 0 = movement, 1 = camera.
+// Normal lift leaves pending travel for one read; cancellation/lifecycle changes clear it.
+void dm_input_swipe_add(int side, double x, double y);
+void dm_input_swipe_cancel(int side);
 uint64_t dm_input_samples(void);   // Cumulative number of times the game has sampled the controller
 // Physical / virtual controller (iOS GameController, dm_gamepad.m): stored separately from touch input; when the game reads the controller, buttons are
 // ORed bitwise and a stick uses the controller's value if it is non-zero. All 0 when no controller is connected, so values are bit-for-bit the same as before

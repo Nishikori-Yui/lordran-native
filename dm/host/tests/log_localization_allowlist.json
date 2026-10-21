@@ -468,5 +468,40 @@
     "file": "dm/host/cheats_mac.m",
     "source": "chinese:@\"此版本未包含可即时切换的金手指。\"]];",
     "purpose": "Localized user interface text"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addSlider:SliderLookSensitivity title:T(@\"Sensitivity\", @\"灵敏度\") min:0.05 max:3 value:_gamepad.profile.lookSensitivity];",
+    "purpose": "Localized touch camera preferences; not a runtime log"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "NSArray *speeds = DmAppUsesChinese() ? @[@\"慢速 0.5 倍\", @\"标准 1 倍\", @\"快速 2 倍\"] :",
+    "purpose": "Localized touch camera preferences; not a runtime log"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "_lookPresets = [self addChoice:T(@\"Camera speed\", @\"视角速度\") choices:speeds selected:preset change:^(NSInteger index) {",
+    "purpose": "Localized touch camera preferences; not a runtime log"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "[self addText:T(@\"1x matches the previous 3x. Fine-tune from 0.05x to 3x; saved settings keep their previous response.\", @\"新 1 倍相当于旧 3 倍，可在 0.05–3 倍间微调；已保存的设置保留原来的响应强度。\") small:YES];",
+    "purpose": "Localized touch camera preferences; not a runtime log"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "NSArray *names = DmAppUsesChinese() ? @[@\"慢速 0.5 倍\", @\"标准 1 倍\", @\"快速 2 倍\"] :",
+    "purpose": "Localized touch camera preferences; not a runtime log"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "config.title = [NSString stringWithFormat:@\"%@: %@\", T(@\"Camera speed\", @\"视角速度\"),",
+    "purpose": "Localized touch camera preferences; not a runtime log"
+  },
+  {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "preset < 0 ? T(@\"Custom\", @\"自定义\") : names[preset]];",
+    "purpose": "Localized touch camera preferences; not a runtime log"
   }
 ]
