@@ -50,8 +50,8 @@ void dm_input_set(uint64_t b, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
 }
 void dm_input_swipe_add(int side, double x, double y) { dm_input_motion_add(&motion[side], x, y, inputTime); }
 void dm_input_swipe_cancel(int side) { dm_input_motion_cancel(&motion[side]); }
-static void sampleInput(void) {
-    inputTime += 16666667;
+static void sampleInputAfter(uint64_t elapsed) {
+    inputTime += elapsed;
     memcpy(axes, absoluteAxes, sizeof axes);
     for (int side = 0; side < 2; side++) {
         int32_t x, y;
@@ -60,6 +60,7 @@ static void sampleInput(void) {
         if (!axes[side * 2] && !axes[side * 2 + 1]) { axes[side * 2] = x; axes[side * 2 + 1] = y; }
     }
 }
+static void sampleInput(void) { sampleInputAfter(16666667); }
 void DmDiagnosticsShare(UIViewController *presenter, UIButton *button) { assert(presenter); exportAnchor = button; }
 
 @interface TestPad : DmGamepad
@@ -261,6 +262,24 @@ static void runTests(UIViewController *presenter) {
         sampleInput();
         assert(axes[0] > 0 && axes[1] > 0 && axes[2] < 0 && axes[3] < 0);
         end(pad, left); end(pad, right); released();
+    }
+    // Use unsaturated real touch events to check the swipe path independently of stick tuning.
+    DmControlProfile *legacyLook = [[DmControlProfile alloc] initWithDictionary:@{@"version": @1,
+        @"look_sensitivity": @1} defaultFull:YES];
+    const double gains[] = {0.05, 0.5, 1, 2, 3, legacyLook.lookSensitivity};
+    for (unsigned g = 0; g < sizeof gains / sizeof gains[0]; g++) for (int invert = 0; invert < 4; invert++) {
+        pad.profile.leftMode = pad.profile.rightMode = DmStickSwipe;
+        pad.profile.lookSensitivity = gains[g];
+        pad.profile.lookInvertX = invert & 1; pad.profile.lookInvertY = (invert >> 1) & 1;
+        [pad profileChanged]; [pad layoutIfNeeded];
+        TestTouch *left = begin(pad, CGPointMake(340, 150)), *right = begin(pad, CGPointMake(510, 150));
+        move(pad, left, CGPointMake(342, 149)); move(pad, right, CGPointMake(512, 149));
+        sampleInputAfter(66666667);
+        assert(axes[0] == 1638 && axes[1] == 819);
+        int32_t expectedX = (int32_t)lround(0.15 * gains[g] * (invert & 1 ? -1 : 1) * 32767);
+        int32_t expectedY = (int32_t)lround(0.075 * gains[g] * (invert & 2 ? -1 : 1) * 32767);
+        assert(abs(axes[2] - expectedX) <= 1 && abs(axes[3] - expectedY) <= 1);
+        end(pad, left); end(pad, right); sampleInput(); released();
     }
     pad.profile.leftMode = DmStickJoystick; pad.profile.rightMode = DmStickSwipe; [pad profileChanged];
     [overlay toggleMenu]; [overlay inputSettings]; panelFits(overlay);
