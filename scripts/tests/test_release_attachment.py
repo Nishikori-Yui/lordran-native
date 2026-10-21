@@ -8,6 +8,10 @@ import textwrap
 import unittest
 from urllib.parse import quote
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from shell_artifact import PREFIX, shell_filename
+
 
 @unittest.skipIf(os.name == "nt", "The release job runs in Bash on Ubuntu")
 class ReleaseAttachmentTests(unittest.TestCase):
@@ -32,6 +36,7 @@ class ReleaseAttachmentTests(unittest.TestCase):
             import json
             import os
             import sys
+            from pathlib import Path
             args = sys.argv[1:]
             with open(os.environ["GH_TEST_CALLS"], "a") as output:
                 output.write(json.dumps({"args": args, "repo": os.environ.get("GH_REPO")}) + "\\n")
@@ -43,16 +48,24 @@ class ReleaseAttachmentTests(unittest.TestCase):
                 print("HTTP/2.0 " + status + " Test response")
                 sys.exit(0 if status == "200" else 1)
             if args[:2] == ["release", "upload"]:
+                if not Path(args[-1]).is_file():
+                    sys.exit(98)
                 sys.exit(int(os.environ.get("GH_TEST_UPLOAD_EXIT", "0")))
             sys.exit(99)
             '''))
         gh.chmod(0o755)
         self.env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ["PATH"],
                         GH_REPO="test-owner/test-repo", GITHUB_REF_NAME="v1.2.3",
+                        SHELL_FILENAME=PREFIX + "-v1.2.3.zip",
                         GH_TOKEN="test-token", GH_TEST_CALLS=str(self.calls))
 
     def run_step(self, status, **settings):
         env = dict(self.env, GH_TEST_STATUS=status, **settings)
+        env["SHELL_FILENAME"] = shell_filename(self.root, {
+            "GITHUB_REF": "refs/tags/" + env["GITHUB_REF_NAME"]})
+        artifact = self.root / "game/ci-shell" / env["SHELL_FILENAME"]
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.touch()
         result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", self.script],
                                 cwd=self.root, env=env, capture_output=True, text=True)
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
@@ -67,7 +80,8 @@ class ReleaseAttachmentTests(unittest.TestCase):
         self.assertEqual(calls[0]["args"], [
             "api", "--include", "--silent", "repos/test-owner/test-repo/releases/tags/v1.2.3"])
         self.assertEqual(calls[1]["args"], [
-            "release", "upload", "v1.2.3", "dist/LordranNative-shell-build-input.zip", "--clobber"])
+            "release", "upload", "--clobber", "--", "v1.2.3",
+            "game/ci-shell/LordranNative-shell-build-input-v1.2.3.zip"])
 
     def test_missing_release_skips_upload(self):
         result, calls = self.run_step("404")
@@ -90,12 +104,27 @@ class ReleaseAttachmentTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
 
     def test_tag_is_encoded_for_lookup_and_preserved_for_upload(self):
-        tag = "releases/test +?%"
+        tag = "-releases/test +?%"
         result, calls = self.run_step("200", GITHUB_REF_NAME=tag)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls[0]["args"][-1],
                          "repos/test-owner/test-repo/releases/tags/" + quote(tag, safe=""))
-        self.assertEqual(calls[1]["args"][2], tag)
+        self.assertEqual(calls[1]["args"][4], tag)
+        self.assertEqual(Path(calls[1]["args"][5]).name, shell_filename(self.root, {
+            "GITHUB_REF": "refs/tags/" + tag}))
+
+    def test_workflow_passes_the_same_metadata_through_all_stages(self):
+        workflow = (Path(__file__).resolve().parents[2] /
+                    ".github/workflows/build-shell.yml").read_text()
+        for expected in (
+                "filename: ${{ steps.shell.outputs.filename }}",
+                "artifact_name: ${{ steps.shell.outputs.artifact_name }}",
+                "SHELL_PATH: ${{ steps.shell.outputs.path }}", '--out "$SHELL_PATH"',
+                "name: ${{ steps.shell.outputs.artifact_name }}",
+                "path: ${{ steps.shell.outputs.path }}",
+                "name: ${{ needs.build-shell.outputs.artifact_name }}",
+                "SHELL_FILENAME: ${{ needs.build-shell.outputs.filename }}"):
+            self.assertIn(expected, workflow)
 
 
 if __name__ == "__main__":

@@ -1,13 +1,17 @@
 """Compatibility checks must depend on source, not local build products."""
+import json
+import plistlib
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import shell_common
+import build_ipa_from_shell
 
 
 class SourceFingerprintTests(unittest.TestCase):
@@ -56,6 +60,32 @@ class SourceFingerprintTests(unittest.TestCase):
             if path.is_file():
                 path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
         self.assertEqual(self.fingerprint(), expected)
+
+    def test_legacy_and_versioned_names_keep_real_manifest_checks(self):
+        self.game.id = "01004AB00A260000"
+        self.game.table = lambda name: self.game.dir / name
+        self.write("dm/games/01004AB00A260000/dmsh_chain.h", b'#define DMSH_CHAIN "123456789abc"\n')
+        self.write("dm/games/01004AB00A260000/c1_full.tsv", b"# chain b-123456789abc date\n")
+        self.write("dm/games/01004AB00A260000/shader_map.tsv", b"v0\tvs\t0\t12345678abcdef01\n")
+        manifest = shell_common.make_manifest(self.repo, self.game)
+        files = dict.fromkeys(("DmIOS", "dm/shader_map.tsv", "dm/pso_manifest.tsv",
+                              "dm/font/standard.ttf", "dm/font/nintendo_ext.ttf"), b"synthetic")
+        files.update({"Info.plist": plistlib.dumps({"CFBundleSupportedPlatforms": ["iPhoneOS"]}),
+                      "dm/shell.json": json.dumps(manifest).encode(),
+                      "dm/c1_full.tsv": self.game.table("c1_full.tsv").read_bytes()})
+        for filename in ("LordranNative-shell-build-input.zip",
+                         "LordranNative-shell-build-input-v0.2.0.zip",
+                         "LordranNative-shell-build-input-dev-123456789abc.zip"):
+            with self.subTest(filename=filename):
+                shell = self.repo / filename
+                with zipfile.ZipFile(shell, "w") as archive:
+                    for name, content in files.items():
+                        archive.writestr("Payload/DmIOS.app/" + name, content)
+                build_ipa_from_shell.validate_shell(shell, self.repo, self.game)
+                self.write("dm/host/runtime.c", b"int value = 2;\n")
+                with self.assertRaisesRegex(ValueError, "Shell source mismatch"):
+                    build_ipa_from_shell.validate_shell(shell, self.repo, self.game)
+                self.write("dm/host/runtime.c", b"int value = 1;\n")
 
 
 class C1GuardTests(unittest.TestCase):

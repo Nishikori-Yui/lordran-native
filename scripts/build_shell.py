@@ -11,12 +11,14 @@ import zipfile
 from pathlib import Path
 
 from shell_common import check_c1_table, make_manifest
+from shell_artifact import shell_filename
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work", required=True, type=Path, help="Private work directory under game/")
-    parser.add_argument("-o", "--out", type=Path, help="Output shell .zip under game/")
+    parser.add_argument("-o", "--out", type=Path,
+                        help="Output shell .zip under game/ (default: exact tag or dev-<commit> name)")
     parser.add_argument("--bundle-id", help="App bundle ID (default: the profile's bundle_id)")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
@@ -25,7 +27,7 @@ def main():
     profile = game.load()
     bundle_id = profile.bundle_id(args.bundle_id)
     work = args.work.resolve()
-    output = args.out.resolve() if args.out else work / "LordranNative-shell-build-input.zip"
+    output = args.out.resolve() if args.out else work / shell_filename(repo)
     private = (repo / "game").resolve()
     if not work.is_relative_to(private) or not output.is_relative_to(private):
         parser.error("Shell work and output paths must be under game/")
