@@ -32,13 +32,12 @@ bash scripts/setup_macos_packaging.sh --target setup-only
 
 ### Optional mirrors for mainland China
 
-Before setup, use USTC for Homebrew's update repository, bottle downloads, and
-metadata API, and TUNA for Python packages. These variables affect the current
-terminal and its child processes only; they do not rewrite shell configuration or the current project repository
-remote. Homebrew may update its own checkout remote while applying this setting. Run subsequent IPA/app build commands in the same terminal.
+Before setup, use USTC for Homebrew bottle downloads and its metadata API,
+and TUNA for Python packages. These variables affect the current terminal and
+its child processes only; they do not rewrite shell configuration or Git
+remotes. Run subsequent IPA/app build commands in the same terminal.
 
 ```bash
-export HOMEBREW_BREW_GIT_REMOTE="https://mirrors.ustc.edu.cn/brew.git"
 export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles"
 export HOMEBREW_API_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles/api"
 export PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
@@ -47,7 +46,8 @@ bash scripts/setup_macos_packaging.sh --target setup-only
 
 The script does not select mirrors by locale. These mirrors do not proxy every
 download: Xcode still comes from Apple, casks such as the .NET SDK and source
-archives may still use upstream URLs, and GitHub/NuGet downloads are unchanged.
+archives may still use upstream URLs. Homebrew Git updates and GitHub/NuGet
+downloads are unchanged.
 Only public dependencies are requested from mirrors, not game inputs or outputs.
 Install Homebrew first using its [official instructions](https://brew.sh/) or
 consult [USTC's Homebrew help](https://mirrors.ustc.edu.cn/help/brew.git.html).
@@ -57,7 +57,7 @@ If a mirror is unreachable, behind upstream, or returns a hash mismatch, retry
 with Homebrew's defaults and official PyPI rather than disabling verification:
 
 ```bash
-unset HOMEBREW_BREW_GIT_REMOTE HOMEBREW_BOTTLE_DOMAIN HOMEBREW_API_DOMAIN
+unset HOMEBREW_BOTTLE_DOMAIN HOMEBREW_API_DOMAIN
 export PIP_INDEX_URL="https://pypi.org/simple"
 bash scripts/setup_macos_packaging.sh --target setup-only
 ```

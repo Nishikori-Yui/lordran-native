@@ -27,7 +27,6 @@ Lordran Native 将 **《黑暗之魂：重制版》**（`01004AB00A260000`）原
 请先从 Mac App Store 安装 Xcode，并安装 Homebrew。在仓库根目录执行下面整段，即可安装其余公开工具并检查环境；该命令不会读取游戏文件。中国大陆网络建议使用以下中科大 Homebrew 和清华 PyPI 镜像设置，仅影响当前终端及其子进程：
 
 ```bash
-export HOMEBREW_BREW_GIT_REMOTE="https://mirrors.ustc.edu.cn/brew.git"
 export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles"
 export HOMEBREW_API_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles/api"
 export PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
@@ -116,7 +115,6 @@ Doctor 会报告缺少的依赖、提取工具项目所需的 SDK、profile/chai
 ```sh
 git clone https://github.com/Nishikori-Yui/lordran-native.git lordran-native
 cd lordran-native
-export HOMEBREW_BREW_GIT_REMOTE="https://mirrors.ustc.edu.cn/brew.git"
 export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles"
 export HOMEBREW_API_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles/api"
 export PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
