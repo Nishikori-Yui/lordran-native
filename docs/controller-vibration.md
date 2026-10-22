@@ -67,7 +67,7 @@ bounded vibration queue
         |      Switch Pro / Joy-Con protocol output
         |
         +--> optional diagnostic renderer
-               capture decoded frames and write outcomes
+               capture source frames and write outcomes
 ```
 
 The queue is the important boundary. The guest thread must not wait for
@@ -76,11 +76,41 @@ ring and schedule one main-queue drain at a time. Oldest frames are dropped
 when the ring is full, preventing an unbounded `dispatch_async` chain where
 old vibration updates arrive after the game has already sent a stop.
 
-The initial queue implementation should use a fixed-size ring with a
-last-value-wins policy for updates that have not yet reached the output
-backend. A zero frame is a barrier: it must be delivered ahead of later
-nonzero frames and should clear pending nonzero work when the output backend
-accepts it.
+The current queue uses a fixed-size ring and drops the oldest nonzero frame on
+overflow before dropping a stop frame. If the ring contains only stops, it
+drops the oldest stop to stay bounded. It does not coalesce repeated values.
+Any future coalescing policy must preserve order around stop frames and be
+justified by measured backend latency rather than applied at the HLE boundary.
+
+## Reusable integration checklist
+
+For another game or emulator port, adapt the boundaries rather than copying a
+controller-specific frequency curve:
+
+1. Capture the source API's native parameters, handle identity, sequence and
+   monotonic timestamp before invoking platform APIs. Do not prematurely map
+   frequency bands to left/right actuators.
+2. Keep capture independent of output. Feed a bounded queue so guest or render
+   threads never wait on UI frameworks, device discovery or HID reports.
+3. Choose an output backend from discovered capabilities. Use a native device
+   protocol when exact parameter control is available; otherwise document the
+   perceptual approximation and its calibration assumptions.
+4. Model `unavailable`, `discovered`, `prepared`, `playing` and `stopped`
+   separately. Advertise support only after the selected backend can accept
+   output, and revoke it on engine failure or device loss.
+5. Treat zero as an ordered stop event. Cancel queued work on disable, focus or
+   scene loss, controller replacement, disconnect and process teardown.
+6. Record evidence in layers: source request captured, renderer invoked, OS
+   accepted the report, protocol acknowledged it, and physical actuator
+   feedback observed. Never infer a later layer from an earlier one.
+7. Validate each transport and controller model independently, then add
+   device-specific calibration only from repeatable measurements.
+
+This repository's `VibrationValue` arrives as four floats already; the project
+does not decode a captured raw HD Rumble byte stream. The raw HID backend
+encodes those floats into a Switch controller report. This distinction matters
+when reusing the design for a title or emulator that exposes a different
+source representation.
 
 ## Backend A: Core Haptics
 
@@ -96,8 +126,8 @@ The intended DualSense path is:
 3. create independent left-handle and right-handle engines where available;
 4. create a pattern player for each engine;
 5. feed both players the same combined vibration frame by default;
-6. use intensity, sharpness and parameter curves to approximate the decoded
-   low/high spectrum;
+6. use intensity, sharpness and parameter curves to approximate the captured
+   low/high parameters;
 7. stop both players immediately on a zero frame or lifecycle transition;
 8. recreate players after `resetHandler` and clear state after
    `stoppedHandler`.
@@ -111,7 +141,7 @@ usable, and the diagnostic log should retain any start, reset, stop or
 parameter error.
 
 The current implementation in `dm/host/front_mac.m` and
-`dm/ios/Sources/DmGamepad.m` has lifecycle recovery, output error handling
+`dm/ios/Sources/DmGamepad.m` has lifecycle cancellation, output error handling
 and four-field frame forwarding in place. Both platforms now use the frame
 timestamps to preserve the interval between queued updates, with a 100 ms
 per-interval ceiling; a reset, disable, controller change or lifecycle stop
@@ -123,10 +153,13 @@ one channel for combined handles or the default locality. The Mac renderer
 uses a basic pattern player because the advanced-player factory failed to
 connect to `gamecontrollerd` in earlier tests. It maps the two amplitudes to
 one overall intensity and an amplitude-weighted frequency to sharpness. The
-iOS path uses one advanced player and maps the larger amplitude to intensity;
-it currently ignores both frequency fields. Neither path synthesizes a
-waveform or reconstructs the Switch actuator signal. The next fidelity step is
-timestamp-aware parameter updates and device-specific calibration.
+iOS path uses one advanced player and now shares the same bounded combined-
+amplitude and log-frequency mapping. Sharpness is only a perceptual proxy, not
+an output-frequency control. iOS retries engine preparation after an unexpected
+engine stop while the active game view is foregrounded. Neither path synthesizes
+a waveform or reconstructs the Switch actuator signal. The next fidelity step
+is device-specific calibration and a measured choice between parameter curves
+and a sample-level waveform renderer.
 
 References:
 
@@ -134,6 +167,12 @@ References:
 - [Apple CHHapticEngine](https://developer.apple.com/documentation/corehaptics/chhapticengine)
 - [Apple CHHapticPatternPlayer](https://developer.apple.com/documentation/corehaptics/chhapticpatternplayer)
 - [godot-dualsense haptics backend](https://github.com/Sineaggi/godot-dualsense/blob/main/src/haptics_gc.mm)
+
+The inspected Godot backend creates Core Haptics engines and players per
+locality and drives patterns with intensity and sharpness. It is a useful
+reference for controller discovery, locality separation and player lifetime;
+it does not expose arbitrary motor-frequency output, so it supports the
+perceptual-renderer boundary described here rather than raw waveform fidelity.
 
 ## Backend B: Switch raw HID
 
@@ -164,10 +203,12 @@ ID separately. The input callback waits for a matching `0x21` ACK before
 advertising raw vibration support; OS acceptance alone is not treated as proof
 that the controller applied the setting. The newest vibration frame is held
 until the ACK arrives, then sent through the raw path. A matching NACK leaves
-raw output disabled, allowing the Mac Core Haptics fallback when available.
-Controller selection briefly pumps the main run loop (up to 250 ms) so the
-normal startup path can receive the ACK before the guest enumerates vibration
-devices; later frames still replace the pending frame and retry after timeout.
+raw output disabled, allowing the Mac Core Haptics fallback when available;
+NACKs, timed-out ACKs and failed writes are retried no more than once per
+250 ms. Controller selection briefly pumps the main run loop (up to 250 ms) so
+the normal startup path can receive the ACK before the guest enumerates
+vibration devices; later frames still replace the pending frame and retry
+after timeout.
 
 Rumble frames use output report `0x10` and encode both guest frequencies and
 amplitudes with the Switch logarithmic tables. The rumble-only report consists
@@ -180,19 +221,22 @@ range. Repeated neutral or non-neutral payloads are coalesced because the
 controller retains its last rumble state. The descriptor maximum is checked
 when macOS exposes a size smaller than the expected payload.
 
-The device is acquired once when the first matching controller is selected and
-is retained for the process lifetime because the public controller and IOKit
-identities cannot be correlated safely later. Selecting another controller
-stops output but deliberately does not attempt to rebind this raw device. The
-implementation sends the rumble-enable subcommand and asynchronously consumes
-the matching `0x21` ACK/NACK; whether the controller physically vibrates must
-still be verified on hardware.
+The device is acquired when the first matching controller is selected and is
+retained while usable because the public controller and IOKit identities
+cannot be correlated safely later. Selecting another controller stops output
+but deliberately does not attempt to bind to an unverified HID identity. A
+disconnected-device IOKit result now clears raw capability, releases the stale
+device, and re-enumerates a matching HID device; the current frame remains
+pending for a fresh rumble-enable ACK. Other output failures also clear
+capability so Core Haptics may take over when available. Whether the controller
+physically vibrates must still be verified on hardware.
 The protocol sources describe the packet layout, but do not establish macOS
 IOKit behavior or physical actuator output.
 
-The identity filter accepts a Nintendo manufacturer name or a Switch product
-category, then restricts raw IOKit access to the known Switch Pro/Joy-Con
-vendor/product IDs. Apple's public GameController API does not expose a stable
+The identity filter accepts a Nintendo manufacturer name, a Switch product
+category, or the generic `Pro Controller`/`Joy-Con` names emitted by some
+GameController versions, then restricts raw IOKit access to the known Switch
+Pro/Joy-Con vendor/product IDs. Apple's public GameController API does not expose a stable
 identifier equal to an IOKit HID property, so a perfect selected-device
 correlation is impossible without private API. If more than one matching
 Switch controller is connected, the first HID match is used. USB/Bluetooth
@@ -212,10 +256,10 @@ prove that the controller actuator moved.
 
 ## Optional Core Audio experiment
 
-Generating a waveform with Core Audio is useful for studying the decoded
-signal, but normal Core Audio output is a speaker path. It must not be called
-a controller haptics implementation unless the selected device and system
-provide an explicit audio-to-haptics route.
+Generating a waveform with Core Audio is useful for studying the captured
+parameters, but normal Core Audio output is a speaker path. It must not be
+called a controller haptics implementation unless the selected device and
+system provide an explicit audio-to-haptics route.
 
 If an audio-backed experiment is added, keep it behind a separate renderer
 interface and record:
@@ -235,8 +279,8 @@ frequency. HLE assigns a sequence and monotonic timestamp to each captured
 value, and the bounded queue preserves order. Mac and iOS schedule updates
 using the interval between frames, capped at 100 ms per step, rather than
 draining a burst at UI speed. They do not interpolate, reconstruct durations
-from the next frame, or synthesize a sample waveform. For each frame in a
-future higher-fidelity renderer:
+from the next frame, or synthesize a sample waveform. A future higher-fidelity
+renderer should:
 
 1. clamp non-finite amplitudes to zero;
 2. clamp frequencies to the supported Switch range;
@@ -249,8 +293,8 @@ The current output model is intentionally conservative:
 
 - use the Switch frequency encoder for raw HID output;
 - use combined amplitude and weighted frequency for Mac Core Haptics;
-- use maximum amplitude for iOS Core Haptics; frequency mapping is not yet
-  implemented there;
+- use the same combined amplitude and weighted-frequency mapping for iOS Core
+  Haptics; sharpness remains a perceptual proxy, not an exact motor frequency;
 - keep both output handles synchronized;
 - avoid artificial pulses when the game sends a continuous update;
 - stop immediately when both amplitudes reach zero.
@@ -322,10 +366,10 @@ from the first four.
 | HID single and batch values | Four-field forwarding, handle filtering, sequence, and timestamp are implemented; focused tests pass (2026-10-23) | In-game single/batch dispatch and physical stop behavior |
 | Mac host build | Latest source builds (2026-10-23); existing Metal/compiler warnings remain | Launch this exact build and validate gameplay |
 | iOS controller UI build | Simulator UI harness compiles; app-settings and controller mapping tests pass (2026-10-23) | Physical controller test |
-| DualSense Core Haptics | Independent handle channels plus combined/default-locality fallback are implemented | Start, update, stop, and actual feedback on USB and Bluetooth |
-| Switch Pro raw HID | Four-field encoder, dual actuator payload, packet counter, low-band range clamp, rumble-enable report, and ACK/NACK parser tests pass | Physical USB/Bluetooth rumble and acknowledgement delivery timing |
-| NS Pro JoyDual input | JoyDual state maps the selected controller; stick regression test passes | Confirm both sticks and buttons in the running game |
-| Low/high frequency preservation | Preserved through HLE and encoded natively by Switch raw HID; Core Haptics is an approximation | Compare decoded and rendered frame records on hardware |
+| DualSense Core Haptics | Independent handle channels plus combined/default-locality fallback are implemented; iOS recreates its player after unexpected engine stops | Start, update, stop, recovery, and actual feedback on USB and Bluetooth |
+| Switch Pro raw HID | Four-field encoder, dual actuator payload, packet counter, low-band range clamp, rumble-enable report, ACK/NACK parsing, retry throttling, and disconnected-result classification are unit-tested | Physical USB/Bluetooth rumble, ACK timing, and unplug/reconnect recovery |
+| NS Pro JoyDual input | Selected controller axes are published through both FullKey and JoyDual layouts; left/right stick regression coverage passes | Confirm both sticks and buttons in the running game |
+| Low/high frequency preservation | Preserved through HLE and encoded natively by Switch raw HID; both Core Haptics paths map amplitude-weighted frequency to perceptual sharpness | Compare captured source parameters with rendered results on hardware; calibrate per device |
 | Timing and waveform synthesis | Sequence/timestamp capture and bounded ordered delivery are implemented; timestamps schedule inter-frame updates with a 100 ms step cap; no sample waveform is reconstructed | Measure queue latency and fidelity, then decide whether interpolation or waveform reconstruction is needed |
 | Background and disconnect | Lifecycle stop code is implemented | Device and scene transition test |
 | Long-running session | Current host ran for about 17 minutes / 7,200 rendered frames without a host crash; no controller was enumerated and repeated physical effects were not tested | At least 30 minutes with repeated effects on a connected controller |
@@ -335,6 +379,45 @@ from the first four.
 
 ### 2026-10-23
 
+- Re-ran the latest raw-HID state-helper refactor and added input-report
+  disconnect handling: a device-gone callback now clears stale capability,
+  preserves the newest pending frame and re-enumerates the selected device.
+  The Switch name filter also accepts the generic `Pro Controller` and
+  `Joy-Con` labels used by some macOS GameController versions, while the HID
+  vendor/product allowlist remains mandatory before any raw report is sent.
+  Extended the HID regression test to cover both sticks through FullKey and
+  JoyDual layouts.
+- Rebuilt the current macOS host to a temporary output after the disconnect
+  handling change. Re-ran the four focused host tests, the iOS diagnostics and
+  controller-axis tests, and the Simulator UI harness build; all passed.
+- Added a reusable integration checklist and clarified the source/output
+  boundary: this title's `VibrationValue` is already four floats, so the host
+  encodes it for Switch HID rather than decoding a raw HD Rumble byte stream.
+  Corrected the queue, iOS Core Haptics and frame-diagnostic descriptions to
+  match the current implementation. Rechecked the Godot DualSense reference;
+  its per-locality intensity/sharpness pattern path corroborates the Core
+  Haptics design but not exact motor-frequency reproduction.
+- Re-reviewed the implementation against issue #26's acceptance criteria. The
+  host has the full four-field capture/sequence/timestamp and output path, but
+  waveform reconstruction, exact Core Haptics frequency fidelity, device
+  calibration, and physical controller validation remain incomplete. This is
+  not yet ready to mark the issue complete.
+- Unified Mac/iOS Core Haptics parameter synthesis: both now combine band
+  amplitudes and map the amplitude-weighted logarithmic frequency to
+  perceptual sharpness. Added focused tests for dual-band weighting, amplitude
+  bounds and invalid-frequency fallbacks; this improves consistency but does
+  not reproduce either Switch motor waveform.
+- Hardened the raw Switch HID failure path: NACKs, timed-out enable requests
+  and failed writes are rate-limited to 250 ms; device-gone IOKit results clear
+  the advertised capability, discard the stale handle, re-enumerate and keep
+  the newest frame pending for the next enable ACK. Added retry-timing and
+  device-gone classification tests. Physical unplug/reconnect remains to be
+  verified with a controller attached.
+- Fixed an iOS capability-query thread-safety gap: the guest thread now reads
+  only atomic vibration-enabled/backend-ready flags instead of asking a UIKit
+  view for state. The iOS stopped-handler now ignores stale engine callbacks
+  and retries preparation after an unexpected stop when the active game view
+  is foregrounded; a naturally finished pattern does not discard its player.
 - Ran the current-build host with an isolated save for about 17 minutes and
   7,200 rendered frames without a host crash. This validates renderer/session
   stability only; it does not validate vibration because macOS enumerated no
