@@ -207,9 +207,10 @@ the active `GCController` reports a Nintendo Switch controller name, then
 matches Nintendo HID devices. Before advertising raw vibration support it sends
 output report `0x01` with subcommand `0x48` and value `0x01`, which enables
 controller rumble, and requires macOS to accept that report. The 64-byte
-protocol report is sent as a 63-byte payload because IOKit receives the report
-ID separately. The input callback waits for a matching `0x21` ACK before
-advertising raw vibration support; OS acceptance alone is not treated as proof
+protocol report includes the `0x01` report ID in its first byte, as required by
+`IOHIDDeviceSetReport` for a device with multiple reports. The input callback
+waits for a matching `0x21` ACK before advertising raw vibration support; OS
+acceptance alone is not treated as proof
 that the controller applied the setting. The newest vibration frame is held
 until the ACK arrives, then sent through the raw path. A matching NACK leaves
 raw output disabled, allowing the Mac Core Haptics fallback when available;
@@ -222,15 +223,18 @@ a later guest vibration frame to trigger recovery; the newest frame remains
 pending until the ACK arrives.
 
 Rumble frames use output report `0x10` and encode both guest frequencies and
-amplitudes with the Switch logarithmic tables. The rumble-only report consists
-of a four-bit packet counter followed by eight rumble bytes; the report ID is
-passed separately to `IOHIDDeviceSetReport`. The counter advances for every
-accepted report and wraps at four bits. The eight rumble bytes are duplicated
-across both actuators because the Switch low/high pair represents frequency
-bands, not spatial sides. The low-band frequency is clamped to its protocol
+amplitudes with the Switch logarithmic tables. The on-wire rumble report is
+`0x10`, a four-bit packet counter, and eight rumble bytes; the report ID is
+present both in the first byte and in the `IOHIDDeviceSetReport` argument. The
+counter advances for every accepted report and wraps at four bits. The eight
+rumble bytes are duplicated across both actuators because the Switch low/high
+pair represents frequency bands, not spatial sides. The low-band frequency is clamped to its protocol
 range. Repeated neutral or non-neutral payloads are coalesced because the
-controller retains its last rumble state. The descriptor maximum is checked
-when macOS exposes a size smaller than the expected payload.
+controller retains its last rumble state. When macOS exposes a maximum output
+report size, the preflight check accepts either interpretation of whether the
+descriptor-derived size includes the report-ID byte, since Apple's property
+documentation does not specify that detail; `IOHIDDeviceSetReport` remains the
+final size check.
 
 The device is acquired when the first matching controller is selected and is
 retained while usable because the public controller and IOKit identities
@@ -250,7 +254,10 @@ GameController versions, then restricts raw IOKit access to the known Switch
 Pro/Joy-Con vendor/product IDs. Apple's public GameController API does not expose a stable
 identifier equal to an IOKit HID property, so a perfect selected-device
 correlation is impossible without private API. If more than one matching
-Switch controller is connected, the first HID match is used. USB/Bluetooth
+Switch controller is connected, the first HID match is used. The Mac front end
+keeps the last-input controller stable, and an explicit menu selection locks
+input to that controller until it disconnects. This prevents another connected
+controller from stealing NS Pro stick input during testing. USB/Bluetooth
 report length, packet counters, and physical output remain unverified.
 
 The protocol references are:
@@ -406,11 +413,11 @@ HID update that the OS accepted.
 |---|---|---|
 | HID single and batch values | Four-field forwarding, handle filtering, sequence, and timestamp are implemented; focused tests pass (2026-10-23) | In-game single/batch dispatch and physical stop behavior |
 | Runtime vibration evidence | Rate-limited HLE source witnesses distinguish guest capture from renderer/HID evidence; Npad receipt and Core Haptics/raw HID parameter-submission witnesses include frame sequence and timestamp; stale handles are rejected after capability loss. API acceptance is not physical actuator evidence. | Capture one in-game log containing source capture, renderer acceptance, and the physical test result |
-| Mac host build | Latest source builds (2026-10-23); an isolated smoke run with the corrected shader-cache root reached normal rendering and shut down cleanly; existing Metal/compiler warnings remain | Launch this exact build with a connected controller and validate gameplay |
+| Mac host build | Isolated full host build passes with the reviewed source (2026-10-23); an earlier isolated smoke run reached normal rendering and shut down cleanly; existing Metal/compiler warnings remain | Launch this exact build with a connected controller and validate gameplay |
 | iOS controller UI build | Simulator UI harness compiles; app-settings and controller mapping tests pass (2026-10-23) | Physical controller test |
 | DualSense Core Haptics | Independent handle channels plus combined/default-locality fallback are implemented; iOS recreates its player after unexpected engine stops | Start, update, stop, recovery, and actual feedback on USB and Bluetooth |
-| Switch Pro raw HID | Four-field encoder, dual actuator payload, packet counter, low-band range clamp, rumble-enable report, ACK/NACK parsing, retry throttling, and disconnected-result classification are unit-tested | Physical USB/Bluetooth rumble, ACK timing, and unplug/reconnect recovery |
-| NS Pro JoyDual input | Selected controller axes are published through both FullKey and JoyDual layouts; left/right stick regression coverage passes; the first physical Npad state returned is now logged | Confirm both sticks and buttons in the running game |
+| Switch Pro raw HID | Four-field encoder, report-ID-inclusive 10-byte rumble frame, 64-byte rumble-enable report, dual actuator payload, packet counter, low-band range clamp, ACK/NACK parsing, retry throttling, descriptor-size boundary handling, and disconnected-result classification are unit-tested | Physical USB/Bluetooth rumble, ACK timing, and unplug/reconnect recovery |
+| NS Pro JoyDual input | Selected host axes are published through both FullKey and JoyDual layouts; Mac offers explicit controller selection and locks to that choice until disconnect; HLE axis forwarding tests pass | Confirm both sticks and buttons in the running game |
 | Low/high frequency preservation | Preserved through HLE and encoded natively by Switch raw HID; both Core Haptics paths map amplitude-weighted frequency to perceptual sharpness | Compare captured source parameters with rendered results on hardware; calibrate per device |
 | Timing and waveform synthesis | Sequence/timestamp capture and bounded ordered delivery are implemented; timestamps schedule inter-frame updates with a 100 ms step cap; no sample waveform is reconstructed | Measure queue latency and fidelity, then decide whether interpolation or waveform reconstruction is needed |
 | Background and disconnect | Lifecycle stop code is implemented | Device and scene transition test |
@@ -421,6 +428,14 @@ HID update that the OS accepted.
 
 ### 2026-10-23
 
+- Self-review found a macOS HID framing defect: the Switch output buffers omitted
+  the report ID even though `IOHIDDeviceSetReport` requires it in the first byte
+  for multi-report devices. Corrected the rumble frame to 10 bytes and the
+  rumble-enable frame to 64 bytes, and updated the protocol vectors. Added a
+  Mac controller menu with an explicit selection lock so a different pad
+  cannot steal NS Pro input while testing. The descriptor-size guard tolerates
+  either report-ID accounting convention; physical USB, Bluetooth, gameplay
+  input and actuator feedback remain unverified.
 - Added an independent macOS raw-HID recovery poll: device discovery is
   rate-limited to 250 ms and rumble-enable ACK timeouts retry even when the
   game has not enumerated vibration handles or sent another vibration frame.

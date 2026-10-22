@@ -20,6 +20,13 @@ static void assert_name_selection(void) {
 
 int main(void) {
     assert_name_selection();
+    assert(device_report_size_allows_report(-1, kSwitchRumbleReportLength));
+    assert(!device_report_size_allows_report(8, kSwitchRumbleReportLength));
+    assert(device_report_size_allows_report(9, kSwitchRumbleReportLength));
+    assert(device_report_size_allows_report(10, kSwitchRumbleReportLength));
+    assert(!device_report_size_allows_report(62, kSwitchEnableVibrationReportLength));
+    assert(device_report_size_allows_report(63, kSwitchEnableVibrationReportLength));
+    assert(device_report_size_allows_report(64, kSwitchEnableVibrationReportLength));
     DmSwitchHapticsRetry retry = {0};
     uint64_t next_scan_ns = 0;
     assert(dm_switch_haptics_scan_due(&next_scan_ns, 0));
@@ -67,19 +74,20 @@ int main(void) {
 
     uint8_t expected_payload[8];
     memcpy(expected_payload, report, sizeof expected_payload);
-    uint8_t output_report[9];
+    uint8_t output_report[kSwitchRumbleReportLength];
     for (uint8_t counter = 0; counter < 18; counter++) {
-        assert(encode_output_report(&frame, counter, output_report) == 9);
-        assert(output_report[0] == (counter & 0x0f));
-        assert(!memcmp(output_report + 1, expected_payload, sizeof expected_payload));
+        assert(encode_output_report(&frame, counter, output_report) == kSwitchRumbleReportLength);
+        assert(output_report[0] == kSwitchRumbleReportID);
+        assert(output_report[1] == (counter & 0x0f));
+        assert(!memcmp(output_report + 2, expected_payload, sizeof expected_payload));
     }
 
     assert(report[0] == 0 || report[1] > 0); // 320 Hz encodes in the high band.
     assert(report[3] > 0x40);
 
-    uint8_t enable_report[kSwitchEnableVibrationPayloadLength] = {0};
-    const uint8_t expected_enable_report[11] = {
-        0x0a, 0x00, 0x01, 0x40, 0x40, 0x00, 0x01, 0x40, 0x40, 0x48, 0x01,
+    uint8_t enable_report[kSwitchEnableVibrationReportLength] = {0};
+    const uint8_t expected_enable_report[12] = {
+        0x01, 0x0a, 0x00, 0x01, 0x40, 0x40, 0x00, 0x01, 0x40, 0x40, 0x48, 0x01,
     };
     assert(encode_enable_vibration_report(0x1a, enable_report) == sizeof enable_report);
     assert(!memcmp(enable_report, expected_enable_report, sizeof expected_enable_report));
@@ -118,9 +126,10 @@ int main(void) {
     switch_haptics_encode_report(&stop, stop_report);
     assert(stop_report[1] == 0x01); // Neutral 320 Hz high-band code.
     assert(stop_report[3] == 0x40);
-    assert(encode_output_report(&stop, 15, output_report) == 9);
-    assert(output_report[0] == 15);
-    assert(!memcmp(output_report + 1, stop_report, sizeof stop_report));
+    assert(encode_output_report(&stop, 15, output_report) == kSwitchRumbleReportLength);
+    assert(output_report[0] == kSwitchRumbleReportID);
+    assert(output_report[1] == 15);
+    assert(!memcmp(output_report + 2, stop_report, sizeof stop_report));
 
     DmVibrationFrame clamped = frame;
     clamped.low_amplitude = NAN;

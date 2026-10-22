@@ -36,6 +36,7 @@ static BOOL g_vibration_window_active = YES;
 static void pad_apply_vibration_frame(const DmVibrationFrame *frame);
 static void pad_start_haptics(GCController *controller);
 static void pad_schedule_haptics_test(GCController *controller);
+static void pad_update_controller_menu(void);
 static void vibration_drain(void);
 
 static void vibration_cancel_pending(void) {
@@ -98,6 +99,7 @@ static int32_t g_mouse_rx, g_mouse_ry;
 static uint64_t g_mouse_motion_seq;
 static GCController *g_pad_controller;
 static NSArray<GCController *> *g_pad_controllers;
+static BOOL g_pad_controller_selection_locked;
 typedef struct {
     CHHapticEngine *engine;
     id<CHHapticPatternPlayer> player;
@@ -118,6 +120,8 @@ static int g_haptics_test_started;
 static uint64_t g_haptics_test_sequence = UINT64_C(1) << 63;
 static DmMacPerfHUD *g_perf_hud;
 static DmMacCheats *g_cheats;
+static NSMenu *g_controller_menu;
+static id g_controller_menu_target;
 
 static GCDeviceHaptics *controller_haptics(GCController *controller) {
     if (@available(macOS 11.0, *)) return controller.haptics;
@@ -475,6 +479,7 @@ static void pad_select_controller(GCController *selected) {
         pad_discard_haptics();
         g_haptics_test_started = 0;
         g_pad_controller = selected;
+        atomic_store(&g_pad_input_logged, 0);
         atomic_store(&g_pad_haptics_supported, 0);
         if (selected) {
             switch_haptics_init_for_controller(selected.vendorName.UTF8String,
@@ -493,6 +498,7 @@ static void pad_select_controller(GCController *selected) {
     atomic_store(&g_pad_haptics_supported,
                  g_pad_haptics_channel_count > 0 && pad_haptics_ready());
     pad_schedule_haptics_test(selected);
+    pad_update_controller_menu();
 }
 static void pad_refresh(void) {
     NSMutableArray<GCController *> *controllers = [NSMutableArray array];
@@ -504,26 +510,81 @@ static void pad_refresh(void) {
         g_pad_controllers = [controllers copy];
         for (GCController *controller in g_pad_controllers) {
             __weak GCController *weakController = controller;
-            controller.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *gamepad, GCControllerElement *element) {
+            controller.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *callbackGamepad, GCControllerElement *element) {
+                (void)callbackGamepad;
                 (void)element;
                 GCController *source = weakController;
                 if (!source) return;
                 void (^publishInput)(void) = ^{
                     if (![g_pad_controllers containsObject:source]) return;
-                    pad_select_controller(source);
-                    if (gamepad == source.extendedGamepad) pad_read(gamepad);
+                    if (g_pad_controller_selection_locked && source != g_pad_controller)
+                        return;
+                    if (!g_pad_controller_selection_locked) pad_select_controller(source);
+                    // Read from the selected controller's current wrapper. A
+                    // stale callback wrapper must not erase valid stick input.
+                    if (source == g_pad_controller)
+                        pad_read(source.extendedGamepad);
                 };
                 if (NSThread.isMainThread) publishInput();
                 else dispatch_async(dispatch_get_main_queue(), publishInput);
             };
         }
     }
-    GCController *current = GCController.current;
-    if (current && current.extendedGamepad && [g_pad_controllers containsObject:current])
-        pad_select_controller(current);
-    else if (!g_pad_controller || ![g_pad_controllers containsObject:g_pad_controller])
-        pad_select_controller(g_pad_controllers.firstObject);
+    // Keep an explicit or last-input selection stable. Falling back to
+    // GCController.current on every refresh can silently steal NS Pro input
+    // when DualSense is also connected.
+    if (!g_pad_controller || ![g_pad_controllers containsObject:g_pad_controller]) {
+        g_pad_controller_selection_locked = NO;
+        GCController *current = GCController.current;
+        if (current && current.extendedGamepad && [g_pad_controllers containsObject:current])
+            pad_select_controller(current);
+        else
+            pad_select_controller(g_pad_controllers.firstObject);
+    } else {
+        pad_update_controller_menu();
+    }
 }
+static NSString *controller_menu_title(GCController *controller, NSUInteger index) {
+    NSString *vendor = controller.vendorName.length ? controller.vendorName : nil;
+    NSString *category = controller.productCategory.length ? controller.productCategory : nil;
+    NSString *name = vendor ?: category ?: [NSString stringWithFormat:@"Controller %lu", (unsigned long)(index + 1)];
+    if (vendor && category && ![vendor isEqualToString:category])
+        name = [NSString stringWithFormat:@"%@ (%@)", vendor, category];
+    return name;
+}
+static void pad_update_controller_menu(void) {
+    if (!g_controller_menu) return;
+    [g_controller_menu removeAllItems];
+    if (!g_pad_controllers.count) {
+        NSMenuItem *empty = [g_controller_menu addItemWithTitle:@"No controller connected"
+                                                           action:nil keyEquivalent:@""];
+        empty.enabled = NO;
+        return;
+    }
+    for (NSUInteger i = 0; i < g_pad_controllers.count; i++) {
+        GCController *controller = g_pad_controllers[i];
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:controller_menu_title(controller, i)
+                                                        action:@selector(selectController:)
+                                                 keyEquivalent:@""];
+        item.target = g_controller_menu_target;
+        item.tag = (NSInteger)i;
+        item.state = controller == g_pad_controller ? NSControlStateValueOn : NSControlStateValueOff;
+        [g_controller_menu addItem:item];
+    }
+}
+
+@interface DmControllerMenuTarget : NSObject
+- (void)selectController:(NSMenuItem *)item;
+@end
+@implementation DmControllerMenuTarget
+- (void)selectController:(NSMenuItem *)item {
+    NSInteger index = item.tag;
+    if (index < 0 || index >= (NSInteger)g_pad_controllers.count) return;
+    g_pad_controller_selection_locked = YES;
+    pad_select_controller(g_pad_controllers[(NSUInteger)index]);
+}
+@end
+
 static void pad_poll(void) {
     if (g_pad_controller && [g_pad_controllers containsObject:g_pad_controller])
         pad_read(g_pad_controller.extendedGamepad);
@@ -675,6 +736,11 @@ void front_run(void (*guest)(void)) {
         g_cheats = [[DmMacCheats alloc] initWithWindow:win];
         NSMenu *applicationMenu = NSApp.mainMenu.itemArray.firstObject.submenu;
         if (applicationMenu) {
+            NSMenuItem *controllerRoot = [[NSMenuItem alloc] initWithTitle:@"Controller" action:nil keyEquivalent:@""];
+            g_controller_menu = [[NSMenu alloc] initWithTitle:@"Controller"];
+            controllerRoot.submenu = g_controller_menu;
+            g_controller_menu_target = [DmControllerMenuTarget new];
+            [NSApp.mainMenu addItem:controllerRoot];
             g_vibration_menu_item = [[NSMenuItem alloc] initWithTitle:@"Controller Vibration" action:@selector(toggleVibration:) keyEquivalent:@""];
             g_vibration_menu_target = [DmVibrationMenuTarget new];
             g_vibration_menu_item.target = g_vibration_menu_target;

@@ -18,8 +18,10 @@ enum {
     kSwitchSubcommandReportID = 0x01,
     kSwitchRumbleReportID = 0x10,
     kSwitchEnableVibrationSubcommand = 0x48,
-    kSwitchRumbleReportLength = 9,
-    kSwitchEnableVibrationPayloadLength = 63,
+    // IOHIDDeviceSetReport requires the report ID in the first byte when a
+    // device exposes multiple reports. These lengths are the on-wire sizes.
+    kSwitchRumbleReportLength = 10,
+    kSwitchEnableVibrationReportLength = 64,
 };
 
 static IOHIDManagerRef g_manager;
@@ -170,6 +172,13 @@ static int device_report_length(IOHIDDeviceRef device) {
     return CFNumberGetValue(value, kCFNumberIntType, &result) ? result : -1;
 }
 
+static int device_report_size_allows_report(int maximum, int full_report_length) {
+    // Apple's property page does not specify whether its descriptor-derived
+    // size includes the report-ID byte. Accept either convention; SetReport is
+    // the final authority when the report is submitted.
+    return maximum < 0 || maximum >= full_report_length - 1;
+}
+
 static void select_device(void) {
     if (!g_controller_match) return;
     if (g_device) return;
@@ -195,15 +204,15 @@ static void select_device(void) {
             g_transport[0] = '\0';
             device_transport(g_device, g_transport, sizeof g_transport);
             g_max_output_report_length = device_report_length(g_device);
-            // Report ID is passed separately to IOHIDDeviceSetReport. The
-            // rumble-only report carries a packet counter and 8 rumble bytes.
+            // Keep the actual buffer size separate from the descriptor's
+            // ambiguous report-ID accounting.
             g_report_length = kSwitchRumbleReportLength;
-            if (g_max_output_report_length >= 0 &&
-                g_max_output_report_length < kSwitchRumbleReportLength) {
+            if (!device_report_size_allows_report(g_max_output_report_length,
+                                                  kSwitchRumbleReportLength)) {
                 DM_LOG_WARN("controller",
                             "Switch HID output report descriptor smaller than expected: size=%d",
                             g_max_output_report_length);
-                g_report_length = g_max_output_report_length;
+                g_report_length = 0;
             }
             IOHIDDeviceScheduleWithRunLoop(g_device, CFRunLoopGetCurrent(),
                                            kCFRunLoopDefaultMode);
@@ -300,22 +309,22 @@ static void encode_rumble(uint8_t *out, float low_amplitude, float low_frequency
 }
 
 static int encode_enable_vibration_report(uint8_t packet_counter,
-                                          uint8_t out[kSwitchEnableVibrationPayloadLength]) {
+                                          uint8_t out[kSwitchEnableVibrationReportLength]) {
     if (!out) return 0;
     DmVibrationFrame neutral = {.low_frequency = 160.f, .high_frequency = 320.f};
-    // Report 0x01 is 64 bytes on the wire; IOHIDDeviceSetReport receives the
-    // report ID separately, so this buffer contains its 63-byte payload.
-    memset(out, 0, kSwitchEnableVibrationPayloadLength);
-    out[0] = packet_counter & 0x0f;
-    switch_haptics_encode_report(&neutral, out + 1);
-    out[9] = kSwitchEnableVibrationSubcommand;
-    out[10] = 0x01;
-    return kSwitchEnableVibrationPayloadLength;
+    // Report 0x01 is 64 bytes on the wire, including its report ID.
+    memset(out, 0, kSwitchEnableVibrationReportLength);
+    out[0] = kSwitchSubcommandReportID;
+    out[1] = packet_counter & 0x0f;
+    switch_haptics_encode_report(&neutral, out + 2);
+    out[10] = kSwitchEnableVibrationSubcommand;
+    out[11] = 0x01;
+    return kSwitchEnableVibrationReportLength;
 }
 
 static int enable_rumble(void) {
-    if (!g_device || (g_max_output_report_length >= 0 &&
-                      g_max_output_report_length < kSwitchEnableVibrationPayloadLength))
+    if (!g_device || !device_report_size_allows_report(
+            g_max_output_report_length, kSwitchEnableVibrationReportLength))
         return 0;
     uint64_t now_ns = switch_haptics_now_ns();
     if (g_rumble_retry.request_pending &&
@@ -323,7 +332,7 @@ static int enable_rumble(void) {
         return 1;
     if (!dm_switch_haptics_retry_ready(&g_rumble_retry, now_ns))
         return 0;
-    uint8_t report[kSwitchEnableVibrationPayloadLength] = {0};
+    uint8_t report[kSwitchEnableVibrationReportLength] = {0};
     if (encode_enable_vibration_report(g_packet_counter, report) != sizeof report)
         return 0;
     IOReturn result = IOHIDDeviceSetReport(g_device, kIOHIDReportTypeOutput,
@@ -394,17 +403,18 @@ void switch_haptics_encode_report(const DmVibrationFrame *frame, uint8_t out[8])
 }
 
 static int encode_output_report(const DmVibrationFrame *frame,
-                                uint8_t packet_counter, uint8_t out[9]) {
+                                uint8_t packet_counter, uint8_t out[kSwitchRumbleReportLength]) {
     if (!frame || !out) return 0;
-    memset(out, 0, 9);
-    out[0] = packet_counter & 0x0f;
-    switch_haptics_encode_report(frame, out + 1);
-    return 9;
+    memset(out, 0, kSwitchRumbleReportLength);
+    out[0] = kSwitchRumbleReportID;
+    out[1] = packet_counter & 0x0f;
+    switch_haptics_encode_report(frame, out + 2);
+    return kSwitchRumbleReportLength;
 }
 
 static void send_rumble_frame(const DmVibrationFrame *frame) {
     if (!g_device || !frame || !atomic_load(&g_raw_supported)) return;
-    uint8_t report[9] = {0};
+    uint8_t report[kSwitchRumbleReportLength] = {0};
     DmVibrationFrame normalized = *frame;
     normalized.low_frequency = normalized_frequency(frame->low_frequency, 160.f);
     normalized.high_frequency = normalized_frequency(frame->high_frequency, 320.f);
@@ -417,7 +427,7 @@ static void send_rumble_frame(const DmVibrationFrame *frame) {
         }
         return;
     }
-    size_t rumble_offset = 1;
+    size_t rumble_offset = 2;
     if (g_have_last_report && !memcmp(g_last_rumble_report,
                                      report + rumble_offset,
                                      sizeof g_last_rumble_report))
