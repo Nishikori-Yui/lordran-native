@@ -32,6 +32,8 @@ static DmVibrationTimeline g_vibration_timeline;
 static _Atomic uint64_t g_vibration_generation = 1;
 static BOOL g_vibration_app_active = YES;
 static BOOL g_vibration_window_active = YES;
+static BOOL g_front_shutdown_started;
+static BOOL g_front_shutdown_finished;
 
 static void pad_apply_vibration_frame(const DmVibrationFrame *frame);
 static void pad_start_haptics(GCController *controller);
@@ -161,6 +163,33 @@ static void pad_stop_vibration(void) {
     g_haptics_low_frequency = g_haptics_high_frequency = 0.f;
     pad_stop_core_haptics();
     switch_haptics_stop();
+}
+static void front_finish_shutdown(int neutral_report_completed, int timed_out) {
+    if (g_front_shutdown_finished) return;
+    g_front_shutdown_finished = YES;
+    if (timed_out)
+        DM_LOG_WARN("controller", "Timed out waiting for final neutral rumble report");
+    else if (!neutral_report_completed)
+        DM_LOG_WARN("controller", "Exiting without confirmation of the final neutral rumble report");
+    exit(0);
+}
+static void front_begin_shutdown(void) {
+    if (g_front_shutdown_started) return;
+    g_front_shutdown_started = YES;
+    g_vibration_app_active = NO;
+    g_vibration_window_active = NO;
+    atomic_store(&g_vibration_enabled, 0);
+    vibration_cancel_pending();
+    g_haptics_low = g_haptics_high = 0.f;
+    g_haptics_low_frequency = g_haptics_high_frequency = 0.f;
+    pad_stop_core_haptics();
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2250 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+        front_finish_shutdown(0, 1);
+    });
+    switch_haptics_stop_with_completion(^(int completed) {
+        front_finish_shutdown(completed, 0);
+    });
 }
 static void pad_discard_haptics(void) {
     atomic_store(&g_pad_haptics_supported, 0);
@@ -707,7 +736,10 @@ typedef struct { void (*fn)(void); } guest_arg;
 static void *guest_tramp(void *p) {
     static char alt[65536];                       // The signal alternate stack is per thread; crash printing must also work on the guest thread
     stack_t ss = {.ss_sp = alt, .ss_size = sizeof alt}; sigaltstack(&ss, 0);
-    ((guest_arg *)p)->fn(); LOG("Guest thread exited"); exit(0);
+    ((guest_arg *)p)->fn();
+    LOG("Guest thread exited");
+    dispatch_async(dispatch_get_main_queue(), ^{ front_begin_shutdown(); });
+    return NULL;
 }
 
 void front_run(void (*guest)(void)) {
@@ -824,7 +856,7 @@ void front_run(void (*guest)(void)) {
             }];
         }
         [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowWillCloseNotification object:win queue:nil
-                                                      usingBlock:^(NSNotification *n) { (void)n; vibration_cancel_pending(); pad_stop_vibration(); exit(0); }];
+                                                      usingBlock:^(NSNotification *n) { (void)n; front_begin_shutdown(); }];
         // Lifecycle (hle.h / dm.h): focus lost → 2, focus regained → 1; minimized → 3 + audio paused + GPU suspended, restored → resume (followed by focus regained → 1)
         [nc addObserverForName:NSWindowDidResignKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) {
             (void)n;

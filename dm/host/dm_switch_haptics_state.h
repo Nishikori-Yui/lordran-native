@@ -20,6 +20,8 @@ typedef struct {
 typedef struct {
     DmVibrationQueue rumble_frames;
     int report_in_flight;
+    int shutdown_requested;
+    int shutdown_pending;
 } DmSwitchHapticsOutputState;
 
 static inline int dm_switch_haptics_output_begin(
@@ -31,10 +33,33 @@ static inline int dm_switch_haptics_output_begin(
 
 static inline void dm_switch_haptics_output_enqueue(
     DmSwitchHapticsOutputState *state, const DmVibrationFrame *frame) {
-    if (!state || !frame) return;
+    if (!state || !frame || state->shutdown_requested) return;
     if (dm_vibration_frame_is_stop(frame))
         state->rumble_frames = (DmVibrationQueue){0};
     dm_vibration_queue_push(&state->rumble_frames, frame);
+}
+
+static inline int dm_switch_haptics_output_begin_shutdown(
+    DmSwitchHapticsOutputState *state) {
+    if (!state || state->shutdown_requested) return 0;
+    state->shutdown_requested = 1;
+    state->shutdown_pending = 1;
+    state->rumble_frames = (DmVibrationQueue){0};
+    return 1;
+}
+
+static inline int dm_switch_haptics_output_take_shutdown(
+    DmSwitchHapticsOutputState *state, DmVibrationFrame *stop_frame) {
+    if (!state || !stop_frame || !state->shutdown_pending ||
+        state->report_in_flight)
+        return 0;
+    state->shutdown_pending = 0;
+    state->report_in_flight = 1;
+    *stop_frame = (DmVibrationFrame){
+        .low_frequency = 160.f,
+        .high_frequency = 320.f,
+    };
+    return 1;
 }
 
 // Complete the in-flight report and take the next queued frame, if any.

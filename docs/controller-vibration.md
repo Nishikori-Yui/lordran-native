@@ -228,7 +228,12 @@ replayed after a stop; on output failure, the queue is reduced to its newest
 frame for retry. A per-device generation makes late completions harmless after
 disconnect or replacement. The regular host poll retries the enable handshake
 and rate-limits raw-device rescans to 250 ms, so recovery does not depend on a
-later guest vibration frame.
+later guest vibration frame. In windowed macOS mode, both guest termination and
+window close disable further vibration requests, stop Core Haptics immediately,
+then submit a final neutral raw report and defer process exit until its IOKit
+completion or a 2.25-second upper bound. The wait is asynchronous on the main
+queue; failure or timeout is logged before exit. This only confirms completion
+at the OS API boundary, not physical actuator stop.
 
 Rumble frames use output report `0x10` and encode both guest frequencies and
 amplitudes with the Switch logarithmic tables. The on-wire rumble report is
@@ -433,6 +438,7 @@ HID update that the OS accepted.
 | Low/high frequency preservation | Preserved through HLE and encoded natively by Switch raw HID; both Core Haptics paths map amplitude-weighted log-frequency to perceptual sharpness | Compare captured source parameters with rendered results on hardware; calibrate per device |
 | Timing and waveform synthesis | Sequence/timestamp capture and bounded ordered delivery are implemented; timestamps schedule inter-frame updates with a 100 ms step cap; no sample waveform is reconstructed | Measure queue latency and fidelity, then decide whether interpolation or waveform reconstruction is needed |
 | Background and disconnect | Lifecycle stop code is implemented | Device and scene transition test |
+| Windowed Mac shutdown | Stops Core Haptics immediately; final Switch neutral report completion is awaited asynchronously with a 2.25-second bound; state-machine test covers stop priority and rejects post-shutdown rumble frames | Close the window and end the guest while raw rumble is active on Switch Pro; verify the final neutral completion witness and physical stop |
 | Long-running session | Current host ran for about 17 minutes / 7,200 rendered frames without a host crash; no controller was enumerated and repeated physical effects were not tested | At least 30 minutes with repeated effects on a connected controller |
 | Core Audio experiment | Not implemented | Only add after raw/Core Haptics paths are measured |
 
@@ -446,6 +452,15 @@ HID update that the OS accepted.
   log-frequency space and added equal- and unequal-band regression vectors.
   This remains a perceptual mapping rather than exact waveform reconstruction;
   physical device calibration and actuator feedback are pending.
+- Self-review found that both macOS window close and guest-thread return called
+  `exit(0)` immediately after enqueueing an asynchronous neutral report. Added a
+  shutdown barrier that discards queued rumble and rejects later frames,
+  submits a final neutral report after any in-flight output, stops Core Haptics
+  immediately, and defers process exit until raw-HID completion or a bounded
+  2.25-second timeout. Added state tests for stop priority and post-shutdown
+  rejection. Rebuilt the complete macOS host to an isolated `/tmp` output and
+  reran the five focused input/vibration tests; all passed. The callback and
+  physical stop behavior require a connected-pad test.
 - Self-review found that synchronous `IOHIDDeviceSetReport` could block the
   main thread during either the rumble-enable handshake or a game vibration
   update. Replaced both writes with `IOHIDDeviceSetReportWithCallback`, heap-

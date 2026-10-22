@@ -14,5 +14,8 @@ void switch_haptics_poll(void);
 int switch_haptics_supported(void);
 void switch_haptics_set(const DmVibrationFrame *frame);
 void switch_haptics_stop(void);
+// Submit a final neutral report and complete on the main queue. completed is
+// false when an open raw HID device could not confirm the neutral write.
+void switch_haptics_stop_with_completion(void (^completion)(int completed));
 // Exposed for focused protocol tests; returns eight rumble payload bytes.
 void switch_haptics_encode_report(const DmVibrationFrame *frame, uint8_t out[8]);

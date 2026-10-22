@@ -78,6 +78,23 @@ int main(void) {
     assert(!output.report_in_flight && output.rumble_frames.count == 0);
     assert(failed_pending.valid && failed_pending.frame.sequence == 12);
 
+    output = (DmSwitchHapticsOutputState){0};
+    assert(dm_switch_haptics_output_begin(&output));
+    dm_switch_haptics_output_enqueue(&output, &output_first);
+    assert(dm_switch_haptics_output_begin_shutdown(&output));
+    assert(!dm_switch_haptics_output_begin_shutdown(&output));
+    assert(output.shutdown_requested && output.shutdown_pending);
+    assert(output.rumble_frames.count == 0);
+    dm_switch_haptics_output_enqueue(&output, &output_latest);
+    assert(output.rumble_frames.count == 0); // Late game frames cannot follow shutdown.
+    assert(!dm_switch_haptics_output_complete(&output, &queued));
+    assert(dm_switch_haptics_output_take_shutdown(&output, &queued));
+    assert(output.report_in_flight && !output.shutdown_pending);
+    assert(queued.low_amplitude == 0.f && queued.high_amplitude == 0.f);
+    assert(!dm_switch_haptics_output_take_shutdown(&output, &queued));
+    assert(!dm_switch_haptics_output_complete(&output, &queued));
+    assert(output.shutdown_requested && !output.report_in_flight);
+
     assert(dm_switch_haptics_ack_is_current((void *)0x1, (void *)0x1, 1));
     assert(!dm_switch_haptics_ack_is_current((void *)0x1, (void *)0x2, 1));
     assert(!dm_switch_haptics_ack_is_current((void *)0x1, (void *)0x1, 0));

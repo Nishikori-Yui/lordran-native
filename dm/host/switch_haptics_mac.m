@@ -41,10 +41,11 @@ static uint64_t g_next_device_scan_ns;
 static DmSwitchHapticsPendingFrame g_pending_frame;
 static DmSwitchHapticsOutputState g_output;
 static uint64_t g_device_generation;
+static void (^g_shutdown_completion)(int);
 static uint8_t g_input_report[512];
 static _Atomic int g_raw_supported;
 
-enum { kSwitchOutputEnable, kSwitchOutputRumble };
+enum { kSwitchOutputEnable, kSwitchOutputRumble, kSwitchOutputShutdown };
 typedef struct {
     uint64_t device_generation;
     int kind;
@@ -62,6 +63,15 @@ static void output_report_callback(void *context, IOReturn result, void *sender,
                                    uint8_t *report, CFIndex report_length);
 static void complete_output_report(DmSwitchOutputRequest *request,
                                    IOReturn result, void *sender);
+static int encode_output_report(const DmVibrationFrame *frame,
+                                uint8_t packet_counter,
+                                uint8_t out[kSwitchRumbleReportLength]);
+
+static void complete_shutdown(int completed) {
+    void (^completion)(int) = g_shutdown_completion;
+    g_shutdown_completion = nil;
+    if (completion) completion(completed);
+}
 
 static uint64_t switch_haptics_now_ns(void) {
     static mach_timebase_info_data_t timebase;
@@ -274,6 +284,7 @@ static void release_device(void) {
     g_rumble_retry = (DmSwitchHapticsRetry){0};
     g_next_device_scan_ns = 0;
     g_pending_frame = (DmSwitchHapticsPendingFrame){0};
+    if (g_shutdown_completion) complete_shutdown(0);
 }
 
 const char *switch_haptics_transport_for_test(void) { return g_transport; }
@@ -396,11 +407,12 @@ static void complete_output_report(DmSwitchOutputRequest *request,
     if (!current) {
         CFRelease(request->device);
         free(request);
+        if (kind == kSwitchOutputShutdown) complete_shutdown(0);
         return;
     }
     if (result != kIOReturnSuccess) {
         dm_switch_haptics_output_fail(&g_output,
-            request->kind == kSwitchOutputRumble ? &request->frame : NULL,
+            kind == kSwitchOutputRumble ? &request->frame : NULL,
             &g_pending_frame);
         g_have_last_report = 0;
         dm_switch_haptics_mark_output_failed(&g_raw_supported, &g_rumble_retry,
@@ -412,6 +424,8 @@ static void complete_output_report(DmSwitchOutputRequest *request,
         CFRelease(request->device);
         free(request);
         if (io_result_indicates_disconnect(result)) handle_device_loss((IOHIDDeviceRef)sender);
+        else if (kind == kSwitchOutputShutdown) complete_shutdown(0);
+        else if (g_output.shutdown_requested) pump_rumble_output();
         return;
     }
     if (kind == kSwitchOutputRumble) {
@@ -428,10 +442,19 @@ static void complete_output_report(DmSwitchOutputRequest *request,
     }
     CFRelease(request->device);
     free(request);
-    if (kind == kSwitchOutputRumble) {
-        DmVibrationFrame next;
-        if (dm_switch_haptics_output_complete(&g_output, &next))
-            send_rumble_frame(&next);
+    if (kind == kSwitchOutputShutdown) {
+        g_output.report_in_flight = 0;
+        DM_LOG_INFO("controller", "Final Switch HID neutral report completed before shutdown");
+        complete_shutdown(1);
+    } else if (kind == kSwitchOutputRumble) {
+        if (g_output.shutdown_requested) {
+            g_output.report_in_flight = 0;
+            pump_rumble_output();
+        } else {
+            DmVibrationFrame next;
+            if (dm_switch_haptics_output_complete(&g_output, &next))
+                send_rumble_frame(&next);
+        }
     } else {
         g_output.report_in_flight = 0;
         pump_rumble_output();
@@ -439,7 +462,25 @@ static void complete_output_report(DmSwitchOutputRequest *request,
 }
 
 static void pump_rumble_output(void) {
-    if (!atomic_load(&g_raw_supported) || g_output.report_in_flight) return;
+    if (g_output.report_in_flight) return;
+    if (g_output.shutdown_requested) {
+        if (!g_output.shutdown_pending) return;
+        if (!g_device || g_report_length < kSwitchRumbleReportLength) {
+            g_output.shutdown_pending = 0;
+            complete_shutdown(0);
+            return;
+        }
+        DmVibrationFrame stop;
+        if (!dm_switch_haptics_output_take_shutdown(&g_output, &stop)) return;
+        uint8_t report[kSwitchRumbleReportLength] = {0};
+        encode_output_report(&stop, g_packet_counter, report);
+        IOReturn result = submit_output_report(report, sizeof report,
+                                               kSwitchRumbleReportID,
+                                               kSwitchOutputShutdown, &stop, 1);
+        if (result != kIOReturnSuccess) complete_shutdown(0);
+        return;
+    }
+    if (!atomic_load(&g_raw_supported)) return;
     DmVibrationFrame next;
     if (dm_vibration_queue_pop(&g_output.rumble_frames, &next))
         send_rumble_frame(&next);
@@ -530,6 +571,7 @@ static int encode_output_report(const DmVibrationFrame *frame,
 
 static void send_rumble_frame(const DmVibrationFrame *frame) {
     if (!g_device || !frame || !atomic_load(&g_raw_supported)) return;
+    if (g_output.shutdown_requested) return;
     if (g_output.report_in_flight) {
         dm_switch_haptics_output_enqueue(&g_output, frame);
         return;
@@ -577,7 +619,7 @@ static void send_rumble_frame(const DmVibrationFrame *frame) {
 }
 
 void switch_haptics_set(const DmVibrationFrame *frame) {
-    if (!g_controller_match || !frame) return;
+    if (!g_controller_match || !frame || g_output.shutdown_requested) return;
     select_device();
     if (!g_device) return;
     if (!atomic_load(&g_raw_supported)) {
@@ -592,4 +634,21 @@ void switch_haptics_stop(void) {
     if (!g_device) return;
     DmVibrationFrame frame = {.low_frequency = 160.f, .high_frequency = 320.f};
     switch_haptics_set(&frame);
+}
+
+void switch_haptics_stop_with_completion(void (^completion)(int completed)) {
+    if (g_shutdown_completion || g_output.shutdown_requested) {
+        if (completion) completion(0);
+        return;
+    }
+    if (!g_device) {
+        if (completion) completion(1);
+        return;
+    }
+    if (!dm_switch_haptics_output_begin_shutdown(&g_output)) {
+        if (completion) completion(0);
+        return;
+    }
+    g_shutdown_completion = completion;
+    pump_rumble_output();
 }
