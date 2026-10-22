@@ -353,6 +353,9 @@ from the first four.
 - Made Core Haptics capability state follow engine stop/reset and player
   teardown. A stopped backend is no longer advertised as ready, and the next
   frame can rebuild it instead of silently dropping output.
+- Kept the HLE capability query on atomic backend state only; Core Haptics
+  channel objects remain main-thread-owned while the guest may query support
+  concurrently.
 - Rebuilt the latest Mac host, including the Core Haptics combined-locality
   fallback, into a temporary validation location.
 - Re-ran the HID forwarding, Switch rumble encoding, and bounded vibration

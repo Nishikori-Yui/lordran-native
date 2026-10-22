@@ -358,8 +358,7 @@ void front_vibration(const DmVibrationFrame *frame) {
 }
 int front_vibration_supported(void) {
     return atomic_load(&g_vibration_enabled) &&
-        (switch_haptics_supported() ||
-         (atomic_load(&g_pad_haptics_supported) && pad_haptics_ready()));
+        (atomic_load(&g_pad_haptics_supported) || switch_haptics_supported());
 }
 void front_vibration_set_enabled(int enabled) {
     dispatch_async(dispatch_get_main_queue(), ^{
