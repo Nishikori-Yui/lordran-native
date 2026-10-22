@@ -95,9 +95,10 @@ static void log_vibration_capture(const DmVibrationFrame *frame, const char *sou
 }
 
 static void forward_vibration(const DmVibrationFrame *frame, const char *source) {
-    if (!frame || !vibration_ready()) return;
-    atomic_store(&g_vibration_devices, 1);
+    if (!frame) return;
     log_vibration_capture(frame, source);
+    if (!vibration_ready()) return;
+    atomic_store(&g_vibration_devices, 1);
     dm_vibration_set(frame);
 }
 
@@ -231,7 +232,6 @@ HLE_FORCE("_ZN2nn3hid25GetVibrationDeviceHandlesEPNS0_21VibrationDeviceHandleEiR
 HLE_FORCE("_ZN2nn3hid25InitializeVibrationDeviceERKNS0_21VibrationDeviceHandleE", "初始化震动设备", void, h_hid_InitVib, const uint32_t *h) { (void)h; }
 HLE_FORCE("_ZN2nn3hid18SendVibrationValueERKNS0_21VibrationDeviceHandleERKNS0_14VibrationValueE", "发送震动", void, h_hid_SendVib, const uint32_t *h, const float *v) {
     if (!h || !v || *h != connected_id()) return;
-    if (!vibration_ready()) return;
     DmVibrationFrame frame = {
         .low_amplitude = v[0], .low_frequency = v[1],
         .high_amplitude = v[2], .high_frequency = v[3],
@@ -244,7 +244,6 @@ HLE_FORCE("_ZN2nn3hid18SendVibrationValueERKNS0_21VibrationDeviceHandleERKNS0_14
 // sets handles on its VibrationTargets even when the host reports 0 devices, so values get queued; return success and the flush clears its count as usual
 HLE_FORCE("_ZN2nn3hid6detail19SendVibrationValuesEPKNS0_21VibrationDeviceHandleEPKNS0_14VibrationValueEi", "震动（批量，震动图 flush 用）", Result, h_hid_SendVibs, const uint32_t *h, const float *v, int n) {
     if (!h || !v || n <= 0) return 0;
-    if (!vibration_ready()) return 0;
     for (int i = 0; i < n; i++) if (h[i] == connected_id()) {
         DmVibrationFrame frame = {
             .low_amplitude = v[i * 4], .low_frequency = v[i * 4 + 1],

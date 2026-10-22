@@ -12,7 +12,7 @@ int dm_opmode(void) { return 1; }
 int front_vibration_supported(void) { return vibration_supported; }
 void front_vibration(const DmVibrationFrame *frame) {
     assert(frame);
-    assert(frame->sequence == vibration_sequence + 1);
+    assert(frame->sequence > vibration_sequence);
     vibration_sequence = frame->sequence;
     vibration_frame = *frame;
 }
@@ -42,7 +42,7 @@ int main(void) {
     assert(h_hid_VibHandles(&handle, 1, &handle, 0) == 0);
     vibration_supported = 1;
     h_hid_SendVib(&handle, value);
-    assert(vibration_sequence == 3 && vibration_frame.sequence == 3);
+    assert(vibration_sequence == 4 && vibration_frame.sequence == 4);
     fill(&s, NPAD_NO1, STYLE_FULLKEY); assert(s.attributes && !s.rx && !s.ry);
     dm_pad_set(0, 0, 0, 2345, -3456);
     fill(&s, NPAD_NO1, STYLE_JOYDUAL);
