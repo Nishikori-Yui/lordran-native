@@ -26,6 +26,8 @@ static _Atomic uint64_t g_btn, g_axes, g_latch, g_pad_btn, g_pad_axes, g_pad_lat
 static _Atomic int64_t g_sampling;
 static _Atomic uint32_t g_vibration_devices;
 static _Atomic uint64_t g_vibration_sequence;
+static _Atomic uint64_t g_vibration_log_ns;
+static _Atomic int g_vibration_stop_logged;
 static pthread_mutex_t g_motion_mu = PTHREAD_MUTEX_INITIALIZER;
 static dm_input_motion g_motion[2];
 void dm_input_swipe_add(int side, double x, double y) {
@@ -56,6 +58,49 @@ void dm_vibration_set(const DmVibrationFrame *frame) {
 }
 int dm_vibration_supported(void) { return front_vibration_supported(); }
 void dm_vibration_set_enabled(int enabled) { front_vibration_set_enabled(enabled); }
+
+static int vibration_ready(void) {
+    int ready = dm_vibration_supported();
+    if (!ready) atomic_store(&g_vibration_devices, 0);
+    return ready;
+}
+
+// Keep one source-side witness per second so a runtime log can distinguish a
+// game request from a renderer or HID acknowledgement without flooding logs.
+static void log_vibration_capture(const DmVibrationFrame *frame, const char *source) {
+    if (!frame) return;
+    int active = frame->low_amplitude > 0.f || frame->high_amplitude > 0.f;
+    if (!active) {
+        if (!atomic_exchange(&g_vibration_stop_logged, 1))
+            DM_LOG_INFO("vibration", "Guest stop captured: source=%s sequence=%llu timestamp_ns=%llu",
+                        source, (unsigned long long)frame->sequence,
+                        (unsigned long long)frame->timestamp_ns);
+        return;
+    }
+    atomic_store(&g_vibration_stop_logged, 0);
+    uint64_t previous = atomic_load(&g_vibration_log_ns);
+    if (previous) {
+        if (frame->timestamp_ns <= previous ||
+            frame->timestamp_ns - previous < 1000000000ull)
+            return;
+    }
+    if (!atomic_compare_exchange_strong(&g_vibration_log_ns, &previous,
+                                       frame->timestamp_ns))
+        return;
+    DM_LOG_INFO("vibration", "Guest frame captured: source=%s sequence=%llu timestamp_ns=%llu low_amp=%.3f low_hz=%.3f high_amp=%.3f high_hz=%.3f",
+                source, (unsigned long long)frame->sequence,
+                (unsigned long long)frame->timestamp_ns,
+                frame->low_amplitude, frame->low_frequency,
+                frame->high_amplitude, frame->high_frequency);
+}
+
+static void forward_vibration(const DmVibrationFrame *frame, const char *source) {
+    if (!frame || !vibration_ready()) return;
+    atomic_store(&g_vibration_devices, 1);
+    log_vibration_capture(frame, source);
+    dm_vibration_set(frame);
+}
+
 // DM_KEYS scripted input (for tests): "seconds:key[+key][~hold seconds][*count/interval seconds],...", e.g. "8:A,12:A,15:Down~0.5,16:A+B,40:A*80/2" (A every 2 s from 40 s on, 80 times). Key names A B X Y LS RS L R ZL ZR Plus Minus Left Up Right Down, left stick LLeft LUp LRight LDown;
 //   held 0.15 s by default, at most 1024 steps (counted after repeats are expanded). Goes through the controller path (dm_pad_set), ORed with keyboard / touch, neither overrides the other. Times are counted from host start.
 //   An f before the time means a presented frame number ("f7600:A", and the repeat interval counts frames too): when the machine is busy seconds drift from the game's progress, frame numbers do not (used for the Zelda BotW opening route)
@@ -176,42 +221,38 @@ HLE_FORCE("_ZN2nn3hid18StartSixAxisSensorERKNS0_19SixAxisSensorHandleE", "六轴
 HLE_FORCE("_ZN2nn3hid22GetSixAxisSensorStatesEPNS0_18SixAxisSensorStateEiRKNS0_19SixAxisSensorHandleE", "六轴状态；宿主不提供（0 条）",
           int, h_hid_SixStates, void *out, int n, const uint32_t *h) { (void)out; (void)n; (void)h; return 0; }
 // VibrationValue is { low-frequency amplitude, low-frequency frequency, high-frequency amplitude, high-frequency frequency }.
-HLE_FORCE("_ZN2nn3hid20IsVibrationPermittedEv", "震动许可；按设置和设备能力返回", unsigned, h_hid_VibPermit, void) { return dm_vibration_supported(); }
+HLE_FORCE("_ZN2nn3hid20IsVibrationPermittedEv", "震动许可；按设置和设备能力返回", unsigned, h_hid_VibPermit, void) { return vibration_ready(); }
 HLE_FORCE("_ZN2nn3hid25GetVibrationDeviceHandlesEPNS0_21VibrationDeviceHandleEiRKjNS_4util10BitFlagSetILi32ENS0_12NpadStyleTagEEE", "震动设备：当前控制器",
           int, h_hid_VibHandles, uint32_t *h, int n, const uint32_t *id, uint32_t style) {
     (void)style;
-    if (!h || n <= 0 || !id || *id != connected_id() || !dm_vibration_supported()) return 0;
+    if (!h || n <= 0 || !id || *id != connected_id() || !vibration_ready()) return 0;
     h[0] = *id; atomic_store(&g_vibration_devices, 1); return 1;
 }
 HLE_FORCE("_ZN2nn3hid25InitializeVibrationDeviceERKNS0_21VibrationDeviceHandleE", "初始化震动设备", void, h_hid_InitVib, const uint32_t *h) { (void)h; }
 HLE_FORCE("_ZN2nn3hid18SendVibrationValueERKNS0_21VibrationDeviceHandleERKNS0_14VibrationValueE", "发送震动", void, h_hid_SendVib, const uint32_t *h, const float *v) {
     if (!h || !v || *h != connected_id()) return;
-    if (!atomic_load(&g_vibration_devices) && dm_vibration_supported()) atomic_store(&g_vibration_devices, 1);
-    if (atomic_load(&g_vibration_devices)) {
-        DmVibrationFrame frame = {
-            .low_amplitude = v[0], .low_frequency = v[1],
-            .high_amplitude = v[2], .high_frequency = v[3],
-            .sequence = atomic_fetch_add(&g_vibration_sequence, 1) + 1,
-            .timestamp_ns = now_ns(),
-        };
-        dm_vibration_set(&frame);
-    }
+    if (!vibration_ready()) return;
+    DmVibrationFrame frame = {
+        .low_amplitude = v[0], .low_frequency = v[1],
+        .high_amplitude = v[2], .high_frequency = v[3],
+        .sequence = atomic_fetch_add(&g_vibration_sequence, 1) + 1,
+        .timestamp_ns = now_ns(),
+    };
+    forward_vibration(&frame, "single");
 }
 // Values queued by the vibration graph (VibrationNode::Update) reach it from the sdk's internal FlushEnqueuedVibrationValues through the PLT, into the hid service proxy (sm abort). Metroid Dread
 // sets handles on its VibrationTargets even when the host reports 0 devices, so values get queued; return success and the flush clears its count as usual
 HLE_FORCE("_ZN2nn3hid6detail19SendVibrationValuesEPKNS0_21VibrationDeviceHandleEPKNS0_14VibrationValueEi", "震动（批量，震动图 flush 用）", Result, h_hid_SendVibs, const uint32_t *h, const float *v, int n) {
     if (!h || !v || n <= 0) return 0;
+    if (!vibration_ready()) return 0;
     for (int i = 0; i < n; i++) if (h[i] == connected_id()) {
-        if (!atomic_load(&g_vibration_devices) && dm_vibration_supported()) atomic_store(&g_vibration_devices, 1);
-        if (atomic_load(&g_vibration_devices)) {
-            DmVibrationFrame frame = {
-                .low_amplitude = v[i * 4], .low_frequency = v[i * 4 + 1],
-                .high_amplitude = v[i * 4 + 2], .high_frequency = v[i * 4 + 3],
-                .sequence = atomic_fetch_add(&g_vibration_sequence, 1) + 1,
-                .timestamp_ns = now_ns(),
-            };
-            dm_vibration_set(&frame);
-        }
+        DmVibrationFrame frame = {
+            .low_amplitude = v[i * 4], .low_frequency = v[i * 4 + 1],
+            .high_amplitude = v[i * 4 + 2], .high_frequency = v[i * 4 + 3],
+            .sequence = atomic_fetch_add(&g_vibration_sequence, 1) + 1,
+            .timestamp_ns = now_ns(),
+        };
+        forward_vibration(&frame, "batch");
     }
     return 0;
 }

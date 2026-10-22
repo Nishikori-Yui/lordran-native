@@ -359,11 +359,20 @@ The diagnostic record should make it possible to answer:
 The fifth question requires physical-device testing and cannot be inferred
 from the first four.
 
+The HLE now emits a rate-limited source witness for the first nonzero guest
+frame and for an ordered stop, including the source path (`single` or
+`batch`), sequence, timestamp and four guest values. This is intentionally
+separate from the front-end's renderer log and the raw HID ACK/write logs.
+The HLE also rechecks backend capability on every send and invalidates stale
+vibration handles after a backend failure, so a previous successful
+enumeration cannot be mistaken for current output readiness.
+
 ## Validation matrix
 
 | Area | Current status | Required evidence |
 |---|---|---|
 | HID single and batch values | Four-field forwarding, handle filtering, sequence, and timestamp are implemented; focused tests pass (2026-10-23) | In-game single/batch dispatch and physical stop behavior |
+| Runtime vibration evidence | Rate-limited HLE source witnesses distinguish guest capture from renderer/HID evidence; stale handles are rejected after capability loss | Capture one in-game log containing source capture, renderer acceptance, and the physical test result |
 | Mac host build | Latest source builds (2026-10-23); existing Metal/compiler warnings remain | Launch this exact build and validate gameplay |
 | iOS controller UI build | Simulator UI harness compiles; app-settings and controller mapping tests pass (2026-10-23) | Physical controller test |
 | DualSense Core Haptics | Independent handle channels plus combined/default-locality fallback are implemented; iOS recreates its player after unexpected engine stops | Start, update, stop, recovery, and actual feedback on USB and Bluetooth |
@@ -379,6 +388,12 @@ from the first four.
 
 ### 2026-10-23
 
+- Added the first source-side runtime evidence layer: HLE logs a rate-limited
+  witness for nonzero guest frames and ordered stops, including source path,
+  sequence, timestamp and all four values. Every send now rechecks backend
+  readiness so stale vibration handles cannot continue to masquerade as a
+  usable device after a renderer failure. Added a regression assertion for
+  this stale-capability case.
 - Re-ran the latest raw-HID state-helper refactor and added input-report
   disconnect handling: a device-gone callback now clears stale capability,
   preserves the newest pending frame and re-enumerates the selected device.

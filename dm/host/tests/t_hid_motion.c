@@ -37,8 +37,12 @@ int main(void) {
     assert(vibration_frame.high_amplitude == 0.4f && vibration_frame.high_frequency == 2.f);
     assert(vibration_frame.sequence == 2); // Ignore non-current controller IDs.
     vibration_supported = 0; assert(!h_hid_VibPermit());
+    h_hid_SendVib(&handle, value); // A stale handle must not bypass a lost backend.
+    assert(vibration_sequence == 2 && vibration_frame.sequence == 2);
     assert(h_hid_VibHandles(&handle, 1, &handle, 0) == 0);
     vibration_supported = 1;
+    h_hid_SendVib(&handle, value);
+    assert(vibration_sequence == 3 && vibration_frame.sequence == 3);
     fill(&s, NPAD_NO1, STYLE_FULLKEY); assert(s.attributes && !s.rx && !s.ry);
     dm_pad_set(0, 0, 0, 2345, -3456);
     fill(&s, NPAD_NO1, STYLE_JOYDUAL);
