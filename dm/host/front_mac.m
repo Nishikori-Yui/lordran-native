@@ -111,6 +111,8 @@ static DmHapticsChannel g_pad_haptics_channels[HAPTICS_CHANNEL_COUNT];
 static NSUInteger g_pad_haptics_channel_count;
 static float g_haptics_low, g_haptics_high;
 static float g_haptics_low_frequency, g_haptics_high_frequency;
+static uint64_t g_haptics_frame_sequence;
+static uint64_t g_haptics_frame_timestamp_ns;
 static DmMacPerfHUD *g_perf_hud;
 static DmMacCheats *g_cheats;
 
@@ -306,7 +308,9 @@ static void pad_apply_haptics(void) {
             accepted_channels++;
     }
     if (accepted_channels && !atomic_exchange(&g_haptics_render_logged, 1))
-        DM_LOG_INFO("controller", "Core Haptics parameters accepted: accepted_channels=%lu configured_channels=%lu intensity=%.3f sharpness=%.3f",
+        DM_LOG_INFO("controller", "Core Haptics parameters accepted: sequence=%llu timestamp_ns=%llu accepted_channels=%lu configured_channels=%lu intensity=%.3f sharpness=%.3f",
+                    (unsigned long long)g_haptics_frame_sequence,
+                    (unsigned long long)g_haptics_frame_timestamp_ns,
                     (unsigned long)accepted_channels,
                     (unsigned long)g_pad_haptics_channel_count,
                     parameters.intensity, parameters.sharpness);
@@ -339,6 +343,8 @@ static void pad_apply_vibration_frame(const DmVibrationFrame *frame) {
     g_haptics_high = high;
     g_haptics_low_frequency = low_frequency;
     g_haptics_high_frequency = high_frequency;
+    g_haptics_frame_sequence = frame->sequence;
+    g_haptics_frame_timestamp_ns = frame->timestamp_ns;
     // Let the raw Switch backend retain the latest frame while its enable
     // acknowledgement is still in flight. It is a no-op for other devices.
     switch_haptics_set(frame);

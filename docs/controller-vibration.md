@@ -378,14 +378,17 @@ frame and for an ordered stop, including the source path (`single` or
 separate from the front-end's renderer log and the raw HID ACK/write logs.
 The HLE also rechecks backend capability on every send and invalidates stale
 vibration handles after a backend failure, so a previous successful
-enumeration cannot be mistaken for current output readiness.
+enumeration cannot be mistaken for current output readiness. Renderer
+acceptance witnesses include the originating frame sequence and timestamp, so
+an in-game log can correlate guest capture with the exact Core Haptics or raw
+HID update that the OS accepted.
 
 ## Validation matrix
 
 | Area | Current status | Required evidence |
 |---|---|---|
 | HID single and batch values | Four-field forwarding, handle filtering, sequence, and timestamp are implemented; focused tests pass (2026-10-23) | In-game single/batch dispatch and physical stop behavior |
-| Runtime vibration evidence | Rate-limited HLE source witnesses distinguish guest capture from renderer/HID evidence; Npad receipt and Core Haptics parameter-submission witnesses are also emitted; stale handles are rejected after capability loss. API acceptance is not physical actuator evidence. | Capture one in-game log containing source capture, renderer acceptance, and the physical test result |
+| Runtime vibration evidence | Rate-limited HLE source witnesses distinguish guest capture from renderer/HID evidence; Npad receipt and Core Haptics/raw HID parameter-submission witnesses include frame sequence and timestamp; stale handles are rejected after capability loss. API acceptance is not physical actuator evidence. | Capture one in-game log containing source capture, renderer acceptance, and the physical test result |
 | Mac host build | Latest source builds (2026-10-23); existing Metal/compiler warnings remain | Launch this exact build and validate gameplay |
 | iOS controller UI build | Simulator UI harness compiles; app-settings and controller mapping tests pass (2026-10-23) | Physical controller test |
 | DualSense Core Haptics | Independent handle channels plus combined/default-locality fallback are implemented; iOS recreates its player after unexpected engine stops | Start, update, stop, recovery, and actual feedback on USB and Bluetooth |
@@ -422,8 +425,11 @@ enumeration cannot be mistaken for current output readiness.
   physical rumble or haptics output.
 - Added renderer-side acceptance witnesses for both macOS and iOS Core
   Haptics. The log records the first successful parameter submission after
-  a controller is prepared, but still deliberately does not claim physical
-  actuator feedback.
+  a controller is prepared, including the originating frame sequence and
+  timestamp, but still deliberately does not claim physical actuator feedback.
+- Added frame sequence and timestamp fields to macOS raw-HID and Core Haptics
+  acceptance witnesses. This makes the source-to-renderer correlation
+  inspectable without treating OS acceptance as proof of actuator motion.
 - Added a rate-limited Npad receipt witness for the first nonzero physical
   controller state returned to the guest, including layout, buttons and both
   axes. This separates a GameController event from proof that the running

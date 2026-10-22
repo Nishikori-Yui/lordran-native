@@ -613,7 +613,9 @@ static CGPathRef arm(CGFloat angle) {
     if (![_hapticsPlayer sendParameters:@[parameter, sharpness] atTime:CHHapticTimeImmediate error:&error])
         DM_LOG_ERROR("controller", "Could not update controller haptics: %s", error.localizedDescription.UTF8String ?: "unknown error");
     else if (!atomic_exchange(&g_gamepad_haptics_render_logged, 1))
-        DM_LOG_INFO("controller", "Core Haptics parameters accepted: intensity=%.3f sharpness=%.3f",
+        DM_LOG_INFO("controller", "Core Haptics parameters accepted: sequence=%llu timestamp_ns=%llu intensity=%.3f sharpness=%.3f",
+                    (unsigned long long)frame.sequence,
+                    (unsigned long long)frame.timestamp_ns,
                     parameters.intensity, parameters.sharpness);
 }
 - (void)stopVibration {

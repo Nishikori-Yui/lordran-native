@@ -440,7 +440,9 @@ static void send_rumble_frame(const DmVibrationFrame *frame) {
         g_logged_failure = 0;
         if (!g_logged_success) {
             g_logged_success = 1;
-            DM_LOG_INFO("controller", "Raw Switch HID rumble report accepted by macOS: transport=%s",
+            DM_LOG_INFO("controller", "Raw Switch HID rumble report accepted by macOS: sequence=%llu timestamp_ns=%llu transport=%s",
+                        (unsigned long long)frame->sequence,
+                        (unsigned long long)frame->timestamp_ns,
                         g_transport[0] ? g_transport : "unknown");
         }
         memcpy(g_last_rumble_report, report + rumble_offset, sizeof g_last_rumble_report);
