@@ -1,5 +1,10 @@
 [
   {
+    "file": "dm/ios/Sources/DmControlOverlay.m",
+    "source": "    [self addSwitch:T(@\"Controller vibration\", @\"手柄震动\") on:DmAppVibrationEnabled() action:@selector(vibrationToggled:)];",
+    "purpose": "Bilingual player-facing controller vibration setting"
+  },
+  {
     "file": "dm/gfx/nvn/nvn_mtl.m",
     "source": "if ([name isEqualToString:@\"顶点\"] || [name isEqualToString:@\"vertex\"]) return 0;",
     "purpose": "Serialized shader-map stage token, not an authored log message"

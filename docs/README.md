@@ -13,6 +13,7 @@ version is [README.zh-CN.md](../README.zh-CN.md).
 | Set up a Mac build, create an iOS IPA, or build a macOS app | [Mac setup and packaging](macos-packaging.md) |
 | Package on Windows without Xcode, or have an agent execute/debug that route | [Windows packaging and agent runbook](windows-packaging.md) |
 | Understand the architecture or build manually | [Development guide](development.md) |
+| Follow controller vibration implementation and validation | [Controller vibration design](controller-vibration.md) |
 | Extract files and bring up the host | [Porting guide](porting/README.md) |
 | Inspect title-specific build and shader data | [Game profile](../dm/games/README.md) |
 | Understand NVN on Metal | [Graphics guide](../dm/gfx/README.md) |

@@ -18,6 +18,10 @@ and [support skill](../skills/lordran-native-support/SKILL.md).
 | iOS app | One unsigned IPA for iPhone and iPad. The rewritten code is embedded in the executable; the shader libraries, the RomFS and the game icon are inside the app |
 | Known gaps | Conditional render is always drawn; sparse virtual-pool mappings; `DrawElementsIndirect`. TBDR optimizations are off by default. No online features. |
 
+The controller vibration implementation and its device validation matrix are
+tracked in the [controller vibration design](controller-vibration.md). Keep
+that document aligned with the HLE, Mac raw HID, Core Haptics and iOS changes.
+
 ## The packing script in detail
 
 `scripts/build_ipa_from_nsp.py` (`-h` lists every option):

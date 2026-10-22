@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import "DmControlProfile.h"
+#include "../../host/dm_input.h"
 
 FOUNDATION_EXPORT NSNotificationName const DmControllerChangedNotification;
 
@@ -20,7 +21,14 @@ FOUNDATION_EXPORT NSNotificationName const DmControllerChangedNotification;
 - (CGPoint)controlResizeHandleCenter:(NSInteger)control;
 - (void)moveControl:(NSInteger)control toPoint:(CGPoint)point;
 - (void)setInputSuspended:(BOOL)suspended;
+- (BOOL)vibrationSupported;
+- (void)applyVibrationFrame:(DmVibrationFrame)frame;
+- (void)stopVibration;
+- (void)setVibrationEnabled:(BOOL)enabled;
 @end
 
 UIView *dm_gamepad_view(CGRect frame);
 void dm_gamepad_reset(void);
+void dm_gamepad_vibration(DmVibrationFrame frame);
+int dm_gamepad_vibration_supported(void);
+void dm_gamepad_vibration_enabled(int enabled);
