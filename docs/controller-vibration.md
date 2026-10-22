@@ -186,7 +186,7 @@ perceptual-renderer boundary described here rather than raw waveform fidelity.
 ## Backend B: Switch raw HID
 
 Switch Pro and Joy-Con devices may not expose usable `GCDeviceHaptics`.
-macOS then needs a raw `IOHIDDeviceSetReport` path.
+macOS then needs a raw IOKit HID output path.
 
 The raw backend must:
 
@@ -196,8 +196,8 @@ The raw backend must:
 3. encode both frequency bands and amplitudes using the Switch rumble
    algorithm;
 4. send the correct output report for the connection type;
-5. serialize report writes and preserve the protocol packet counter when the
-   report requires one;
+5. submit reports asynchronously, serialize in-flight writes, and preserve the
+   protocol packet counter when the report requires one;
 6. send a safe neutral report on stop and release;
 7. reopen or discard the device after disconnect;
 8. log the report result without logging private device identifiers.
@@ -208,32 +208,37 @@ matches Nintendo HID devices. Before advertising raw vibration support it sends
 output report `0x01` with subcommand `0x48` and value `0x01`, which enables
 controller rumble, and requires macOS to accept that report. The 64-byte
 protocol report includes the `0x01` report ID in its first byte, as required by
-`IOHIDDeviceSetReport` for a device with multiple reports. The input callback
+IOKit for a device with multiple reports. The input callback
 waits for a matching `0x21` ACK before advertising raw vibration support; OS
 acceptance alone is not treated as proof
 that the controller applied the setting. The newest vibration frame is held
 until the ACK arrives, then sent through the raw path. A matching NACK leaves
 raw output disabled, allowing the Mac Core Haptics fallback when available;
 NACKs, timed-out ACKs and failed writes are retried no more than once per
-250 ms. Controller selection briefly pumps the main run loop (up to 250 ms) so
-the normal startup path can receive the ACK before the guest enumerates
-vibration devices. The regular host poll also retries the enable handshake and
-rate-limits raw-device rescans to 250 ms, so initialization does not depend on
-a later guest vibration frame to trigger recovery; the newest frame remains
-pending until the ACK arrives.
+250 ms. Both the enable handshake and rumble frames use
+`IOHIDDeviceSetReportWithCallback`; controller selection never waits for an ACK
+or pumps the main run loop. Each asynchronous request owns its report buffer
+and retains its HID device until completion. A single in-flight report and a
+fixed-capacity ordered frame queue serialize output. A new stop removes older
+queued rumble frames before it is enqueued, so obsolete effects cannot be
+replayed after a stop; on output failure, the queue is reduced to its newest
+frame for retry. A per-device generation makes late completions harmless after
+disconnect or replacement. The regular host poll retries the enable handshake
+and rate-limits raw-device rescans to 250 ms, so recovery does not depend on a
+later guest vibration frame.
 
 Rumble frames use output report `0x10` and encode both guest frequencies and
 amplitudes with the Switch logarithmic tables. The on-wire rumble report is
 `0x10`, a four-bit packet counter, and eight rumble bytes; the report ID is
 present both in the first byte and in the `IOHIDDeviceSetReport` argument. The
-counter advances for every accepted report and wraps at four bits. The eight
+counter advances when IOKit accepts each asynchronous report request and wraps at four bits. The eight
 rumble bytes are duplicated across both actuators because the Switch low/high
 pair represents frequency bands, not spatial sides. The low-band frequency is clamped to its protocol
 range. Repeated neutral or non-neutral payloads are coalesced because the
 controller retains its last rumble state. When macOS exposes a maximum output
 report size, the preflight check accepts either interpretation of whether the
 descriptor-derived size includes the report-ID byte, since Apple's property
-documentation does not specify that detail; `IOHIDDeviceSetReport` remains the
+documentation does not specify that detail; `IOHIDDeviceSetReportWithCallback` remains the
 final size check.
 
 The device is acquired when the first matching controller is selected and is
@@ -416,7 +421,7 @@ HID update that the OS accepted.
 | Mac host build | Isolated full host build passes with the reviewed source (2026-10-23); an earlier isolated smoke run reached normal rendering and shut down cleanly; existing Metal/compiler warnings remain | Launch this exact build with a connected controller and validate gameplay |
 | iOS controller UI build | Simulator UI harness compiles; app-settings and controller mapping tests pass (2026-10-23) | Physical controller test |
 | DualSense Core Haptics | Independent handle channels plus combined/default-locality fallback are implemented; iOS recreates its player after unexpected engine stops | Start, update, stop, recovery, and actual feedback on USB and Bluetooth |
-| Switch Pro raw HID | Four-field encoder, report-ID-inclusive 10-byte rumble frame, 64-byte rumble-enable report, dual actuator payload, packet counter, low-band range clamp, ACK/NACK parsing, retry throttling, descriptor-size boundary handling, and disconnected-result classification are unit-tested | Physical USB/Bluetooth rumble, ACK timing, and unplug/reconnect recovery |
+| Switch Pro raw HID | Four-field encoder, report-ID-inclusive 10-byte rumble frame, 64-byte rumble-enable report, asynchronous serialized writes, owned callback buffers, stop-priority/latest-frame queueing, per-device completion generations, dual actuator payload, packet counter, low-band range clamp, ACK/NACK parsing, retry throttling, descriptor-size boundary handling, and disconnected-result classification are unit-tested | Physical USB/Bluetooth rumble, callback timing, ACK behavior, and unplug/reconnect recovery |
 | NS Pro JoyDual input | Selected host axes are published through both FullKey and JoyDual layouts; Mac offers explicit controller selection and locks to that choice until disconnect; HLE axis forwarding tests pass | Confirm both sticks and buttons in the running game |
 | Low/high frequency preservation | Preserved through HLE and encoded natively by Switch raw HID; both Core Haptics paths map amplitude-weighted frequency to perceptual sharpness | Compare captured source parameters with rendered results on hardware; calibrate per device |
 | Timing and waveform synthesis | Sequence/timestamp capture and bounded ordered delivery are implemented; timestamps schedule inter-frame updates with a 100 ms step cap; no sample waveform is reconstructed | Measure queue latency and fidelity, then decide whether interpolation or waveform reconstruction is needed |
@@ -428,6 +433,14 @@ HID update that the OS accepted.
 
 ### 2026-10-23
 
+- Self-review found that synchronous `IOHIDDeviceSetReport` could block the
+  main thread during either the rumble-enable handshake or a game vibration
+  update. Replaced both writes with `IOHIDDeviceSetReportWithCallback`, heap-
+  owned report buffers and retained device references, one in-flight output,
+  bounded serialized rumble queueing with stop priority, latest-frame recovery,
+  and per-device generations that ignore late completions. Removed startup's
+  run-loop wait. Added output state regression cases. Host tests/build and
+  physical USB/Bluetooth timing validation are pending for this correction.
 - Self-review found a macOS HID framing defect: the Switch output buffers omitted
   the report ID even though `IOHIDDeviceSetReport` requires it in the first byte
   for multi-report devices. Corrected the rumble frame to 10 bytes and the

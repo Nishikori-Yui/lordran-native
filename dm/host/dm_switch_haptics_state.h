@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dm_input.h"
+#include "dm_vibration_queue.h"
 #include <stdatomic.h>
 
 enum { DM_SWITCH_HAPTICS_RETRY_NS = 250000000ull };
@@ -15,6 +16,34 @@ typedef struct {
     DmVibrationFrame frame;
     int valid;
 } DmSwitchHapticsPendingFrame;
+
+typedef struct {
+    DmVibrationQueue rumble_frames;
+    int report_in_flight;
+} DmSwitchHapticsOutputState;
+
+static inline int dm_switch_haptics_output_begin(
+    DmSwitchHapticsOutputState *state) {
+    if (!state || state->report_in_flight) return 0;
+    state->report_in_flight = 1;
+    return 1;
+}
+
+static inline void dm_switch_haptics_output_enqueue(
+    DmSwitchHapticsOutputState *state, const DmVibrationFrame *frame) {
+    if (!state || !frame) return;
+    if (dm_vibration_frame_is_stop(frame))
+        state->rumble_frames = (DmVibrationQueue){0};
+    dm_vibration_queue_push(&state->rumble_frames, frame);
+}
+
+// Complete the in-flight report and take the next queued frame, if any.
+static inline int dm_switch_haptics_output_complete(
+    DmSwitchHapticsOutputState *state, DmVibrationFrame *next) {
+    if (!state) return 0;
+    state->report_in_flight = 0;
+    return dm_vibration_queue_pop(&state->rumble_frames, next);
+}
 
 static inline int dm_switch_haptics_ack_is_current(
     const void *sender, const void *current_device, int request_pending) {
@@ -82,4 +111,15 @@ static inline int dm_switch_haptics_take_pending(
     if (out) *out = pending->frame;
     pending->valid = 0;
     return 1;
+}
+
+static inline void dm_switch_haptics_output_fail(
+    DmSwitchHapticsOutputState *state, const DmVibrationFrame *failed,
+    DmSwitchHapticsPendingFrame *pending) {
+    if (!state) return;
+    state->report_in_flight = 0;
+    if (pending && failed) dm_switch_haptics_store_latest(pending, failed);
+    DmVibrationFrame queued;
+    while (dm_vibration_queue_pop(&state->rumble_frames, &queued))
+        dm_switch_haptics_store_latest(pending, &queued);
 }

@@ -39,12 +39,29 @@ static int g_input_callback_registered;
 static DmSwitchHapticsRetry g_rumble_retry;
 static uint64_t g_next_device_scan_ns;
 static DmSwitchHapticsPendingFrame g_pending_frame;
+static DmSwitchHapticsOutputState g_output;
+static uint64_t g_device_generation;
 static uint8_t g_input_report[512];
 static _Atomic int g_raw_supported;
+
+enum { kSwitchOutputEnable, kSwitchOutputRumble };
+typedef struct {
+    uint64_t device_generation;
+    int kind;
+    IOHIDDeviceRef device;
+    DmVibrationFrame frame;
+    uint8_t report[kSwitchEnableVibrationReportLength];
+} DmSwitchOutputRequest;
 
 static void send_rumble_frame(const DmVibrationFrame *frame);
 static void select_device(void);
 static void release_device(void);
+static void pump_rumble_output(void);
+static void output_report_callback(void *context, IOReturn result, void *sender,
+                                   IOHIDReportType type, uint32_t report_id,
+                                   uint8_t *report, CFIndex report_length);
+static void complete_output_report(DmSwitchOutputRequest *request,
+                                   IOReturn result, void *sender);
 
 static uint64_t switch_haptics_now_ns(void) {
     static mach_timebase_info_data_t timebase;
@@ -231,6 +248,8 @@ static void select_device(void) {
 }
 
 static void release_device(void) {
+    g_device_generation++;
+    g_output = (DmSwitchHapticsOutputState){0};
     atomic_store(&g_raw_supported, 0);
     if (g_device) {
         if (g_input_callback_registered) {
@@ -322,6 +341,109 @@ static int encode_enable_vibration_report(uint8_t packet_counter,
     return kSwitchEnableVibrationReportLength;
 }
 
+static IOReturn submit_output_report(const uint8_t *report, size_t length,
+                                     uint32_t report_id, int kind,
+                                     const DmVibrationFrame *frame,
+                                     int already_reserved) {
+    if (!g_device || !report || !length || length > kSwitchEnableVibrationReportLength)
+        return kIOReturnNotOpen;
+    if (!already_reserved && !dm_switch_haptics_output_begin(&g_output))
+        return kIOReturnBusy;
+    DmSwitchOutputRequest *request = calloc(1, sizeof(*request));
+    if (!request) {
+        g_output.report_in_flight = 0;
+        return kIOReturnNoMemory;
+    }
+    request->device_generation = g_device_generation;
+    request->kind = kind;
+    request->device = (IOHIDDeviceRef)CFRetain(g_device);
+    if (frame) request->frame = *frame;
+    memcpy(request->report, report, length);
+    IOReturn result = IOHIDDeviceSetReportWithCallback(
+        g_device, kIOHIDReportTypeOutput, report_id, request->report, length,
+        1000, output_report_callback, request);
+    if (result != kIOReturnSuccess) {
+        CFRelease(request->device);
+        free(request);
+        dm_switch_haptics_output_fail(&g_output, frame, &g_pending_frame);
+    } else {
+        // Reserve the packet counter when IOKit accepts the asynchronous
+        // request; the completion callback may run after the next input ACK.
+        g_packet_counter = (uint8_t)((g_packet_counter + 1) & 0x0f);
+    }
+    return result;
+}
+
+static void output_report_callback(void *context, IOReturn result, void *sender,
+                                   IOHIDReportType type, uint32_t report_id,
+                                   uint8_t *report, CFIndex report_length) {
+    (void)type;
+    (void)report_id;
+    (void)report;
+    (void)report_length;
+    DmSwitchOutputRequest *request = context;
+    if (!request) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        complete_output_report(request, result, sender);
+    });
+}
+
+static void complete_output_report(DmSwitchOutputRequest *request,
+                                   IOReturn result, void *sender) {
+    int kind = request->kind;
+    int current = request->device_generation == g_device_generation &&
+        request->device == g_device && sender == g_device;
+    if (!current) {
+        CFRelease(request->device);
+        free(request);
+        return;
+    }
+    if (result != kIOReturnSuccess) {
+        dm_switch_haptics_output_fail(&g_output,
+            request->kind == kSwitchOutputRumble ? &request->frame : NULL,
+            &g_pending_frame);
+        g_have_last_report = 0;
+        dm_switch_haptics_mark_output_failed(&g_raw_supported, &g_rumble_retry,
+                                             NULL, NULL, switch_haptics_now_ns());
+        if (!g_logged_failure) {
+            g_logged_failure = 1;
+            DM_LOG_WARN("controller", "Raw Switch HID asynchronous output failed: kr=%d", result);
+        }
+        CFRelease(request->device);
+        free(request);
+        if (io_result_indicates_disconnect(result)) handle_device_loss((IOHIDDeviceRef)sender);
+        return;
+    }
+    if (kind == kSwitchOutputRumble) {
+        memcpy(g_last_rumble_report, request->report + 2, sizeof g_last_rumble_report);
+        g_have_last_report = 1;
+        if (!g_logged_success) {
+            g_logged_success = 1;
+            DM_LOG_INFO("controller", "Raw Switch HID rumble report accepted by macOS: sequence=%llu timestamp_ns=%llu transport=%s",
+                        (unsigned long long)request->frame.sequence,
+                        (unsigned long long)request->frame.timestamp_ns,
+                        g_transport[0] ? g_transport : "unknown");
+        }
+    }
+    CFRelease(request->device);
+    free(request);
+    if (kind == kSwitchOutputRumble) {
+        DmVibrationFrame next;
+        if (dm_switch_haptics_output_complete(&g_output, &next))
+            send_rumble_frame(&next);
+    } else {
+        g_output.report_in_flight = 0;
+        pump_rumble_output();
+    }
+}
+
+static void pump_rumble_output(void) {
+    if (!atomic_load(&g_raw_supported) || g_output.report_in_flight) return;
+    DmVibrationFrame next;
+    if (dm_vibration_queue_pop(&g_output.rumble_frames, &next))
+        send_rumble_frame(&next);
+}
+
 static int enable_rumble(void) {
     if (!g_device || !device_report_size_allows_report(
             g_max_output_report_length, kSwitchEnableVibrationReportLength))
@@ -330,14 +452,15 @@ static int enable_rumble(void) {
     if (g_rumble_retry.request_pending &&
         now_ns - g_rumble_retry.sent_at_ns < DM_SWITCH_HAPTICS_RETRY_NS)
         return 1;
+    if (g_output.report_in_flight) return 1;
     if (!dm_switch_haptics_retry_ready(&g_rumble_retry, now_ns))
         return 0;
     uint8_t report[kSwitchEnableVibrationReportLength] = {0};
     if (encode_enable_vibration_report(g_packet_counter, report) != sizeof report)
         return 0;
-    IOReturn result = IOHIDDeviceSetReport(g_device, kIOHIDReportTypeOutput,
-                                           kSwitchSubcommandReportID, report,
-                                           sizeof report);
+    IOReturn result = submit_output_report(report, sizeof report,
+                                           kSwitchSubcommandReportID,
+                                           kSwitchOutputEnable, NULL, 0);
     if (result != kIOReturnSuccess) {
         if (!g_logged_failure) {
             g_logged_failure = 1;
@@ -350,16 +473,9 @@ static int enable_rumble(void) {
         }
         return 0;
     }
-    g_packet_counter = (uint8_t)((g_packet_counter + 1) & 0x0f);
     dm_switch_haptics_mark_enable_sent(&g_rumble_retry, now_ns);
-    DM_LOG_INFO("controller", "Switch HID rumble-enable subcommand sent; waiting for acknowledgement");
+    DM_LOG_INFO("controller", "Switch HID rumble-enable subcommand queued asynchronously; waiting for acknowledgement");
     return 1;
-}
-
-static void wait_for_rumble_enable(void) {
-    CFAbsoluteTime deadline = CFAbsoluteTimeGetCurrent() + 0.25;
-    while (!atomic_load(&g_raw_supported) && CFAbsoluteTimeGetCurrent() < deadline)
-        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, false);
 }
 
 void switch_haptics_init_for_controller(const char *controller_name,
@@ -376,7 +492,6 @@ void switch_haptics_init_for_controller(const char *controller_name,
     select_device();
     if (g_device && !atomic_load(&g_raw_supported)) {
         enable_rumble();
-        wait_for_rumble_enable();
     }
 }
 
@@ -414,6 +529,10 @@ static int encode_output_report(const DmVibrationFrame *frame,
 
 static void send_rumble_frame(const DmVibrationFrame *frame) {
     if (!g_device || !frame || !atomic_load(&g_raw_supported)) return;
+    if (g_output.report_in_flight) {
+        dm_switch_haptics_output_enqueue(&g_output, frame);
+        return;
+    }
     uint8_t report[kSwitchRumbleReportLength] = {0};
     DmVibrationFrame normalized = *frame;
     normalized.low_frequency = normalized_frequency(frame->low_frequency, 160.f);
@@ -427,13 +546,17 @@ static void send_rumble_frame(const DmVibrationFrame *frame) {
         }
         return;
     }
-    size_t rumble_offset = 2;
     if (g_have_last_report && !memcmp(g_last_rumble_report,
-                                     report + rumble_offset,
-                                     sizeof g_last_rumble_report))
-        return; // The controller retains the current actuator state until the next report.
-    IOReturn result = IOHIDDeviceSetReport(g_device, kIOHIDReportTypeOutput,
-                                           kSwitchRumbleReportID, report, report_length);
+                                     report + 2,
+                                     sizeof g_last_rumble_report)) {
+        // The controller retains its state; don't let a duplicate at the head
+        // of the asynchronous queue prevent later distinct frames from draining.
+        pump_rumble_output();
+        return;
+    }
+    IOReturn result = submit_output_report(report, (size_t)report_length,
+                                           kSwitchRumbleReportID,
+                                           kSwitchOutputRumble, frame, 0);
     if (result != kIOReturnSuccess) {
         if (!g_logged_failure) {
             g_logged_failure = 1;
@@ -455,9 +578,7 @@ static void send_rumble_frame(const DmVibrationFrame *frame) {
                         (unsigned long long)frame->timestamp_ns,
                         g_transport[0] ? g_transport : "unknown");
         }
-        memcpy(g_last_rumble_report, report + rumble_offset, sizeof g_last_rumble_report);
-        g_have_last_report = 1;
-        g_packet_counter = (uint8_t)((g_packet_counter + 1) & 0x0f);
+        // The completion callback updates the de-duplication cache and counter.
     }
 }
 

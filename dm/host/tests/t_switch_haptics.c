@@ -53,6 +53,31 @@ int main(void) {
                                          &pending_frame, 20000000000ull);
     assert(!retry.request_pending && retry.retry_after_ns == 20250000000ull);
     assert(pending.valid && pending.frame.sequence == 3);
+
+    DmSwitchHapticsOutputState output = {0};
+    DmVibrationFrame output_first = {.low_amplitude = 0.4f, .sequence = 10};
+    DmVibrationFrame output_stop = {.sequence = 11};
+    DmVibrationFrame output_latest = {.high_amplitude = 0.8f, .sequence = 12};
+    assert(dm_switch_haptics_output_begin(&output));
+    assert(!dm_switch_haptics_output_begin(&output));
+    dm_switch_haptics_output_enqueue(&output, &output_first);
+    dm_switch_haptics_output_enqueue(&output, &output_stop);
+    dm_switch_haptics_output_enqueue(&output, &output_latest);
+    DmVibrationFrame queued = {0};
+    assert(dm_switch_haptics_output_complete(&output, &queued));
+    assert(queued.sequence == 11 && !output.report_in_flight);
+    assert(dm_switch_haptics_output_complete(&output, &queued));
+    assert(queued.sequence == 12 && !output.report_in_flight);
+    assert(!dm_switch_haptics_output_complete(&output, &queued));
+    assert(!output.report_in_flight);
+    assert(dm_switch_haptics_output_begin(&output));
+    dm_switch_haptics_output_enqueue(&output, &output_first);
+    dm_switch_haptics_output_enqueue(&output, &output_latest);
+    DmSwitchHapticsPendingFrame failed_pending = {0};
+    dm_switch_haptics_output_fail(&output, &output_stop, &failed_pending);
+    assert(!output.report_in_flight && output.rumble_frames.count == 0);
+    assert(failed_pending.valid && failed_pending.frame.sequence == 12);
+
     assert(dm_switch_haptics_ack_is_current((void *)0x1, (void *)0x1, 1));
     assert(!dm_switch_haptics_ack_is_current((void *)0x1, (void *)0x2, 1));
     assert(!dm_switch_haptics_ack_is_current((void *)0x1, (void *)0x1, 0));
