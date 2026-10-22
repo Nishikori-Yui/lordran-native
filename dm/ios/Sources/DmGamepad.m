@@ -612,11 +612,17 @@ static CGPathRef arm(CGFloat angle) {
     }
     if (![_hapticsPlayer sendParameters:@[parameter, sharpness] atTime:CHHapticTimeImmediate error:&error])
         DM_LOG_ERROR("controller", "Could not update controller haptics: %s", error.localizedDescription.UTF8String ?: "unknown error");
-    else if (!atomic_exchange(&g_gamepad_haptics_render_logged, 1))
-        DM_LOG_INFO("controller", "Core Haptics parameters accepted: sequence=%llu timestamp_ns=%llu intensity=%.3f sharpness=%.3f",
+    else if (!atomic_exchange(&g_gamepad_haptics_render_logged, 1)) {
+        uint64_t elapsed_ns = 0;
+        double source_to_accept_ms = dm_vibration_elapsed_ns(
+            frame.timestamp_ns, vibration_now_ns(), &elapsed_ns)
+            ? (double)elapsed_ns / 1000000.0 : -1.0;
+        DM_LOG_INFO("controller", "Core Haptics parameters accepted: sequence=%llu timestamp_ns=%llu source_to_accept_ms=%.3f intensity=%.3f sharpness=%.3f",
                     (unsigned long long)frame.sequence,
                     (unsigned long long)frame.timestamp_ns,
+                    source_to_accept_ms,
                     parameters.intensity, parameters.sharpness);
+    }
 }
 - (void)stopVibration {
     NSError *error = nil;

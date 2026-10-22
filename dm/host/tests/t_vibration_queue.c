@@ -4,6 +4,12 @@
 #include <stdio.h>
 
 int main(void) {
+    uint64_t elapsed_ns = 0;
+    assert(dm_vibration_elapsed_ns(1000000000ull, 1002500000ull, &elapsed_ns));
+    assert(elapsed_ns == 2500000ull);
+    assert(!dm_vibration_elapsed_ns(0, 1000000ull, &elapsed_ns));
+    assert(!dm_vibration_elapsed_ns(2000000ull, 1000000ull, &elapsed_ns));
+
     DmVibrationQueue queue = {0};
     DmVibrationFrame next;
 

@@ -9,6 +9,13 @@ typedef struct {
     uint64_t last_timestamp_ns;
 } DmVibrationTimeline;
 
+static inline int dm_vibration_elapsed_ns(uint64_t start_ns, uint64_t end_ns,
+                                          uint64_t *elapsed_ns) {
+    if (!start_ns || end_ns < start_ns || !elapsed_ns) return 0;
+    *elapsed_ns = end_ns - start_ns;
+    return 1;
+}
+
 static inline uint64_t dm_vibration_timeline_schedule(
     DmVibrationTimeline *timeline, const DmVibrationFrame *frame,
     uint64_t now_ns_value) {

@@ -424,12 +424,20 @@ acceptance witnesses include the originating frame sequence and timestamp, so
 an in-game log can correlate guest capture with the exact Core Haptics or raw
 HID update that the OS accepted.
 
+The first successful Core Haptics parameter submission now records
+`source_to_accept_ms`; the first successful raw Switch output callback records
+`source_to_completion_callback_ms`. Both are measured from the captured frame's
+monotonic timestamp. They quantify host/OS-path latency only: they do not
+measure when the physical actuator begins moving, and the raw callback value
+includes main-queue callback delivery time. A negative value marks an invalid
+or incomparable timestamp rather than a zero-latency result.
+
 ## Validation matrix
 
 | Area | Current status | Required evidence |
 |---|---|---|
 | HID single and batch values | Four-field forwarding, handle filtering, sequence, and timestamp are implemented; focused tests pass (2026-10-23) | In-game single/batch dispatch and physical stop behavior |
-| Runtime vibration evidence | Rate-limited HLE source witnesses distinguish guest capture from renderer/HID evidence; Npad receipt and Core Haptics/raw HID parameter-submission witnesses include frame sequence and timestamp; stale handles are rejected after capability loss. API acceptance is not physical actuator evidence. | Capture one in-game log containing source capture, renderer acceptance, and the physical test result |
+| Runtime vibration evidence | Rate-limited HLE source witnesses distinguish guest capture from renderer/HID evidence; Npad receipt and Core Haptics/raw HID parameter-submission witnesses include frame sequence and timestamp; first output witnesses include host/OS-path latency; stale handles are rejected after capability loss. API acceptance is not physical actuator evidence. | Capture one in-game log containing source capture, renderer acceptance, measured host/OS latency, and the physical test result |
 | Mac host build | Isolated full host build passes with the reviewed source (2026-10-23); an earlier isolated smoke run reached normal rendering and shut down cleanly; existing Metal/compiler warnings remain | Launch this exact build with a connected controller and validate gameplay |
 | iOS controller UI build | Simulator UI harness compiles; app-settings and controller mapping tests pass (2026-10-23) | Physical controller test |
 | DualSense Core Haptics | Independent handle channels plus combined/default-locality fallback are implemented; iOS recreates its player after unexpected engine stops | Start, update, stop, recovery, and actual feedback on USB and Bluetooth |
@@ -461,6 +469,13 @@ HID update that the OS accepted.
   rejection. Rebuilt the complete macOS host to an isolated `/tmp` output and
   reran the five focused input/vibration tests; all passed. The callback and
   physical stop behavior require a connected-pad test.
+- Added a common monotonic elapsed-time helper and first-success latency
+  witnesses for macOS Core Haptics, iOS Core Haptics and Switch raw-HID
+  completion callbacks. Added tests for valid elapsed time, zero source
+  timestamps and clock underflow. Rebuilt the isolated macOS host, reran the
+  five focused host tests and iOS diagnostics/controller tests, and rebuilt the
+  iOS controller UI harness. These report host/OS-path timing, not physical
+  actuator onset; connected-device measurements remain required.
 - Self-review found that synchronous `IOHIDDeviceSetReport` could block the
   main thread during either the rumble-enable handshake or a game vibration
   update. Replaced both writes with `IOHIDDeviceSetReportWithCallback`, heap-

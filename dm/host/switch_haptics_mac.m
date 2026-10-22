@@ -8,6 +8,7 @@
 #include <mach/mach_time.h>
 #include "dm_log.h"
 #include "dm_switch_haptics_state.h"
+#include "dm_vibration_timing.h"
 #include "switch_haptics_mac.h"
 
 enum {
@@ -434,9 +435,14 @@ static void complete_output_report(DmSwitchOutputRequest *request,
         g_logged_failure = 0;
         if (!g_logged_success) {
             g_logged_success = 1;
-            DM_LOG_INFO("controller", "Raw Switch HID rumble report accepted by macOS: sequence=%llu timestamp_ns=%llu transport=%s",
+            uint64_t elapsed_ns = 0;
+            double source_to_completion_ms = dm_vibration_elapsed_ns(
+                request->frame.timestamp_ns, switch_haptics_now_ns(),
+                &elapsed_ns) ? (double)elapsed_ns / 1000000.0 : -1.0;
+            DM_LOG_INFO("controller", "Raw Switch HID rumble report accepted by macOS: sequence=%llu timestamp_ns=%llu source_to_completion_callback_ms=%.3f transport=%s",
                         (unsigned long long)request->frame.sequence,
                         (unsigned long long)request->frame.timestamp_ns,
+                        source_to_completion_ms,
                         g_transport[0] ? g_transport : "unknown");
         }
     }

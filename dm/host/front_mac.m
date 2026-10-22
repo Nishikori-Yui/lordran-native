@@ -344,13 +344,19 @@ static void pad_apply_haptics(void) {
         else
             accepted_channels++;
     }
-    if (accepted_channels && !atomic_exchange(&g_haptics_render_logged, 1))
-        DM_LOG_INFO("controller", "Core Haptics parameters accepted: sequence=%llu timestamp_ns=%llu accepted_channels=%lu configured_channels=%lu intensity=%.3f sharpness=%.3f",
+    if (accepted_channels && !atomic_exchange(&g_haptics_render_logged, 1)) {
+        uint64_t elapsed_ns = 0;
+        double source_to_accept_ms = dm_vibration_elapsed_ns(
+            g_haptics_frame_timestamp_ns, now_ns(), &elapsed_ns)
+            ? (double)elapsed_ns / 1000000.0 : -1.0;
+        DM_LOG_INFO("controller", "Core Haptics parameters accepted: sequence=%llu timestamp_ns=%llu source_to_accept_ms=%.3f accepted_channels=%lu configured_channels=%lu intensity=%.3f sharpness=%.3f",
                     (unsigned long long)g_haptics_frame_sequence,
                     (unsigned long long)g_haptics_frame_timestamp_ns,
+                    source_to_accept_ms,
                     (unsigned long)accepted_channels,
                     (unsigned long)g_pad_haptics_channel_count,
                     parameters.intensity, parameters.sharpness);
+    }
 }
 static BOOL pad_haptics_ready(void) {
     if (!g_pad_haptics_channel_count) return NO;
