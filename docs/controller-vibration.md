@@ -116,7 +116,8 @@ and four-field frame forwarding in place. Both platforms now use the frame
 timestamps to preserve the interval between queued updates, with a 100 ms
 per-interval ceiling; a reset, disable, controller change or lifecycle stop
 invalidates delayed callbacks and drops stale queued frames. This is bounded
-timing preservation, not interpolation or waveform reconstruction. On Mac it creates independent
+timing preservation, not interpolation or waveform reconstruction. On Mac it
+creates independent
 left/right channels when both localities are supported; otherwise it creates
 one channel for combined handles or the default locality. The Mac renderer
 uses a basic pattern player because the advanced-player factory failed to
@@ -327,13 +328,19 @@ from the first four.
 | Low/high frequency preservation | Preserved through HLE and encoded natively by Switch raw HID; Core Haptics is an approximation | Compare decoded and rendered frame records on hardware |
 | Timing and waveform synthesis | Sequence/timestamp capture and bounded ordered delivery are implemented; timestamps schedule inter-frame updates with a 100 ms step cap; no sample waveform is reconstructed | Measure queue latency and fidelity, then decide whether interpolation or waveform reconstruction is needed |
 | Background and disconnect | Lifecycle stop code is implemented | Device and scene transition test |
-| Long-running session | Not tested | At least 30 minutes with repeated effects |
+| Long-running session | Current host ran for about 17 minutes / 7,200 rendered frames without a host crash; no controller was enumerated and repeated physical effects were not tested | At least 30 minutes with repeated effects on a connected controller |
 | Core Audio experiment | Not implemented | Only add after raw/Core Haptics paths are measured |
 
 ## Change log
 
 ### 2026-10-23
 
+- Ran the current-build host with an isolated save for about 17 minutes and
+  7,200 rendered frames without a host crash. This validates renderer/session
+  stability only; it does not validate vibration because macOS enumerated no
+  connected NS Pro or DualSense HID device during the run.
+- Rechecked the macOS USB/HID and Bluetooth inventories; the available
+  DualSense entries were disconnected and no Switch Pro device was present.
 - Added Switch rumble-enable subcommand `0x48` before marking the raw path
   available. The input callback now validates the matching `0x21` ACK before
   enabling the raw backend. Tightened low-band frequency clamping to the
@@ -343,6 +350,9 @@ from the first four.
   delayed frames cannot restart vibration after focus loss, backgrounding,
   controller replacement or disable. Extended the queue test with timeline
   ordering, timestamp regression and interval-cap cases.
+- Made Core Haptics capability state follow engine stop/reset and player
+  teardown. A stopped backend is no longer advertised as ready, and the next
+  frame can rebuild it instead of silently dropping output.
 - Rebuilt the latest Mac host, including the Core Haptics combined-locality
   fallback, into a temporary validation location.
 - Re-ran the HID forwarding, Switch rumble encoding, and bounded vibration

@@ -22,6 +22,7 @@ FOUNDATION_EXPORT NSNotificationName const DmControllerChangedNotification;
 - (void)moveControl:(NSInteger)control toPoint:(CGPoint)point;
 - (void)setInputSuspended:(BOOL)suspended;
 - (BOOL)vibrationSupported;
+- (void)discardHaptics;
 - (void)applyVibrationFrame:(DmVibrationFrame)frame;
 - (void)stopVibration;
 - (void)setVibrationEnabled:(BOOL)enabled;

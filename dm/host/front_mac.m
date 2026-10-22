@@ -151,6 +151,7 @@ static void pad_stop_vibration(void) {
     switch_haptics_stop();
 }
 static void pad_discard_haptics(void) {
+    atomic_store(&g_pad_haptics_supported, 0);
     pad_stop_vibration();
     for (NSUInteger i = 0; i < HAPTICS_CHANNEL_COUNT; i++) {
         DmHapticsChannel *channel = &g_pad_haptics_channels[i];
@@ -185,6 +186,7 @@ static BOOL pad_configure_haptics_channel(DmHapticsChannel *out,
                 if (g_pad_haptics_channels[i].engine != channel.engine) continue;
                 g_pad_haptics_channels[i].playing = NO;
                 g_pad_haptics_channels[i].player = nil;
+                atomic_store(&g_pad_haptics_supported, 0);
             }
         });
     };
@@ -340,9 +342,9 @@ static void pad_apply_vibration_frame(const DmVibrationFrame *frame) {
         if (atomic_load(&g_pad_haptics_supported)) pad_stop_core_haptics();
         return;
     }
-    if (!atomic_load(&g_pad_haptics_supported)) return;
     if (low > 0.f || high > 0.f) {
-        if (!pad_haptics_ready()) pad_start_haptics(g_pad_controller);
+        if (!atomic_load(&g_pad_haptics_supported) || !pad_haptics_ready())
+            pad_start_haptics(g_pad_controller);
         if (!atomic_load(&g_pad_haptics_supported)) {
             switch_haptics_set(frame);
             return;
@@ -356,7 +358,8 @@ void front_vibration(const DmVibrationFrame *frame) {
 }
 int front_vibration_supported(void) {
     return atomic_load(&g_vibration_enabled) &&
-        (atomic_load(&g_pad_haptics_supported) || switch_haptics_supported());
+        (switch_haptics_supported() ||
+         (atomic_load(&g_pad_haptics_supported) && pad_haptics_ready()));
 }
 void front_vibration_set_enabled(int enabled) {
     dispatch_async(dispatch_get_main_queue(), ^{
