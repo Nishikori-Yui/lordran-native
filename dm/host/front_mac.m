@@ -10,6 +10,7 @@
 #include "dm.h"
 #include "dm_vibration_queue.h"
 #include "dm_vibration_timing.h"
+#include "dm_vibration_haptics.h"
 #include "dm_log.h"
 #include "dm_input.h"
 #include "dm_padmap.h"
@@ -270,16 +271,10 @@ static void pad_start_haptics(GCController *controller) {
     }
 }
 static void pad_apply_haptics(void) {
-    float overall = fminf(1.f, sqrtf(g_haptics_low * g_haptics_low +
-                                    g_haptics_high * g_haptics_high));
-    if (overall <= 0.f) { pad_stop_vibration(); return; }
-    float total_amplitude = g_haptics_low + g_haptics_high;
-    float weighted_frequency = total_amplitude > 0.f
-        ? (g_haptics_low * g_haptics_low_frequency +
-           g_haptics_high * g_haptics_high_frequency) / total_amplitude
-        : 160.f;
-    float sharpness = log2f(fmaxf(40.f, fminf(1252.f, weighted_frequency)) / 40.f) /
-        log2f(1252.f / 40.f);
+    DmVibrationHapticsParameters parameters = dm_vibration_haptics_parameters(
+        g_haptics_low, g_haptics_low_frequency,
+        g_haptics_high, g_haptics_high_frequency);
+    if (parameters.intensity <= 0.f) { pad_stop_vibration(); return; }
     for (NSUInteger i = 0; i < g_pad_haptics_channel_count; i++) {
         DmHapticsChannel *channel = &g_pad_haptics_channels[i];
         if (!channel->engine || !channel->player) continue;
@@ -289,8 +284,8 @@ static void pad_apply_haptics(void) {
                          (unsigned long)i, error.localizedDescription.UTF8String ?: "unknown error");
             continue;
         }
-        CHHapticDynamicParameter *intensity = [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl value:overall relativeTime:0];
-        CHHapticDynamicParameter *sharpness_parameter = [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticSharpnessControl value:sharpness relativeTime:0];
+        CHHapticDynamicParameter *intensity = [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl value:parameters.intensity relativeTime:0];
+        CHHapticDynamicParameter *sharpness_parameter = [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticSharpnessControl value:parameters.sharpness relativeTime:0];
         if (!channel->playing) {
             if (![channel->player startAtTime:CHHapticTimeImmediate error:&error]) {
                 DM_LOG_ERROR("controller", "Could not start haptics player for channel %lu: %s",

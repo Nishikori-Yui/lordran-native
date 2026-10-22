@@ -1,4 +1,5 @@
 #include "../switch_haptics_mac.m"
+#include "../dm_switch_haptics_state.h"
 #include <assert.h>
 #include <math.h>
 #include <string.h>
@@ -6,9 +7,9 @@
 static void assert_name_selection(void) {
     // Direct calls avoid opening real HID devices while covering name filtering.
     assert(name_is_nintendo_switch("Pro Controller", "Switch Pro Controller"));
+    assert(name_is_nintendo_switch("Pro Controller", "Gamepad"));
     assert(name_is_nintendo_switch("Nintendo Switch Pro Controller", NULL));
     assert(name_is_nintendo_switch("Nintendo", "Gamepad"));
-    assert(!name_is_nintendo_switch("Pro Controller", "Gamepad"));
     assert(!name_is_nintendo_switch("DualSense Wireless Controller", "DualSense"));
     // Do not invoke the device-opening path in tests; a real controller may be connected.
     switch_haptics_init_for_controller("DualSense Wireless Controller", NULL);
@@ -19,6 +20,37 @@ static void assert_name_selection(void) {
 
 int main(void) {
     assert_name_selection();
+    DmSwitchHapticsRetry retry = {0};
+    assert(dm_switch_haptics_retry_ready(&retry, 0));
+    dm_switch_haptics_mark_enable_sent(&retry, 10000000000ull);
+    assert(!dm_switch_haptics_retry_ready(&retry, 10240000000ull));
+    assert(dm_switch_haptics_retry_ready(&retry, 10250000000ull));
+    dm_switch_haptics_mark_enable_ack(&retry, 0, 10250000000ull);
+    assert(!dm_switch_haptics_retry_ready(&retry, 10490000000ull));
+    assert(dm_switch_haptics_retry_ready(&retry, 10500000000ull));
+    dm_switch_haptics_mark_enable_ack(&retry, 1, 10500000000ull);
+    assert(dm_switch_haptics_retry_ready(&retry, 10500000000ull));
+
+    DmSwitchHapticsPendingFrame pending = {0};
+    DmVibrationFrame pending_frame = {.low_amplitude = 0.4f, .sequence = 3};
+    dm_switch_haptics_store_latest(&pending, &pending_frame);
+    DmVibrationFrame received = {0};
+    assert(dm_switch_haptics_take_pending(&pending, &received));
+    assert(received.sequence == 3 && !pending.valid);
+    dm_switch_haptics_mark_output_failed(NULL, &retry, &pending,
+                                         &pending_frame, 20000000000ull);
+    assert(!retry.request_pending && retry.retry_after_ns == 20250000000ull);
+    assert(pending.valid && pending.frame.sequence == 3);
+    assert(dm_switch_haptics_ack_is_current((void *)0x1, (void *)0x1, 1));
+    assert(!dm_switch_haptics_ack_is_current((void *)0x1, (void *)0x2, 1));
+    assert(!dm_switch_haptics_ack_is_current((void *)0x1, (void *)0x1, 0));
+
+    assert(io_result_indicates_disconnect(kIOReturnNoDevice));
+    assert(io_result_indicates_disconnect(kIOReturnNotOpen));
+    assert(io_result_indicates_disconnect(kIOReturnOffline));
+    assert(io_result_indicates_disconnect(kIOReturnNotResponding));
+    assert(!io_result_indicates_disconnect(kIOReturnError));
+
     DmVibrationFrame frame = {
         .low_amplitude = 0.8f, .low_frequency = 80.f,
         .high_amplitude = 0.6f, .high_frequency = 320.f,
@@ -95,6 +127,6 @@ int main(void) {
     assert(clamped_report[0] <= 0xfc); // Invalid frequency is clamped, not preserved.
     assert(clamped_report[3] == 0x40); // Invalid low amplitude is neutral.
 
-    puts("Switch rumble: dual-band encoding, enable subcommand, packet rollover, stop and clamps passed");
+    puts("Switch rumble: encoding, enable ACK/NACK, retry throttling, disconnect results and clamps passed");
     return 0;
 }

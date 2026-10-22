@@ -43,6 +43,13 @@ int main(void) {
     dm_pad_set(0, 0, 0, 2345, -3456);
     fill(&s, NPAD_NO1, STYLE_JOYDUAL);
     assert(s.attributes && s.rx == 2345 && s.ry == -3456);
+    dm_pad_set(0, -4567, 5678, 2345, -3456);
+    fill(&s, NPAD_NO1, STYLE_FULLKEY);
+    assert(s.attributes && s.lx == -4567 && s.ly == 5678 &&
+           s.rx == 2345 && s.ry == -3456);
+    fill(&s, NPAD_NO1, STYLE_JOYDUAL);
+    assert(s.attributes && s.lx == -4567 && s.ly == 5678 &&
+           s.rx == 2345 && s.ry == -3456);
     dm_pad_set(0, 0, 0, 0, 0);
     test_time += 1000000;
     dm_input_swipe_cancel(1); // Cancellation must preserve the established poll interval.

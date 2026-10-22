@@ -5,7 +5,9 @@
 #include <stdlib.h>
 #include <stdatomic.h>
 #include <string.h>
+#include <mach/mach_time.h>
 #include "dm_log.h"
+#include "dm_switch_haptics_state.h"
 #include "switch_haptics_mac.h"
 
 enum {
@@ -32,14 +34,21 @@ static uint8_t g_last_rumble_report[8];
 static uint8_t g_packet_counter;
 static int g_controller_match;
 static int g_input_callback_registered;
-static int g_rumble_enable_sent;
-static CFAbsoluteTime g_rumble_enable_sent_at;
-static DmVibrationFrame g_pending_frame;
-static int g_have_pending_frame;
+static DmSwitchHapticsRetry g_rumble_retry;
+static DmSwitchHapticsPendingFrame g_pending_frame;
 static uint8_t g_input_report[512];
 static _Atomic int g_raw_supported;
 
 static void send_rumble_frame(const DmVibrationFrame *frame);
+static void select_device(void);
+static void release_device(void);
+
+static uint64_t switch_haptics_now_ns(void) {
+    static mach_timebase_info_data_t timebase;
+    if (!timebase.denom) mach_timebase_info(&timebase);
+    return (uint64_t)((long double)mach_absolute_time() * timebase.numer /
+                      timebase.denom);
+}
 
 static int input_report_acknowledges_rumble_enable(const uint8_t *report,
                                                    CFIndex report_length,
@@ -55,27 +64,51 @@ static int input_report_acknowledges_rumble_enable(const uint8_t *report,
     return (report[ack_offset] & 0x80) ? 1 : -1;
 }
 
+static int io_result_indicates_disconnect(IOReturn result) {
+    return result == kIOReturnNoDevice || result == kIOReturnNotOpen ||
+        result == kIOReturnOffline || result == kIOReturnNotResponding;
+}
+
+static void handle_device_loss(IOHIDDeviceRef sender) {
+    if (!sender || sender != g_device) return;
+    DmSwitchHapticsRetry retry = g_rumble_retry;
+    DmSwitchHapticsPendingFrame pending = g_pending_frame;
+    dm_switch_haptics_mark_output_failed(&g_raw_supported, &retry, NULL, NULL,
+                                         switch_haptics_now_ns());
+    release_device();
+    // release_device clears protocol state, but the newest frame and retry
+    // deadline still belong to the active GameController selection.
+    g_rumble_retry = retry;
+    g_pending_frame = pending;
+    select_device();
+}
+
 static void input_report_callback(void *context, IOReturn result, void *sender,
                                   IOHIDReportType type, uint32_t report_id,
                                   uint8_t *report, CFIndex report_length) {
     (void)context;
-    (void)sender;
-    if (result != kIOReturnSuccess || type != kIOHIDReportTypeInput) return;
+    if (result != kIOReturnSuccess) {
+        if (io_result_indicates_disconnect(result))
+            handle_device_loss((IOHIDDeviceRef)sender);
+        return;
+    }
+    if (type != kIOHIDReportTypeInput) return;
+    if (!dm_switch_haptics_ack_is_current(sender, g_device,
+                                          g_rumble_retry.request_pending))
+        return;
     int ack = input_report_acknowledges_rumble_enable(report, report_length, report_id);
     if (!ack) return;
-    g_rumble_enable_sent = 0;
-    g_rumble_enable_sent_at = 0;
+    dm_switch_haptics_mark_enable_ack(&g_rumble_retry, ack > 0,
+                                      switch_haptics_now_ns());
     if (ack < 0) {
         DM_LOG_WARN("controller", "Switch HID rumble-enable subcommand was rejected");
         return;
     }
     atomic_store(&g_raw_supported, 1);
     DM_LOG_INFO("controller", "Switch HID rumble-enable acknowledgement received");
-    if (g_have_pending_frame) {
-        DmVibrationFrame pending = g_pending_frame;
-        g_have_pending_frame = 0;
+    DmVibrationFrame pending;
+    if (dm_switch_haptics_take_pending(&g_pending_frame, &pending))
         send_rumble_frame(&pending);
-    }
 }
 
 static int string_contains(const char *haystack, const char *needle) {
@@ -92,10 +125,12 @@ static int string_contains(const char *haystack, const char *needle) {
 }
 
 static int name_is_nintendo_switch(const char *name, const char *category) {
-    // GameController may expose only the manufacturer ("Nintendo") and the
+    // GameController may expose only "Pro Controller" / "Joy-Con" and the
     // generic category ("Gamepad"). The HID vendor/product allowlist below
     // remains the authoritative model filter before any raw report is sent.
-    return string_contains(name, "nintendo") || string_contains(category, "switch");
+    return string_contains(name, "nintendo") || string_contains(category, "switch") ||
+        string_contains(name, "pro controller") || string_contains(name, "joy-con") ||
+        string_contains(category, "joy-con");
 }
 
 static int property_int(IOHIDDeviceRef device, CFStringRef key) {
@@ -207,9 +242,8 @@ static void release_device(void) {
     g_have_last_report = 0;
     memset(g_last_rumble_report, 0, sizeof g_last_rumble_report);
     g_packet_counter = 0;
-    g_rumble_enable_sent = 0;
-    g_rumble_enable_sent_at = 0;
-    g_have_pending_frame = 0;
+    g_rumble_retry = (DmSwitchHapticsRetry){0};
+    g_pending_frame = (DmSwitchHapticsPendingFrame){0};
 }
 
 const char *switch_haptics_transport_for_test(void) { return g_transport; }
@@ -281,8 +315,12 @@ static int enable_rumble(void) {
     if (!g_device || (g_max_output_report_length >= 0 &&
                       g_max_output_report_length < kSwitchEnableVibrationPayloadLength))
         return 0;
-    if (g_rumble_enable_sent && CFAbsoluteTimeGetCurrent() - g_rumble_enable_sent_at < 0.25)
+    uint64_t now_ns = switch_haptics_now_ns();
+    if (g_rumble_retry.request_pending &&
+        now_ns - g_rumble_retry.sent_at_ns < DM_SWITCH_HAPTICS_RETRY_NS)
         return 1;
+    if (!dm_switch_haptics_retry_ready(&g_rumble_retry, now_ns))
+        return 0;
     uint8_t report[kSwitchEnableVibrationPayloadLength] = {0};
     if (encode_enable_vibration_report(g_packet_counter, report) != sizeof report)
         return 0;
@@ -294,11 +332,15 @@ static int enable_rumble(void) {
             g_logged_failure = 1;
             DM_LOG_WARN("controller", "Switch HID rumble-enable write failed: kr=%d", result);
         }
+        dm_switch_haptics_mark_output_failed(&g_raw_supported, &g_rumble_retry,
+                                             NULL, NULL, now_ns);
+        if (io_result_indicates_disconnect(result)) {
+            handle_device_loss(g_device);
+        }
         return 0;
     }
     g_packet_counter = (uint8_t)((g_packet_counter + 1) & 0x0f);
-    g_rumble_enable_sent = 1;
-    g_rumble_enable_sent_at = CFAbsoluteTimeGetCurrent();
+    dm_switch_haptics_mark_enable_sent(&g_rumble_retry, now_ns);
     DM_LOG_INFO("controller", "Switch HID rumble-enable subcommand sent; waiting for acknowledgement");
     return 1;
 }
@@ -371,10 +413,20 @@ static void send_rumble_frame(const DmVibrationFrame *frame) {
         return; // The controller retains the current actuator state until the next report.
     IOReturn result = IOHIDDeviceSetReport(g_device, kIOHIDReportTypeOutput,
                                            kSwitchRumbleReportID, report, report_length);
-    if (result != kIOReturnSuccess && !g_logged_failure) {
-        g_logged_failure = 1;
-        DM_LOG_WARN("controller", "Raw Switch HID rumble write failed: kr=%d", result);
-    } else if (result == kIOReturnSuccess) {
+    if (result != kIOReturnSuccess) {
+        if (!g_logged_failure) {
+            g_logged_failure = 1;
+            DM_LOG_WARN("controller", "Raw Switch HID rumble write failed: kr=%d", result);
+        }
+        g_have_last_report = 0;
+        dm_switch_haptics_mark_output_failed(&g_raw_supported, &g_rumble_retry,
+                                             &g_pending_frame, frame,
+                                             switch_haptics_now_ns());
+        if (io_result_indicates_disconnect(result)) {
+            handle_device_loss(g_device);
+        }
+    } else {
+        g_logged_failure = 0;
         if (!g_logged_success) {
             g_logged_success = 1;
             DM_LOG_INFO("controller", "Raw Switch HID rumble report accepted by macOS: transport=%s",
@@ -391,8 +443,7 @@ void switch_haptics_set(const DmVibrationFrame *frame) {
     select_device();
     if (!g_device) return;
     if (!atomic_load(&g_raw_supported)) {
-        g_pending_frame = *frame;
-        g_have_pending_frame = 1;
+        dm_switch_haptics_store_latest(&g_pending_frame, frame);
         enable_rumble();
         return;
     }
