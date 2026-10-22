@@ -432,8 +432,9 @@ HID update that the OS accepted.
   the report ID even though `IOHIDDeviceSetReport` requires it in the first byte
   for multi-report devices. Corrected the rumble frame to 10 bytes and the
   rumble-enable frame to 64 bytes, and updated the protocol vectors. Added a
-  Mac controller menu with an explicit selection lock so a different pad
-  cannot steal NS Pro input while testing. The descriptor-size guard tolerates
+  Mac controller menu (created even without a preexisting AppKit menu) with an
+  explicit selection lock so a different pad cannot steal NS Pro input while
+  testing. The descriptor-size guard tolerates
   either report-ID accounting convention; physical USB, Bluetooth, gameplay
   input and actuator feedback remain unverified.
 - Added an independent macOS raw-HID recovery poll: device discovery is

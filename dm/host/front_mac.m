@@ -121,6 +121,7 @@ static uint64_t g_haptics_test_sequence = UINT64_C(1) << 63;
 static DmMacPerfHUD *g_perf_hud;
 static DmMacCheats *g_cheats;
 static NSMenu *g_controller_menu;
+static NSMenuItem *g_vibration_menu_item;
 static id g_controller_menu_target;
 
 static GCDeviceHaptics *controller_haptics(GCController *controller) {
@@ -474,7 +475,8 @@ static void pad_read(GCExtendedGamepad *g) {
                     (unsigned long long)buttons, lx, ly, rx, ry);
 }
 static void pad_select_controller(GCController *selected) {
-    if (selected != g_pad_controller) {
+    BOOL changed = selected != g_pad_controller;
+    if (changed) {
         vibration_cancel_pending();
         pad_discard_haptics();
         g_haptics_test_started = 0;
@@ -498,7 +500,7 @@ static void pad_select_controller(GCController *selected) {
     atomic_store(&g_pad_haptics_supported,
                  g_pad_haptics_channel_count > 0 && pad_haptics_ready());
     pad_schedule_haptics_test(selected);
-    pad_update_controller_menu();
+    if (changed) pad_update_controller_menu();
 }
 static void pad_refresh(void) {
     NSMutableArray<GCController *> *controllers = [NSMutableArray array];
@@ -559,17 +561,21 @@ static void pad_update_controller_menu(void) {
         NSMenuItem *empty = [g_controller_menu addItemWithTitle:@"No controller connected"
                                                            action:nil keyEquivalent:@""];
         empty.enabled = NO;
-        return;
+    } else {
+        for (NSUInteger i = 0; i < g_pad_controllers.count; i++) {
+            GCController *controller = g_pad_controllers[i];
+            NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:controller_menu_title(controller, i)
+                                                            action:@selector(selectController:)
+                                                     keyEquivalent:@""];
+            item.target = g_controller_menu_target;
+            item.tag = (NSInteger)i;
+            item.state = controller == g_pad_controller ? NSControlStateValueOn : NSControlStateValueOff;
+            [g_controller_menu addItem:item];
+        }
     }
-    for (NSUInteger i = 0; i < g_pad_controllers.count; i++) {
-        GCController *controller = g_pad_controllers[i];
-        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:controller_menu_title(controller, i)
-                                                        action:@selector(selectController:)
-                                                 keyEquivalent:@""];
-        item.target = g_controller_menu_target;
-        item.tag = (NSInteger)i;
-        item.state = controller == g_pad_controller ? NSControlStateValueOn : NSControlStateValueOff;
-        [g_controller_menu addItem:item];
+    if (g_vibration_menu_item) {
+        [g_controller_menu addItem:NSMenuItem.separatorItem];
+        [g_controller_menu addItem:g_vibration_menu_item];
     }
 }
 
@@ -591,7 +597,6 @@ static void pad_poll(void) {
     else
         pad_clear();
 }
-static NSMenuItem *g_vibration_menu_item;
 @interface DmVibrationMenuTarget : NSObject
 - (void)toggleVibration:(NSMenuItem *)item;
 @end
@@ -734,19 +739,21 @@ void front_run(void (*guest)(void)) {
             ? [NSUserDefaults.standardUserDefaults boolForKey:@"DmVibrationEnabled"] : YES);
         g_perf_hud = [[DmMacPerfHUD alloc] initWithWindow:win device:g_layer.device];
         g_cheats = [[DmMacCheats alloc] initWithWindow:win];
-        NSMenu *applicationMenu = NSApp.mainMenu.itemArray.firstObject.submenu;
-        if (applicationMenu) {
-            NSMenuItem *controllerRoot = [[NSMenuItem alloc] initWithTitle:@"Controller" action:nil keyEquivalent:@""];
-            g_controller_menu = [[NSMenu alloc] initWithTitle:@"Controller"];
-            controllerRoot.submenu = g_controller_menu;
-            g_controller_menu_target = [DmControllerMenuTarget new];
-            [NSApp.mainMenu addItem:controllerRoot];
-            g_vibration_menu_item = [[NSMenuItem alloc] initWithTitle:@"Controller Vibration" action:@selector(toggleVibration:) keyEquivalent:@""];
-            g_vibration_menu_target = [DmVibrationMenuTarget new];
-            g_vibration_menu_item.target = g_vibration_menu_target;
-            g_vibration_menu_item.state = atomic_load(&g_vibration_enabled) ? NSControlStateValueOn : NSControlStateValueOff;
-            [applicationMenu addItem:g_vibration_menu_item];
+        NSMenu *mainMenu = NSApp.mainMenu;
+        if (!mainMenu) {
+            mainMenu = [[NSMenu alloc] initWithTitle:@"Main"];
+            NSApp.mainMenu = mainMenu;
         }
+        NSMenuItem *controllerRoot = [[NSMenuItem alloc] initWithTitle:@"Controller" action:nil keyEquivalent:@""];
+        g_controller_menu = [[NSMenu alloc] initWithTitle:@"Controller"];
+        controllerRoot.submenu = g_controller_menu;
+        g_controller_menu_target = [DmControllerMenuTarget new];
+        [mainMenu addItem:controllerRoot];
+        g_vibration_menu_item = [[NSMenuItem alloc] initWithTitle:@"Controller Vibration" action:@selector(toggleVibration:) keyEquivalent:@""];
+        g_vibration_menu_target = [DmVibrationMenuTarget new];
+        g_vibration_menu_item.target = g_vibration_menu_target;
+        g_vibration_menu_item.state = atomic_load(&g_vibration_enabled) ? NSControlStateValueOn : NSControlStateValueOff;
+        pad_update_controller_menu();
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
         [nc addObserverForName:NSApplicationWillResignActiveNotification object:NSApp queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
             (void)n; g_vibration_app_active = NO; vibration_cancel_pending(); pad_stop_vibration();
