@@ -145,6 +145,11 @@ static int32_t clamp_axis(long v) {
 static int32_t pad_axis(float v) {
     return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * DM_STICK_MAX);
 }
+static int pad_controller_kind(GCController *controller) {
+    if (!controller) return DM_PADKIND_XBOX;
+    return dm_padmap_kind(controller.productCategory.UTF8String,
+                           controller.vendorName.UTF8String);
+}
 static void pad_clear(void) {
     dm_pad_set(0, 0, 0, 0, 0);
 }
@@ -485,7 +490,7 @@ void front_vibration_set_enabled(int enabled) {
 }
 static void pad_read(GCExtendedGamepad *g) {
     if (!g) return;
-    uint64_t buttons = dm_padmap_face(DM_PADKIND_NINTENDO,
+    uint64_t buttons = dm_padmap_face(pad_controller_kind(g_pad_controller),
                                       g.buttonA.isPressed, g.buttonB.isPressed,
                                       g.buttonX.isPressed, g.buttonY.isPressed);
     if (g.leftShoulder.isPressed) buttons |= DM_BTN_L;
@@ -556,7 +561,11 @@ static void pad_refresh(void) {
                     if (![g_pad_controllers containsObject:source]) return;
                     if (g_pad_controller_selection_locked && source != g_pad_controller)
                         return;
-                    if (!g_pad_controller_selection_locked) pad_select_controller(source);
+                    if (dm_padmap_should_auto_select(
+                            pad_controller_kind(g_pad_controller),
+                            pad_controller_kind(source), g_pad_controller != nil,
+                            g_pad_controller_selection_locked))
+                        pad_select_controller(source);
                     // Read from the selected controller's current wrapper. A
                     // stale callback wrapper must not erase valid stick input.
                     if (source == g_pad_controller)
@@ -572,12 +581,30 @@ static void pad_refresh(void) {
     // when DualSense is also connected.
     if (!g_pad_controller || ![g_pad_controllers containsObject:g_pad_controller]) {
         g_pad_controller_selection_locked = NO;
+        GCController *preferred = nil;
+        for (GCController *controller in g_pad_controllers) {
+            if (pad_controller_kind(controller) == DM_PADKIND_NINTENDO) {
+                preferred = controller;
+                break;
+            }
+        }
         GCController *current = GCController.current;
-        if (current && current.extendedGamepad && [g_pad_controllers containsObject:current])
+        if (preferred)
+            pad_select_controller(preferred);
+        else if (current && current.extendedGamepad && [g_pad_controllers containsObject:current])
             pad_select_controller(current);
         else
             pad_select_controller(g_pad_controllers.firstObject);
     } else {
+        if (!g_pad_controller_selection_locked &&
+            pad_controller_kind(g_pad_controller) != DM_PADKIND_NINTENDO) {
+            for (GCController *controller in g_pad_controllers) {
+                if (pad_controller_kind(controller) == DM_PADKIND_NINTENDO) {
+                    pad_select_controller(controller);
+                    break;
+                }
+            }
+        }
         pad_update_controller_menu();
     }
 }

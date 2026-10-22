@@ -186,6 +186,54 @@ reference for controller discovery, locality separation and player lifetime;
 it does not expose arbitrary motor-frequency output, so it supports the
 perceptual-renderer boundary described here rather than raw waveform fidelity.
 
+### DualSense-specific evaluation
+
+The macOS DualSense path remains Core Haptics first. `godot-dualsense` and
+`ps5-mac-companion` both create separate left/right locality engines. The
+companion also treats setting `playerIndex` and registering a GameController
+value handler as part of claiming the controller for output; this host already
+registers a value handler for input, but does not use the player's raw HID
+output-report format. The current translation deliberately feeds each handle
+the same combined Switch spectrum because the two Switch bands are not spatial
+channels. Locality selection is independent of the frequency approximation.
+
+The PS5 Mac Companion exposes ordinary USB-compatible left/right motor levels
+in its DualSense output report, while Linux's `hid-playstation` documents
+different USB and Bluetooth report layouts. Its Bluetooth form adds sequence
+and tag bytes plus a CRC; the Linux report constants describe a 63-byte USB
+report and a 78-byte Bluetooth report, while the companion passes a 47-byte
+common USB payload with report ID `0x02` separately to IOKit. These examples
+show why Switch's report lengths/framing cannot be copied to DualSense and why
+macOS IOKit behavior needs a dedicated transport test. They establish a
+possible conventional-motor HID path, not a Switch-equivalent two-frequency
+waveform or proof of physical output.
+
+Decision and next gates:
+
+1. Keep Core Haptics as the DualSense implementation until a connected-device
+   run shows that per-handle engines fail to start, update, or stop. Compare
+   single-band, dual-band and stop sequences rather than judging from engine
+   creation or parameter-acceptance logs.
+2. If the standard motors need a fallback, isolate DualSense output behind a
+   separate backend with explicit USB/Bluetooth framing, output sequence,
+   Bluetooth CRC, owned asynchronous buffers, stop priority and disconnect
+   handling. Do not seize the device without proving GameController input and
+   Apple-managed features remain usable.
+3. Treat `haptics-select`/advanced DualSense reports as a separate research
+   track. Neither the inspected Core Haptics sample nor the companion's
+   conventional rumble fields demonstrate a portable API for exact
+   Switch-frequency or sample-waveform playback on macOS.
+4. Accept the backend only after physical start/update/stop tests on both
+   transports, followed by in-game comparisons and recorded hardware/OS
+   details. Keep host acceptance latency separate from actuator-onset latency.
+
+References:
+
+- [PS5 Mac Companion GameController/Core Haptics bridge](https://github.com/cestercian/ps5-mac-companion/blob/main/Sources/DualSenseMac/HID/GameControllerBridge.swift)
+- [PS5 Mac Companion USB report builder](https://github.com/cestercian/ps5-mac-companion/blob/main/Sources/DualSenseMac/HID/OutputReport.swift)
+- [PS5 Mac Companion HID writer](https://github.com/cestercian/ps5-mac-companion/blob/main/Sources/DualSenseMac/HID/HIDDevice.swift)
+- [Linux DualSense HID driver](https://github.com/torvalds/linux/blob/master/drivers/hid/hid-playstation.c)
+
 ## Backend B: Switch raw HID
 
 Switch Pro and Joy-Con devices may not expose usable `GCDeviceHaptics`.
@@ -271,9 +319,12 @@ Pro/Joy-Con vendor/product IDs. Apple's public GameController API does not expos
 identifier equal to an IOKit HID property, so a perfect selected-device
 correlation is impossible without private API. If more than one matching
 Switch controller is connected, the first HID match is used. The Mac front end
-keeps the last-input controller stable, and an explicit menu selection locks
-input to that controller until it disconnects. This prevents another connected
-controller from stealing NS Pro stick input during testing. USB/Bluetooth
+automatically prefers a recognized Nintendo controller over a non-Nintendo
+current pad and ignores input from other non-Nintendo pads while it is selected.
+An explicit menu selection locks any chosen controller until it disconnects.
+Generic `Pro Controller` and `Joy-Con` names are recognized for layout and
+selection, while raw HID access still requires an allowlisted Nintendo
+vendor/product ID. USB/Bluetooth
 report length, packet counters, and physical output remain unverified.
 
 The protocol references are:
@@ -438,11 +489,12 @@ or incomparable timestamp rather than a zero-latency result.
 |---|---|---|
 | HID single and batch values | Four-field forwarding, handle filtering, sequence, and timestamp are implemented; focused tests pass (2026-10-23) | In-game single/batch dispatch and physical stop behavior |
 | Runtime vibration evidence | Rate-limited HLE source witnesses distinguish guest capture from renderer/HID evidence; Npad receipt and Core Haptics/raw HID parameter-submission witnesses include frame sequence and timestamp; first output witnesses include host/OS-path latency; stale handles are rejected after capability loss. API acceptance is not physical actuator evidence. | Capture one in-game log containing source capture, renderer acceptance, measured host/OS latency, and the physical test result |
-| Mac host build | Isolated full host build passes with the reviewed source (2026-10-23); an earlier isolated smoke run reached normal rendering and shut down cleanly; existing Metal/compiler warnings remain | Launch this exact build with a connected controller and validate gameplay |
+| Mac host build | Isolated full host link passes again during the 2026-10-23 review; an earlier isolated smoke run reached normal rendering and shut down cleanly; existing Metal/compiler warnings remain | Launch this exact build with a connected controller and validate gameplay |
 | iOS controller UI build | Simulator UI harness compiles; app-settings and controller mapping tests pass (2026-10-23) | Physical controller test |
-| DualSense Core Haptics | Independent handle channels plus combined/default-locality fallback are implemented; iOS recreates its player after unexpected engine stops | Start, update, stop, recovery, and actual feedback on USB and Bluetooth |
+| DualSense Core Haptics | Independent handle channels plus combined/default-locality fallback are implemented; iOS recreates its player after unexpected engine stops; parameter updates are currently the same combined spectrum on both Mac handles | Start, update, stop, recovery, locality behavior, and actual feedback on USB and Bluetooth |
+| DualSense raw HID | Research only; public reference describes conventional motor fields and transport-specific report framing | Only implement if Core Haptics device tests expose a concrete gap; then validate USB/Bluetooth framing and physical output independently |
 | Switch Pro raw HID | Four-field encoder, report-ID-inclusive 10-byte rumble frame, 64-byte rumble-enable report, asynchronous serialized writes, owned callback buffers, stop-priority/latest-frame queueing, per-device completion generations, dual actuator payload, packet counter, low-band range clamp, ACK/NACK parsing, retry throttling, descriptor-size boundary handling, and disconnected-result classification are unit-tested | Physical USB/Bluetooth rumble, callback timing, ACK behavior, and unplug/reconnect recovery |
-| NS Pro JoyDual input | Selected host axes are published through both FullKey and JoyDual layouts; Mac offers explicit controller selection and locks to that choice until disconnect; HLE axis forwarding tests pass | Confirm both sticks and buttons in the running game |
+| NS Pro JoyDual input | Selected host axes are published through both FullKey and JoyDual layouts; Mac promotes a recognized Nintendo pad over other current controllers, prevents non-Nintendo input from stealing it, and offers explicit selection lock; HLE axis forwarding and selection-policy tests pass | Confirm both sticks and buttons in the running game |
 | Low/high frequency preservation | Preserved through HLE and encoded natively by Switch raw HID; both Core Haptics paths map amplitude-weighted log-frequency to perceptual sharpness | Compare captured source parameters with rendered results on hardware; calibrate per device |
 | Timing and waveform synthesis | Sequence/timestamp capture and bounded ordered delivery are implemented; timestamps schedule inter-frame updates with a 100 ms step cap; no sample waveform is reconstructed | Measure queue latency and fidelity, then decide whether interpolation or waveform reconstruction is needed |
 | Background and disconnect | Lifecycle stop code is implemented | Device and scene transition test |
@@ -454,6 +506,19 @@ or incomparable timestamp rather than a zero-latency result.
 
 ### 2026-10-23
 
+- Follow-up to the in-game NS Pro input report: macOS now recognizes generic
+  `Pro Controller` and `Joy-Con` names, promotes a Nintendo controller over a
+  connected DualSense, and prevents non-Nintendo input from stealing that
+  selection. Manual Controller-menu selection still locks the chosen pad.
+  Face-button mapping now follows the selected controller type rather than
+  assuming every pad uses Nintendo glyph positions. Pure policy tests cover
+  first-controller selection, promotion, anti-steal behavior, same-type
+  switching and manual lock. The review reran the 28-case host pad-map test,
+  iOS shared-axis test, four other focused controller/vibration tests, and an
+  isolated full macOS host link; all passed. The machine reported no connected
+  GameController/HID pad, so physical rumble and in-game NS Pro axis receipt
+  remain pending. Also refreshed the pad-map header comment to match generic
+  names now accepted by the implementation.
 - Self-review found that reducing dual-band frequency in linear Hz caused a
   high-frequency band to dominate the Core Haptics perceptual proxy. Changed
   the shared Mac/iOS mapping to an amplitude-weighted geometric mean in
