@@ -283,6 +283,23 @@ interface and record:
 
 Core Audio must never be the only backend for issue #26.
 
+## Manual output smoke test
+
+macOS has an explicit, development-only output smoke test for a connected
+controller. Start the host with `DM_HAPTICS_TEST=1` and `DM_WINDOW=1`; after a
+selected controller is prepared it sends a short sequence through the same
+bounded queue and timestamp scheduler as guest frames. The sequence contains
+an isolated low-band pulse, an isolated high-band pulse, a combined dual-band
+pulse, and dot-dot-dash pulses with explicit stop gaps. The renderer logs a
+high-bit synthetic sequence range so this output cannot be confused with a
+game-captured `VibrationValue`.
+
+This test is useful for separating controller discovery, raw HID/Core Haptics
+submission and physical feedback from game behavior. It does not prove that
+the game called `nn::hid`, and an OS-accepted report still does not prove that
+an actuator moved. The variable is intentionally opt-in and has no effect
+when unset.
+
 ## Timing and synthesis
 
 The synthesis stage should operate on timestamped frames, not on UI callback
@@ -435,6 +452,11 @@ HID update that the OS accepted.
 - Added frame sequence and timestamp fields to macOS raw-HID and Core Haptics
   acceptance witnesses. This makes the source-to-renderer correlation
   inspectable without treating OS acceptance as proof of actuator motion.
+- Added an opt-in macOS `DM_HAPTICS_TEST=1` smoke sequence for controller-only
+  testing. It reuses the normal queue/timestamp path and covers low-band,
+  high-band, dual-band and dot-dot-dash pulse shapes while marking its frame
+  sequences as synthetic. This remains a diagnostic aid, not gameplay or
+  physical-actuator acceptance.
 - Added a rate-limited Npad receipt witness for the first nonzero physical
   controller state returned to the guest, including layout, buttons and both
   axes. This separates a GameController event from proof that the running

@@ -35,6 +35,7 @@ static BOOL g_vibration_window_active = YES;
 
 static void pad_apply_vibration_frame(const DmVibrationFrame *frame);
 static void pad_start_haptics(GCController *controller);
+static void pad_schedule_haptics_test(GCController *controller);
 static void vibration_drain(void);
 
 static void vibration_cancel_pending(void) {
@@ -113,6 +114,8 @@ static float g_haptics_low, g_haptics_high;
 static float g_haptics_low_frequency, g_haptics_high_frequency;
 static uint64_t g_haptics_frame_sequence;
 static uint64_t g_haptics_frame_timestamp_ns;
+static int g_haptics_test_started;
+static uint64_t g_haptics_test_sequence = UINT64_C(1) << 63;
 static DmMacPerfHUD *g_perf_hud;
 static DmMacCheats *g_cheats;
 
@@ -337,7 +340,8 @@ static void pad_apply_vibration_frame(const DmVibrationFrame *frame) {
         return;
     }
     if ((low > 0.f || high > 0.f) && !atomic_exchange(&g_haptics_request_logged, 1))
-        DM_LOG_INFO("controller", "First nonzero game vibration received: low_amp=%.3f low_hz=%.3f high_amp=%.3f high_hz=%.3f",
+        DM_LOG_INFO("controller", "First nonzero %s vibration frame received: low_amp=%.3f low_hz=%.3f high_amp=%.3f high_hz=%.3f",
+                    (frame->sequence & (UINT64_C(1) << 63)) ? "manual-test" : "game",
                     low, low_frequency, high, high_frequency);
     g_haptics_low = low;
     g_haptics_high = high;
@@ -365,6 +369,65 @@ static void pad_apply_vibration_frame(const DmVibrationFrame *frame) {
         pad_apply_haptics();
     } else pad_stop_vibration();
 }
+
+typedef struct {
+    float low_amplitude, low_frequency;
+    float high_amplitude, high_frequency;
+    uint64_t hold_ns;
+} DmHapticsTestStep;
+
+static int haptics_test_enabled(void) {
+    const char *value = getenv("DM_HAPTICS_TEST");
+    return value && *value && strcmp(value, "0") != 0;
+}
+
+static void pad_schedule_haptics_test(GCController *controller) {
+    if (!controller || !haptics_test_enabled() || g_haptics_test_started) return;
+    g_haptics_test_started = 1;
+    uint64_t generation = atomic_load(&g_vibration_generation);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+        if (atomic_load(&g_vibration_generation) != generation ||
+            controller != g_pad_controller || !g_vibration_app_active ||
+            !g_vibration_window_active) {
+            g_haptics_test_started = 0;
+            return;
+        }
+        // Explicitly opt-in diagnostic pattern: isolated low/high bands,
+        // combined dual-band output, then dot-dot-dash pulses.
+        static const DmHapticsTestStep steps[] = {
+            {0.75f, 160.f, 0.f, 320.f, 180000000ull},
+            {0.f, 160.f, 0.f, 320.f, 120000000ull},
+            {0.f, 160.f, 0.75f, 320.f, 180000000ull},
+            {0.f, 160.f, 0.f, 320.f, 120000000ull},
+            {0.85f, 80.f, 0.75f, 320.f, 240000000ull},
+            {0.f, 160.f, 0.f, 320.f, 120000000ull},
+            {0.9f, 160.f, 0.f, 320.f, 80000000ull},
+            {0.f, 160.f, 0.f, 320.f, 80000000ull},
+            {0.9f, 160.f, 0.f, 320.f, 80000000ull},
+            {0.f, 160.f, 0.f, 320.f, 80000000ull},
+            {0.9f, 160.f, 0.f, 320.f, 240000000ull},
+            {0.f, 160.f, 0.f, 320.f, 0},
+        };
+        uint64_t timestamp_ns = now_ns();
+        for (NSUInteger i = 0; i < sizeof steps / sizeof steps[0]; i++) {
+            DmVibrationFrame frame = {
+                .low_amplitude = steps[i].low_amplitude,
+                .low_frequency = steps[i].low_frequency,
+                .high_amplitude = steps[i].high_amplitude,
+                .high_frequency = steps[i].high_frequency,
+                .sequence = g_haptics_test_sequence++,
+                .timestamp_ns = timestamp_ns,
+            };
+            vibration_push(&frame);
+            timestamp_ns += steps[i].hold_ns;
+        }
+        DM_LOG_INFO("controller", "Manual haptics test scheduled: steps=%lu sequence_base=%llu",
+                    (unsigned long)(sizeof steps / sizeof steps[0]),
+                    (unsigned long long)(g_haptics_test_sequence - (sizeof steps / sizeof steps[0])));
+    });
+}
+
 void front_vibration(const DmVibrationFrame *frame) {
     if (!frame || !atomic_load(&g_vibration_enabled)) return;
     vibration_push(frame);
@@ -410,6 +473,7 @@ static void pad_select_controller(GCController *selected) {
     if (selected != g_pad_controller) {
         vibration_cancel_pending();
         pad_discard_haptics();
+        g_haptics_test_started = 0;
         g_pad_controller = selected;
         atomic_store(&g_pad_haptics_supported, 0);
         if (selected) {
@@ -428,6 +492,7 @@ static void pad_select_controller(GCController *selected) {
     if (selected) pad_read(selected.extendedGamepad); else pad_clear();
     atomic_store(&g_pad_haptics_supported,
                  g_pad_haptics_channel_count > 0 && pad_haptics_ready());
+    pad_schedule_haptics_test(selected);
 }
 static void pad_refresh(void) {
     NSMutableArray<GCController *> *controllers = [NSMutableArray array];
