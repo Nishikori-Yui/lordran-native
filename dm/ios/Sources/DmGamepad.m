@@ -26,6 +26,7 @@ NSNotificationName const DmControllerChangedNotification = @"DmControllerChanged
 static __weak DmGamepad *g_view;
 static _Atomic int g_gamepad_vibration_enabled = 1;
 static _Atomic int g_gamepad_haptics_ready;
+static _Atomic int g_gamepad_haptics_render_logged;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t g_touch_btn, g_pad_btn;
 static int32_t g_touch_axis[4], g_pad_axis[4];
@@ -506,6 +507,7 @@ static CGPathRef arm(CGFloat angle) {
     if (@available(iOS 14.0, *)) {
         atomic_store(&_hapticsSupported, 0);
         atomic_store(&g_gamepad_haptics_ready, 0);
+        atomic_store(&g_gamepad_haptics_render_logged, 0);
         NSError *error = nil;
         _hapticsEngine = [controller.haptics createEngineWithLocality:GCHapticsLocalityDefault];
         if (!_hapticsEngine) {
@@ -551,8 +553,10 @@ static CGPathRef arm(CGFloat angle) {
             atomic_store(&g_gamepad_haptics_ready, 0);
             return;
         }
-        CHHapticEventParameter *intensity = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:0.0];
-        CHHapticEventParameter *sharpness = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.5];
+        // Dynamic intensity is multiplicative and sharpness is additive. Use
+        // neutral event values so the live controls can represent the full range.
+        CHHapticEventParameter *intensity = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:1.0];
+        CHHapticEventParameter *sharpness = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.0];
         CHHapticEventParameter *sustained = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDSustained value:1.0];
         CHHapticEvent *event = [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous parameters:@[intensity, sharpness, sustained] relativeTime:0 duration:GCHapticDurationInfinite];
         CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[event] parameters:@[] error:&error];
@@ -574,6 +578,7 @@ static CGPathRef arm(CGFloat angle) {
     _hapticsPlaying = NO;
     atomic_store(&_hapticsSupported, 0);
     atomic_store(&g_gamepad_haptics_ready, 0);
+    atomic_store(&g_gamepad_haptics_render_logged, 0);
 }
 - (BOOL)vibrationSupported {
     return atomic_load(&g_gamepad_vibration_enabled) && atomic_load(&_hapticsSupported) &&
@@ -607,6 +612,9 @@ static CGPathRef arm(CGFloat angle) {
     }
     if (![_hapticsPlayer sendParameters:@[parameter, sharpness] atTime:CHHapticTimeImmediate error:&error])
         DM_LOG_ERROR("controller", "Could not update controller haptics: %s", error.localizedDescription.UTF8String ?: "unknown error");
+    else if (!atomic_exchange(&g_gamepad_haptics_render_logged, 1))
+        DM_LOG_INFO("controller", "Core Haptics parameters accepted: intensity=%.3f sharpness=%.3f",
+                    parameters.intensity, parameters.sharpness);
 }
 - (void)stopVibration {
     NSError *error = nil;

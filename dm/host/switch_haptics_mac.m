@@ -35,6 +35,7 @@ static uint8_t g_packet_counter;
 static int g_controller_match;
 static int g_input_callback_registered;
 static DmSwitchHapticsRetry g_rumble_retry;
+static uint64_t g_next_device_scan_ns;
 static DmSwitchHapticsPendingFrame g_pending_frame;
 static uint8_t g_input_report[512];
 static _Atomic int g_raw_supported;
@@ -243,6 +244,7 @@ static void release_device(void) {
     memset(g_last_rumble_report, 0, sizeof g_last_rumble_report);
     g_packet_counter = 0;
     g_rumble_retry = (DmSwitchHapticsRetry){0};
+    g_next_device_scan_ns = 0;
     g_pending_frame = (DmSwitchHapticsPendingFrame){0};
 }
 
@@ -367,6 +369,15 @@ void switch_haptics_init_for_controller(const char *controller_name,
         enable_rumble();
         wait_for_rumble_enable();
     }
+}
+
+void switch_haptics_poll(void) {
+    if (!g_controller_match) return;
+    uint64_t now_ns = switch_haptics_now_ns();
+    if (!g_device && dm_switch_haptics_scan_due(&g_next_device_scan_ns, now_ns))
+        select_device();
+    if (g_device && !atomic_load(&g_raw_supported))
+        enable_rumble();
 }
 
 int switch_haptics_supported(void) {

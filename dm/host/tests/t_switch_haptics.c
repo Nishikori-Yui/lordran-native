@@ -21,6 +21,11 @@ static void assert_name_selection(void) {
 int main(void) {
     assert_name_selection();
     DmSwitchHapticsRetry retry = {0};
+    uint64_t next_scan_ns = 0;
+    assert(dm_switch_haptics_scan_due(&next_scan_ns, 0));
+    assert(next_scan_ns == DM_SWITCH_HAPTICS_RETRY_NS);
+    assert(!dm_switch_haptics_scan_due(&next_scan_ns, DM_SWITCH_HAPTICS_RETRY_NS - 1));
+    assert(dm_switch_haptics_scan_due(&next_scan_ns, DM_SWITCH_HAPTICS_RETRY_NS));
     assert(dm_switch_haptics_retry_ready(&retry, 0));
     dm_switch_haptics_mark_enable_sent(&retry, 10000000000ull);
     assert(!dm_switch_haptics_retry_ready(&retry, 10240000000ull));

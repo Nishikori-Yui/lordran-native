@@ -105,6 +105,7 @@ typedef struct {
 static _Atomic int g_vibration_enabled = 1;
 static _Atomic int g_pad_haptics_supported;
 static _Atomic int g_haptics_request_logged;
+static _Atomic int g_haptics_render_logged;
 static _Atomic int g_pad_input_logged;
 static DmHapticsChannel g_pad_haptics_channels[HAPTICS_CHANNEL_COUNT];
 static NSUInteger g_pad_haptics_channel_count;
@@ -153,6 +154,7 @@ static void pad_stop_vibration(void) {
 }
 static void pad_discard_haptics(void) {
     atomic_store(&g_pad_haptics_supported, 0);
+    atomic_store(&g_haptics_render_logged, 0);
     pad_stop_vibration();
     for (NSUInteger i = 0; i < HAPTICS_CHANNEL_COUNT; i++) {
         DmHapticsChannel *channel = &g_pad_haptics_channels[i];
@@ -206,8 +208,10 @@ static BOOL pad_configure_haptics_channel(DmHapticsChannel *out,
                      log_name, error.localizedDescription.UTF8String ?: "unknown error");
         return NO;
     }
-    CHHapticEventParameter *intensity = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:0.0];
-    CHHapticEventParameter *sharpness = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.5];
+    // Dynamic intensity is multiplicative and sharpness is additive. Use
+    // neutral event values so the live controls can represent the full range.
+    CHHapticEventParameter *intensity = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:1.0];
+    CHHapticEventParameter *sharpness = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.0];
     CHHapticEventParameter *sustained = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDSustained value:1.0];
     // The basic player is used deliberately: on macOS the advanced-player
     // factory can fail to connect to gamecontrollerd even for simple patterns.
@@ -275,6 +279,7 @@ static void pad_apply_haptics(void) {
         g_haptics_low, g_haptics_low_frequency,
         g_haptics_high, g_haptics_high_frequency);
     if (parameters.intensity <= 0.f) { pad_stop_vibration(); return; }
+    NSUInteger accepted_channels = 0;
     for (NSUInteger i = 0; i < g_pad_haptics_channel_count; i++) {
         DmHapticsChannel *channel = &g_pad_haptics_channels[i];
         if (!channel->engine || !channel->player) continue;
@@ -297,7 +302,14 @@ static void pad_apply_haptics(void) {
         if (![channel->player sendParameters:@[intensity, sharpness_parameter] atTime:CHHapticTimeImmediate error:&error])
             DM_LOG_ERROR("controller", "Could not update haptics for channel %lu: %s",
                          (unsigned long)i, error.localizedDescription.UTF8String ?: "unknown error");
+        else
+            accepted_channels++;
     }
+    if (accepted_channels && !atomic_exchange(&g_haptics_render_logged, 1))
+        DM_LOG_INFO("controller", "Core Haptics parameters accepted: accepted_channels=%lu configured_channels=%lu intensity=%.3f sharpness=%.3f",
+                    (unsigned long)accepted_channels,
+                    (unsigned long)g_pad_haptics_channel_count,
+                    parameters.intensity, parameters.sharpness);
 }
 static BOOL pad_haptics_ready(void) {
     if (!g_pad_haptics_channel_count) return NO;
@@ -621,6 +633,7 @@ void front_run(void (*guest)(void)) {
         [NSTimer scheduledTimerWithTimeInterval:1.0 / 60.0 repeats:YES block:^(NSTimer *timer) {
             (void)timer;
             pad_poll();
+            switch_haptics_poll();
         }];
         if (!GCController.controllers.count) [GCController startWirelessControllerDiscoveryWithCompletionHandler:nil];
         [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown | NSEventMaskKeyUp handler:^NSEvent *(NSEvent *e) {

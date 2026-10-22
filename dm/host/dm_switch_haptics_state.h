@@ -21,6 +21,13 @@ static inline int dm_switch_haptics_ack_is_current(
     return sender && sender == current_device && request_pending;
 }
 
+static inline int dm_switch_haptics_scan_due(
+    uint64_t *next_scan_ns, uint64_t now_ns) {
+    if (!next_scan_ns || now_ns < *next_scan_ns) return 0;
+    *next_scan_ns = now_ns + DM_SWITCH_HAPTICS_RETRY_NS;
+    return 1;
+}
+
 static inline int dm_switch_haptics_retry_ready(
     const DmSwitchHapticsRetry *retry, uint64_t now_ns) {
     if (!retry) return 0;

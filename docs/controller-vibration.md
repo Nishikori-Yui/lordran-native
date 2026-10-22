@@ -161,6 +161,15 @@ a waveform or reconstructs the Switch actuator signal. The next fidelity step
 is device-specific calibration and a measured choice between parameter curves
 and a sample-level waveform renderer.
 
+Continuous-event base parameters must be neutral when live controls carry the
+frame: Core Haptics multiplies event intensity by `hapticIntensityControl` and
+adds `hapticSharpnessControl` to event sharpness. Both platforms therefore use
+base intensity `1.0` and base sharpness `0.0`; a zero base intensity would mute
+every update regardless of the submitted intensity, while a nonzero base
+sharpness would bias and potentially saturate the mapped range. Parameter
+submission logs still prove only that Core Haptics accepted an update, not that
+a controller's physical actuators moved.
+
 References:
 
 - [Apple GCDeviceHaptics](https://developer.apple.com/documentation/gamecontroller/gcdevicehaptics)
@@ -207,8 +216,10 @@ raw output disabled, allowing the Mac Core Haptics fallback when available;
 NACKs, timed-out ACKs and failed writes are retried no more than once per
 250 ms. Controller selection briefly pumps the main run loop (up to 250 ms) so
 the normal startup path can receive the ACK before the guest enumerates
-vibration devices; later frames still replace the pending frame and retry
-after timeout.
+vibration devices. The regular host poll also retries the enable handshake and
+rate-limits raw-device rescans to 250 ms, so initialization does not depend on
+a later guest vibration frame to trigger recovery; the newest frame remains
+pending until the ACK arrives.
 
 Rumble frames use output report `0x10` and encode both guest frequencies and
 amplitudes with the Switch logarithmic tables. The rumble-only report consists
@@ -343,6 +354,7 @@ vibration stop received
 vibration backend reset/stopped
 vibration output failed
 Npad state returned for physical controller input
+Core Haptics parameters accepted
 ```
 
 The first nonzero frame may include sanitized amplitudes and frequencies.
@@ -373,7 +385,7 @@ enumeration cannot be mistaken for current output readiness.
 | Area | Current status | Required evidence |
 |---|---|---|
 | HID single and batch values | Four-field forwarding, handle filtering, sequence, and timestamp are implemented; focused tests pass (2026-10-23) | In-game single/batch dispatch and physical stop behavior |
-| Runtime vibration evidence | Rate-limited HLE source witnesses distinguish guest capture from renderer/HID evidence; stale handles are rejected after capability loss | Capture one in-game log containing source capture, renderer acceptance, and the physical test result |
+| Runtime vibration evidence | Rate-limited HLE source witnesses distinguish guest capture from renderer/HID evidence; Npad receipt and Core Haptics parameter-submission witnesses are also emitted; stale handles are rejected after capability loss. API acceptance is not physical actuator evidence. | Capture one in-game log containing source capture, renderer acceptance, and the physical test result |
 | Mac host build | Latest source builds (2026-10-23); existing Metal/compiler warnings remain | Launch this exact build and validate gameplay |
 | iOS controller UI build | Simulator UI harness compiles; app-settings and controller mapping tests pass (2026-10-23) | Physical controller test |
 | DualSense Core Haptics | Independent handle channels plus combined/default-locality fallback are implemented; iOS recreates its player after unexpected engine stops | Start, update, stop, recovery, and actual feedback on USB and Bluetooth |
@@ -389,6 +401,29 @@ enumeration cannot be mistaken for current output readiness.
 
 ### 2026-10-23
 
+- Added an independent macOS raw-HID recovery poll: device discovery is
+  rate-limited to 250 ms and rumble-enable ACK timeouts retry even when the
+  game has not enumerated vibration handles or sent another vibration frame.
+  Added deterministic scan-throttle regression coverage. Physical ACK timing
+  and late device discovery still require a connected-controller run.
+- Corrected the Core Haptics continuous-event baselines on macOS and iOS after
+  reviewing Apple's control semantics: intensity control multiplies event
+  intensity, while sharpness control adds to event sharpness. The previous
+  zero-intensity base could mute all runtime updates; the previous 0.5
+  sharpness base could saturate the mapped control. New neutral bases are 1.0
+  intensity and 0.0 sharpness. Runtime and physical controller verification
+  remains pending.
+- Clarified the macOS Core Haptics witness to report how many locality channels
+  accepted the parameter update instead of implying every configured channel
+  succeeded. Rebuilt the Mac host to a temporary path, rebuilt the iOS
+  controller UI harness, ran the iOS diagnostics/controller tests, and reran
+  the focused host pad mapping, HID forwarding, Switch rumble, queue and
+  Core Haptics mapping tests; all passed. These checks do not establish
+  physical rumble or haptics output.
+- Added renderer-side acceptance witnesses for both macOS and iOS Core
+  Haptics. The log records the first successful parameter submission after
+  a controller is prepared, but still deliberately does not claim physical
+  actuator feedback.
 - Added a rate-limited Npad receipt witness for the first nonzero physical
   controller state returned to the guest, including layout, buttons and both
   axes. This separates a GameController event from proof that the running
