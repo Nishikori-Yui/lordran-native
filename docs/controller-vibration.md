@@ -389,7 +389,7 @@ HID update that the OS accepted.
 |---|---|---|
 | HID single and batch values | Four-field forwarding, handle filtering, sequence, and timestamp are implemented; focused tests pass (2026-10-23) | In-game single/batch dispatch and physical stop behavior |
 | Runtime vibration evidence | Rate-limited HLE source witnesses distinguish guest capture from renderer/HID evidence; Npad receipt and Core Haptics/raw HID parameter-submission witnesses include frame sequence and timestamp; stale handles are rejected after capability loss. API acceptance is not physical actuator evidence. | Capture one in-game log containing source capture, renderer acceptance, and the physical test result |
-| Mac host build | Latest source builds (2026-10-23); existing Metal/compiler warnings remain | Launch this exact build and validate gameplay |
+| Mac host build | Latest source builds (2026-10-23); an isolated smoke run with the corrected shader-cache root reached normal rendering and shut down cleanly; existing Metal/compiler warnings remain | Launch this exact build with a connected controller and validate gameplay |
 | iOS controller UI build | Simulator UI harness compiles; app-settings and controller mapping tests pass (2026-10-23) | Physical controller test |
 | DualSense Core Haptics | Independent handle channels plus combined/default-locality fallback are implemented; iOS recreates its player after unexpected engine stops | Start, update, stop, recovery, and actual feedback on USB and Bluetooth |
 | Switch Pro raw HID | Four-field encoder, dual actuator payload, packet counter, low-band range clamp, rumble-enable report, ACK/NACK parsing, retry throttling, and disconnected-result classification are unit-tested | Physical USB/Bluetooth rumble, ACK timing, and unplug/reconnect recovery |
@@ -409,6 +409,11 @@ HID update that the OS accepted.
   game has not enumerated vibration handles or sent another vibration frame.
   Added deterministic scan-throttle regression coverage. Physical ACK timing
   and late device discovery still require a connected-controller run.
+- Ran the current host against an isolated copy of the existing game save for
+  a short windowed smoke session. The corrected shader-cache root reached
+  normal rendering and shut down cleanly after a controlled SIGTERM; no
+  controller was enumerated and no vibration frame was generated, so this is
+  a host/gameplay-startup check only, not vibration or input acceptance.
 - Corrected the Core Haptics continuous-event baselines on macOS and iOS after
   reviewing Apple's control semantics: intensity control multiplies event
   intensity, while sharpness control adds to event sharpness. The previous
