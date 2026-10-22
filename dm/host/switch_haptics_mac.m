@@ -417,6 +417,7 @@ static void complete_output_report(DmSwitchOutputRequest *request,
     if (kind == kSwitchOutputRumble) {
         memcpy(g_last_rumble_report, request->report + 2, sizeof g_last_rumble_report);
         g_have_last_report = 1;
+        g_logged_failure = 0;
         if (!g_logged_success) {
             g_logged_success = 1;
             DM_LOG_INFO("controller", "Raw Switch HID rumble report accepted by macOS: sequence=%llu timestamp_ns=%llu transport=%s",
@@ -570,15 +571,8 @@ static void send_rumble_frame(const DmVibrationFrame *frame) {
             handle_device_loss(g_device);
         }
     } else {
-        g_logged_failure = 0;
-        if (!g_logged_success) {
-            g_logged_success = 1;
-            DM_LOG_INFO("controller", "Raw Switch HID rumble report accepted by macOS: sequence=%llu timestamp_ns=%llu transport=%s",
-                        (unsigned long long)frame->sequence,
-                        (unsigned long long)frame->timestamp_ns,
-                        g_transport[0] ? g_transport : "unknown");
-        }
-        // The completion callback updates the de-duplication cache and counter.
+        // The completion callback records successful output and updates the
+        // de-duplication cache; immediate return means only that IOKit queued it.
     }
 }
 

@@ -240,6 +240,9 @@ report size, the preflight check accepts either interpretation of whether the
 descriptor-derived size includes the report-ID byte, since Apple's property
 documentation does not specify that detail; `IOHIDDeviceSetReportWithCallback` remains the
 final size check.
+The raw-HID success witness is emitted only from a successful completion
+callback; an immediate success return from the asynchronous submission API is
+recorded only as a queued request, not as completed OS output.
 
 The device is acquired when the first matching controller is selected and is
 retained while usable because the public controller and IOKit identities
@@ -439,8 +442,12 @@ HID update that the OS accepted.
   owned report buffers and retained device references, one in-flight output,
   bounded serialized rumble queueing with stop priority, latest-frame recovery,
   and per-device generations that ignore late completions. Removed startup's
-  run-loop wait. Added output state regression cases. Host tests/build and
-  physical USB/Bluetooth timing validation are pending for this correction.
+  run-loop wait. Added output state regression cases; the Switch protocol and
+  output-state test, HLE input/vibration test, pad-map test, queue test,
+  Core Haptics mapping test, and isolated macOS host build pass. Physical
+  USB/Bluetooth callback timing and actuator validation remain pending.
+- Moved the raw rumble acceptance witness to the asynchronous completion
+  callback so an accepted enqueue cannot be mistaken for completed OS output.
 - Self-review found a macOS HID framing defect: the Switch output buffers omitted
   the report ID even though `IOHIDDeviceSetReport` requires it in the first byte
   for multi-report devices. Corrected the rumble frame to 10 bytes and the
