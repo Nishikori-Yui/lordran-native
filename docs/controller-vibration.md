@@ -152,10 +152,13 @@ left/right channels when both localities are supported; otherwise it creates
 one channel for combined handles or the default locality. The Mac renderer
 uses a basic pattern player because the advanced-player factory failed to
 connect to `gamecontrollerd` in earlier tests. It maps the two amplitudes to
-one overall intensity and an amplitude-weighted frequency to sharpness. The
+one overall intensity and an amplitude-weighted log-frequency to sharpness. The
 iOS path uses one advanced player and now shares the same bounded combined-
-amplitude and log-frequency mapping. Sharpness is only a perceptual proxy, not
-an output-frequency control. iOS retries engine preparation after an unexpected
+amplitude and log-frequency mapping. The active bands are combined with an
+amplitude-weighted geometric mean before mapping to sharpness, matching the
+logarithmic character of the Switch encoder better than a linear-Hz average.
+Sharpness is still only a perceptual proxy, not an output-frequency control.
+iOS retries engine preparation after an unexpected
 engine stop while the active game view is foregrounded. Neither path synthesizes
 a waveform or reconstructs the Switch actuator signal. The next fidelity step
 is device-specific calibration and a measured choice between parameter curves
@@ -335,8 +338,9 @@ renderer should:
 The current output model is intentionally conservative:
 
 - use the Switch frequency encoder for raw HID output;
-- use combined amplitude and weighted frequency for Mac Core Haptics;
-- use the same combined amplitude and weighted-frequency mapping for iOS Core
+- use combined amplitude and amplitude-weighted log-frequency for Mac Core
+  Haptics;
+- use the same combined amplitude and log-frequency mapping for iOS Core
   Haptics; sharpness remains a perceptual proxy, not an exact motor frequency;
 - keep both output handles synchronized;
 - avoid artificial pulses when the game sends a continuous update;
@@ -426,7 +430,7 @@ HID update that the OS accepted.
 | DualSense Core Haptics | Independent handle channels plus combined/default-locality fallback are implemented; iOS recreates its player after unexpected engine stops | Start, update, stop, recovery, and actual feedback on USB and Bluetooth |
 | Switch Pro raw HID | Four-field encoder, report-ID-inclusive 10-byte rumble frame, 64-byte rumble-enable report, asynchronous serialized writes, owned callback buffers, stop-priority/latest-frame queueing, per-device completion generations, dual actuator payload, packet counter, low-band range clamp, ACK/NACK parsing, retry throttling, descriptor-size boundary handling, and disconnected-result classification are unit-tested | Physical USB/Bluetooth rumble, callback timing, ACK behavior, and unplug/reconnect recovery |
 | NS Pro JoyDual input | Selected host axes are published through both FullKey and JoyDual layouts; Mac offers explicit controller selection and locks to that choice until disconnect; HLE axis forwarding tests pass | Confirm both sticks and buttons in the running game |
-| Low/high frequency preservation | Preserved through HLE and encoded natively by Switch raw HID; both Core Haptics paths map amplitude-weighted frequency to perceptual sharpness | Compare captured source parameters with rendered results on hardware; calibrate per device |
+| Low/high frequency preservation | Preserved through HLE and encoded natively by Switch raw HID; both Core Haptics paths map amplitude-weighted log-frequency to perceptual sharpness | Compare captured source parameters with rendered results on hardware; calibrate per device |
 | Timing and waveform synthesis | Sequence/timestamp capture and bounded ordered delivery are implemented; timestamps schedule inter-frame updates with a 100 ms step cap; no sample waveform is reconstructed | Measure queue latency and fidelity, then decide whether interpolation or waveform reconstruction is needed |
 | Background and disconnect | Lifecycle stop code is implemented | Device and scene transition test |
 | Long-running session | Current host ran for about 17 minutes / 7,200 rendered frames without a host crash; no controller was enumerated and repeated physical effects were not tested | At least 30 minutes with repeated effects on a connected controller |
@@ -436,6 +440,12 @@ HID update that the OS accepted.
 
 ### 2026-10-23
 
+- Self-review found that reducing dual-band frequency in linear Hz caused a
+  high-frequency band to dominate the Core Haptics perceptual proxy. Changed
+  the shared Mac/iOS mapping to an amplitude-weighted geometric mean in
+  log-frequency space and added equal- and unequal-band regression vectors.
+  This remains a perceptual mapping rather than exact waveform reconstruction;
+  physical device calibration and actuator feedback are pending.
 - Self-review found that synchronous `IOHIDDeviceSetReport` could block the
   main thread during either the rumble-enable handshake or a game vibration
   update. Replaced both writes with `IOHIDDeviceSetReportWithCallback`, heap-
