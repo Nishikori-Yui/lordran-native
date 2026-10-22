@@ -164,6 +164,24 @@ a waveform or reconstructs the Switch actuator signal. The next fidelity step
 is device-specific calibration and a measured choice between parameter curves
 and a sample-level waveform renderer.
 
+On iOS, backend selection prefers the selected controller's
+`GCDeviceHaptics` engine. If it cannot be prepared, or no controller is
+selected, the app checks `CHHapticEngine.capabilitiesForHardware.supportsHaptics`
+and may create a separate device-local Core Haptics engine. That route is for
+the iOS device's built-in haptic actuator, not Core Audio and not a way to address
+left/right controller motors. Both Switch bands are reduced to one intensity
+and one sharpness value, so the device-local result is necessarily a
+single-channel perceptual approximation. Devices that do not report haptic
+support keep vibration unavailable; they do not synthesize feedback through
+the speaker. Both routes use the same stop, foreground, disable and engine
+recovery rules, but only a physical iOS device can establish that the actuator
+actually responds.
+
+References:
+
+- [Apple Core Haptics hardware capabilities](https://developer.apple.com/documentation/corehaptics/chhapticengine/capabilitiesforhardware())
+- [Apple CHHapticEngine](https://developer.apple.com/documentation/corehaptics/chhapticengine)
+
 Continuous-event base parameters must be neutral when live controls carry the
 frame: Core Haptics multiplies event intensity by `hapticIntensityControl` and
 adds `hapticSharpnessControl` to event sharpness. Both platforms therefore use
@@ -491,6 +509,7 @@ or incomparable timestamp rather than a zero-latency result.
 | Runtime vibration evidence | Rate-limited HLE source witnesses distinguish guest capture from renderer/HID evidence; Npad receipt and Core Haptics/raw HID parameter-submission witnesses include frame sequence and timestamp; first output witnesses include host/OS-path latency; stale handles are rejected after capability loss. API acceptance is not physical actuator evidence. | Capture one in-game log containing source capture, renderer acceptance, measured host/OS latency, and the physical test result |
 | Mac host build | Isolated full host link passes again during the 2026-10-23 review; an earlier isolated smoke run reached normal rendering and shut down cleanly; existing Metal/compiler warnings remain | Launch this exact build with a connected controller and validate gameplay |
 | iOS controller UI build | Simulator UI harness compiles; app-settings and controller mapping tests pass (2026-10-23) | Physical controller test |
+| iOS built-in haptics | Device-local Core Haptics engine is hardware-gated and selected only when controller haptics are unavailable; one combined intensity/sharpness output is implemented | Physical iOS-device start/update/stop, background transition and perceived strength/frequency comparison |
 | DualSense Core Haptics | Independent handle channels plus combined/default-locality fallback are implemented; iOS recreates its player after unexpected engine stops; parameter updates are currently the same combined spectrum on both Mac handles | Start, update, stop, recovery, locality behavior, and actual feedback on USB and Bluetooth |
 | DualSense raw HID | Research only; public reference describes conventional motor fields and transport-specific report framing | Only implement if Core Haptics device tests expose a concrete gap; then validate USB/Bluetooth framing and physical output independently |
 | Switch Pro raw HID | Four-field encoder, report-ID-inclusive 10-byte rumble frame, 64-byte rumble-enable report, asynchronous serialized writes, owned callback buffers, stop-priority/latest-frame queueing, per-device completion generations, dual actuator payload, packet counter, low-band range clamp, ACK/NACK parsing, retry throttling, descriptor-size boundary handling, and disconnected-result classification are unit-tested | Physical USB/Bluetooth rumble, callback timing, ACK behavior, and unplug/reconnect recovery |
@@ -506,6 +525,15 @@ or incomparable timestamp rather than a zero-latency result.
 
 ### 2026-10-23
 
+- Added an iOS device-local Core Haptics fallback for hardware that advertises
+  built-in haptic support. A prepared selected-controller engine remains the
+  preferred route; otherwise the app can use the device actuator without
+  pretending it has separate handles or exact Switch-frequency control. The
+  device route is disabled on hardware that does not advertise haptics, and
+  uses the existing lifecycle stop and output timing path. The settings label
+  now covers both controller and device output. Simulator compilation/tests do
+  not prove physical iOS-device actuator response; start/update/stop and background
+  behavior still need a device run.
 - Follow-up to the in-game NS Pro input report: macOS now recognizes generic
   `Pro Controller` and `Joy-Con` names, promotes a Nintendo controller over a
   connected DualSense, and prevents non-Nintendo input from stealing that

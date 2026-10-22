@@ -4,6 +4,7 @@
 #import "../Sources/DmAppSettings.h"
 #import "../Sources/DmPerfHUD.h"
 #import <GameController/GameController.h>
+#import <CoreHaptics/CoreHaptics.h>
 #import <QuartzCore/QuartzCore.h>
 #include "../../host/dm_input.h"
 #include "../../host/dm_input_motion.h"
@@ -450,6 +451,9 @@ static void runTests(UIViewController *presenter) {
     // Snapshot controllers exercise mapping and selection without external hardware.
     GCController *first = [GCController controllerWithExtendedGamepad], *second = [GCController controllerWithExtendedGamepad];
     [pad setValue:@[first, second] forKey:@"controllers"]; [pad selectController:0];
+    if ([CHHapticEngine capabilitiesForHardware].supportsHaptics &&
+        !first.haptics && pad.vibrationSupported)
+        assert([[pad valueForKey:@"hapticsDeviceLocal"] boolValue]);
 #if TARGET_OS_SIMULATOR
     assert(!pad.hidden); // Keep touch controls available alongside Simulator's virtual controller.
 #else

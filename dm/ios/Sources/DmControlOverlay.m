@@ -223,7 +223,7 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
     [self addButton:T(@"Button appearance", @"按键外观") symbol:@"paintbrush" action:@selector(buttonAppearance)].enabled = _gamepad != nil;
     [self addSwitch:T(@"Show FPS", @"显示帧率") on:self.showsFPS action:@selector(fpsToggled:)];
     [self addButton:T(@"Cheats", @"金手指") symbol:@"switch.2" action:@selector(cheats)];
-    [self addSwitch:T(@"Controller vibration", @"手柄震动") on:DmAppVibrationEnabled() action:@selector(vibrationToggled:)];
+    [self addSwitch:T(@"Vibration feedback", @"震动反馈") on:DmAppVibrationEnabled() action:@selector(vibrationToggled:)];
     _export = [self addButton:T(@"Export log", @"导出日志") symbol:@"square.and.arrow.up" action:@selector(exportLog)];
     __weak DmControlOverlay *weakSelf = self;
     NSArray *languages = DmAppUsesChinese() ? @[@"英语", @"简体中文"] : @[@"English", @"Simplified Chinese"];
