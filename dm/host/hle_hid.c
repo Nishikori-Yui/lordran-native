@@ -28,6 +28,7 @@ static _Atomic uint32_t g_vibration_devices;
 static _Atomic uint64_t g_vibration_sequence;
 static _Atomic uint64_t g_vibration_log_ns;
 static _Atomic int g_vibration_stop_logged;
+static _Atomic int g_npad_input_logged;
 static pthread_mutex_t g_motion_mu = PTHREAD_MUTEX_INITIALIZER;
 static dm_input_motion g_motion[2];
 void dm_input_swipe_add(int side, double x, double y) {
@@ -182,6 +183,10 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
     if (s->ry < -STICK_THRESH) b |= 1u << 23;
     s->buttons = b;
     s->attributes = ATTR_CONNECTED | (id == NPAD_HANDHELD ? ATTR_WIRED | ATTR_LEFT_CONN | ATTR_LEFT_WIRED | ATTR_RIGHT_CONN | ATTR_RIGHT_WIRED : ATTR_LEFT_CONN | ATTR_RIGHT_CONN);
+    if ((p || atomic_load(&g_pad_btn)) && !atomic_exchange(&g_npad_input_logged, 1))
+        DM_LOG_INFO("controller", "Npad state returned: id=%#x style=%#x buttons=%#llx left=(%d,%d) right=(%d,%d)",
+                    id, style, (unsigned long long)s->buttons,
+                    s->lx, s->ly, s->rx, s->ry);
 }
 // GetNpadStates(out, n, id): returns the number written, newest first. The host keeps no history: only 1 current state (callers handle the returned count)
 static int states(NpadState *out, int n, uint32_t id, uint32_t style) { if (n <= 0) return 0; fill(out, id, style); return 1; }

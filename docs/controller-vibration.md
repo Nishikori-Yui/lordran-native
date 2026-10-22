@@ -342,6 +342,7 @@ vibration frame rendered
 vibration stop received
 vibration backend reset/stopped
 vibration output failed
+Npad state returned for physical controller input
 ```
 
 The first nonzero frame may include sanitized amplitudes and frequencies.
@@ -377,7 +378,7 @@ enumeration cannot be mistaken for current output readiness.
 | iOS controller UI build | Simulator UI harness compiles; app-settings and controller mapping tests pass (2026-10-23) | Physical controller test |
 | DualSense Core Haptics | Independent handle channels plus combined/default-locality fallback are implemented; iOS recreates its player after unexpected engine stops | Start, update, stop, recovery, and actual feedback on USB and Bluetooth |
 | Switch Pro raw HID | Four-field encoder, dual actuator payload, packet counter, low-band range clamp, rumble-enable report, ACK/NACK parsing, retry throttling, and disconnected-result classification are unit-tested | Physical USB/Bluetooth rumble, ACK timing, and unplug/reconnect recovery |
-| NS Pro JoyDual input | Selected controller axes are published through both FullKey and JoyDual layouts; left/right stick regression coverage passes | Confirm both sticks and buttons in the running game |
+| NS Pro JoyDual input | Selected controller axes are published through both FullKey and JoyDual layouts; left/right stick regression coverage passes; the first physical Npad state returned is now logged | Confirm both sticks and buttons in the running game |
 | Low/high frequency preservation | Preserved through HLE and encoded natively by Switch raw HID; both Core Haptics paths map amplitude-weighted frequency to perceptual sharpness | Compare captured source parameters with rendered results on hardware; calibrate per device |
 | Timing and waveform synthesis | Sequence/timestamp capture and bounded ordered delivery are implemented; timestamps schedule inter-frame updates with a 100 ms step cap; no sample waveform is reconstructed | Measure queue latency and fidelity, then decide whether interpolation or waveform reconstruction is needed |
 | Background and disconnect | Lifecycle stop code is implemented | Device and scene transition test |
@@ -388,6 +389,10 @@ enumeration cannot be mistaken for current output readiness.
 
 ### 2026-10-23
 
+- Added a rate-limited Npad receipt witness for the first nonzero physical
+  controller state returned to the guest, including layout, buttons and both
+  axes. This separates a GameController event from proof that the running
+  game actually sampled the NS Pro state.
 - Added the first source-side runtime evidence layer: HLE logs a rate-limited
   witness for nonzero guest frames and ordered stops, including source path,
   sequence, timestamp and all four values. Every send now rechecks backend
