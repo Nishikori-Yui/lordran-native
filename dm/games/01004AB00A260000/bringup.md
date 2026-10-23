@@ -402,8 +402,21 @@ Validation logs remain under `run/launchfix-*.log` in the game's work folder.
   rewrite-level check, not a gameplay, performance or device acceptance result.
 
 Validation covers synthetic host tests, Metal descriptor/UBO tests and the
-local registered inputs. No gameplay session or physical iOS device test was
-performed for these changes; the existing save and running game are untouched.
+local registered inputs. Subsequent Mac testing reached title/menu, save
+loading and gameplay using a separate copied save. Rapid flicker recurred
+during death -> loading -> gameplay on `66d2843` with an additional local
+AppKit surface-isolation experiment; that experiment is not a confirmed fix.
+Gameplay acceptance remains incomplete. No physical iOS test, character-name
+acceptance or optional 60 FPS gameplay test is claimed.
+
+The affected session contains intervals with continued guest draw recording
+but zero backend passes/draws while presentation continues near 30 FPS. A
+separate headless focus-loss/recovery test reproduces synchronization-only
+submitted command lists while unfocused, followed by resumed drawing on
+focus recovery. Its title-screen captures are identical, so that test does
+not reproduce visible flicker or establish the death-transition root cause.
+Presenting different stale swapchain contents remains a hypothesis requiring
+transition-frame evidence. An FPS counter alone is not visual acceptance.
 
 ### Independent texture identity regression
 
