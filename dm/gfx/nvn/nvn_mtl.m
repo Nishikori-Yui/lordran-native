@@ -6564,8 +6564,17 @@ static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MT
     return 1;
 }
 static double g_link_it_tin;   // Enqueue time of the frame the display-link callback is presenting (read and written only on the display-link thread)
+extern int dm_focus_now(void);
+static int present_focus_active(void) {
+#if TARGET_OS_OSX
+    return dm_focus_now() == 1;
+#else
+    return 1;
+#endif
+}
 static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts) {
     if (g_present_stall_ns) { struct timespec ts = {0, (long)g_present_stall_ns}; nanosleep(&ts, NULL); }
+    if (!present_focus_active()) return 0;
     g_present_n++;
     if (bootprof() && (g_present_n == 1 || g_present_n % 120 == 0)) {
         if (g_present_n == 1) g_bp_first_present = bp_now() - g_bp_t0;
@@ -6624,7 +6633,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     uint64_t dt0 = now_ns();
     id<CAMetalDrawable> dr = supplied ? supplied : [layer nextDrawable];
     if (!supplied) g_drawable_ns += now_ns() - dt0;
-    if (!dr) return 0;
+    if (!dr || !present_focus_active()) return 0;
     int alloc_i = (int)(ticket % 3);
     if (g_present_alloc_fence[alloc_i]) {
         pthread_mutex_lock(&g_pq_mu);
@@ -6698,10 +6707,21 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
 // Swapchain texture return: before AcquireTexture gets a texture it waits for the ticket of that texture's previous present to be processed (mtl_present_wait), after which the commands the game draws into it
 // are necessarily ordered after that blit on the GPU queue.
 #define PQ 8
-typedef struct { tex_t t; double period; uint64_t frame; int crop[4]; double t_in; } pq_item;   // t_in: the time the game handed this frame into the present queue (CACurrentMediaTime)
+typedef struct { tex_t t; double period; uint64_t frame; int crop[4]; double t_in; int focused; } pq_item;   // Capture focus too: inactive frames must not surface after focus returns.
 static pq_item g_pq[PQ];
 static uint64_t g_pq_in;
 static int present_now(const tex_t *, double, uint64_t, uint64_t, const int[4], id<CAMetalDrawable>, double);
+
+static void present_retire_skipped(uint64_t ticket) {
+    pthread_mutex_lock(&g_pq_mu);
+    // A skipped ticket cannot release a swapchain texture still being read
+    // by an earlier GPU present. Keep the completion watermark contiguous.
+    while (g_pq_inflight) pthread_cond_wait(&g_pq_cv, &g_pq_mu);
+    g_pres[ticket % PRING] = (pres_ent){ticket, -1};
+    if (ticket > g_pq_done) g_pq_done = ticket;
+    pthread_cond_broadcast(&g_pq_cv);
+    pthread_mutex_unlock(&g_pq_mu);
+}
 
 @interface NvMetalDisplayLinkDelegate : NSObject <CAMetalDisplayLinkDelegate>
 @end
@@ -6741,14 +6761,9 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
     pthread_cond_broadcast(&g_pq_cv);
     pthread_mutex_unlock(&g_pq_mu);
     int submitted;
-    @autoreleasepool { submitted = present_now(&it.t, it.period, it.frame, ticket, it.crop, update.drawable, update.targetPresentationTimestamp); }
+    @autoreleasepool { submitted = it.focused && present_now(&it.t, it.period, it.frame, ticket, it.crop, update.drawable, update.targetPresentationTimestamp); }
     g_link_hold_until = submitted && it.period > 0.025 ? update.targetPresentationTimestamp + it.period : 0;
-    if (!submitted) {
-        pthread_mutex_lock(&g_pq_mu);
-        if (ticket > g_pq_done) g_pq_done = ticket;
-        pthread_cond_broadcast(&g_pq_cv);
-        pthread_mutex_unlock(&g_pq_mu);
-    }
+    if (!submitted) present_retire_skipped(ticket);
 }
 @end
 
@@ -6828,14 +6843,9 @@ static void *present_main(void *arg) {
         uint64_t ticket = ++g_pq_read; g_classic_busy = 1;
         pthread_mutex_unlock(&g_pq_mu);
         int submitted;
-        @autoreleasepool { submitted = present_now(&it.t, it.period, it.frame, ticket, it.crop, nil, 0); }
+        @autoreleasepool { submitted = it.focused && present_now(&it.t, it.period, it.frame, ticket, it.crop, nil, 0); }
+        if (!submitted) present_retire_skipped(ticket);
         pthread_mutex_lock(&g_pq_mu); g_classic_busy = 0; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu);
-        if (!submitted) {
-            pthread_mutex_lock(&g_pq_mu);
-            if (ticket > g_pq_done) g_pq_done = ticket;
-            pthread_cond_broadcast(&g_pq_cv);
-            pthread_mutex_unlock(&g_pq_mu);
-        }
     }
     return NULL;
 }
@@ -6860,7 +6870,7 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
     }
     pthread_mutex_lock(&g_pq_mu);
     while (g_pq_in - g_pq_done >= PQ) pthread_cond_wait(&g_pq_cv, &g_pq_mu);   // Wait only when the queue is full; normally AcquireTexture blocks first
-    pq_item *it = &g_pq[g_pq_in % PQ]; *it = (pq_item){*t, period, atomic_load(&g_cur_frame), {0}, CACurrentMediaTime()};
+    pq_item *it = &g_pq[g_pq_in % PQ]; *it = (pq_item){*t, period, atomic_load(&g_cur_frame), {0}, CACurrentMediaTime(), present_focus_active()};
     if (crop) memcpy(it->crop, crop, sizeof it->crop);   // The current frame's state is enqueued with the ticket number, rather than reading the mutable window late on the present thread
     uint64_t tk = ++g_pq_in;
     pthread_cond_broadcast(&g_pq_cv);
