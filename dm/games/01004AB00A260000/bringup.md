@@ -372,3 +372,35 @@ the UTC export time and a unique suffix; older retained logs remain intact.
 Tests cover fragmented writes, concurrent writers, keeping the emergency
 crash descriptor open, timestamped export names and independent exports.
 Validation logs remain under `run/launchfix-*.log` in the game's work folder.
+
+## Runtime hardening (2026-10-23)
+
+- GLSLC extraction uses explicit control-relative code offsets rather than
+  searching linkage data. Synthetic coverage includes truncated headers,
+  offset overflow, inconsistent lengths and decoy magic. Both registered
+  versions retain the same 3,099 unique stage/control/code tuples and keys;
+  the shader tables and chain are unchanged.
+- The offline profanity filter installs all seven SDK virtual slots and keeps
+  the guest RTTI prefix. Direct UTF-8, UTF-16 and char16_t aliases share the
+  same no-match behavior; caller text and work buffers are not modified.
+  Constructor overloads, initialization and finalization avoid the system
+  word-list heap. Deleting destruction uses the guest operator delete, not
+  the host allocator. Concurrent construction and virtual calls are tested.
+- Texture and sampler pool commands capture storage base and capacity when
+  recorded, so reusing a wrapper cannot redirect an existing command. UBO
+  bindless handles are reread before argument reuse and invalid offsets or
+  overflowing addresses resolve as empty bindings.
+- Empty SDK 4.5 and newer socket Poll/Select entry points, plus nnsocketPoll,
+  honor finite timeouts. Select reads two signed 64-bit guest timeval fields;
+  invalid values and negative descriptor counts fail. Infinite offline waits
+  remain unsupported (negative Poll timeouts return immediately; null Select
+  timeouts fail). Nonempty waits remain unavailable.
+- `--experimental-60fps` is opt-in for the registered 1.0.3 build only. It
+  verifies the original rate argument and following call instructions, then
+  changes just the 30 Hz argument to 60 Hz. The limiter function is not cut.
+  Imported/runtime patches cannot be combined with this option. This is a
+  rewrite-level check, not a gameplay, performance or device acceptance result.
+
+Validation covers synthetic host tests, Metal descriptor/UBO tests and the
+local registered inputs. No gameplay session or physical iOS device test was
+performed for these changes; the existing save and running game are untouched.
