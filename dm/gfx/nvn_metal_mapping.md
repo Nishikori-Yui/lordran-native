@@ -28,6 +28,10 @@ Two conventions that run through the whole table:
 | Event | A 32-bit value in game memory | The value is written after the GPU completes |
 | Window | The game's own swapchain textures ↔ `CAMetalLayer` | `AcquireTexture` returns the index of a swapchain texture, and the wait for vertical sync happens here; `QueuePresentTexture` only puts the presentation into a queue and returns immediately, and the presentation thread draws that texture onto the drawable using the crop region given by `WindowSetCrop`. It draws the stored bytes as the Switch's scan-out sends them: an sRGB swapchain texture is sampled through a non-sRGB view (`present_raw_src`) |
 
+GPU-only textures without a guest memory pool are identified by serial, not
+by a null storage address. Equal dimensions and formats do not establish an
+alias relationship. Actual pool/offset registrations retain storage sharing.
+
 ## 2. Commands
 
 | NVN command | Metal | Notes |
@@ -45,7 +49,7 @@ Two conventions that run through the whole table:
 | CopyBufferToTexture / CopyTextureToBuffer / CopyTextureToTexture | Texture copies | Some forms of texture-to-texture are not implemented and report red when encountered |
 | ReportCounter / ResetCounter | The counter's value is written back after the GPU completes | The "samples passed" kind is implemented with Metal's visibility result buffer |
 | SignalEvent | The event's value is written, which happens after the GPU completes | — |
-| SetTexturePool / SetSamplerPool | Recorded into the command stream and applied while replaying | The active pool is part of bindless handle resolution. A handle is decoded only after its command buffer has selected the corresponding pool |
+| SetTexturePool / SetSamplerPool | Storage base and capacity captured in the command stream, applied at replay | Reusing the pool wrapper cannot redirect recorded commands. The active pools determine bindless handle resolution |
 
 The following are empty implementations (`g_nops` in `hle_nvn.c`); calling them neither reports red nor has any effect:
 
@@ -75,6 +79,13 @@ they are not global resource IDs. This matters for Dark Souls, which switches
 descriptor pools inside a frame and reuses IDs between them. The host also
 applies the same pool selection when reading handles from uniform buffers
 (`NVN_RB_TEXU` / `NVN_RB_SAMPU`).
+
+Bindless uniforms are reread before argument reuse; negative offsets, short
+ranges and address overflow resolve as empty bindings. Pending GPU writes to
+a handle remain unsupported and are diagnosed rather than synchronized here.
+The optional store-lookahead index declines submissions with texture-pool
+selection, because its cached slot serials cannot prove later handle remapping.
+TBDR optimizations remain disabled by default.
 
 ## 4. Adding a function that is not implemented yet
 

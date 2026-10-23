@@ -404,3 +404,16 @@ Validation logs remain under `run/launchfix-*.log` in the game's work folder.
 Validation covers synthetic host tests, Metal descriptor/UBO tests and the
 local registered inputs. No gameplay session or physical iOS device test was
 performed for these changes; the existing save and running game are untouched.
+
+### Independent texture identity regression
+
+The fixed-chain Metal test previously failed 30 of 155 checks on both main
+and the runtime branch. Poolless textures were incorrectly shared by the
+`(null pool, zero offset, description)` alias key, so equal-shaped independent
+attachments resolved to one Metal texture. This made copies, uniform-update
+ordering, inherited program state and CALL/JUMP counterexamples appear wrong.
+Poolless textures now retain serial identity; real pool/offset aliases still
+share storage. All 155 original checks pass without changing their expected
+pixels (three repeated runs). The deliberately incorrect `--all-independent`
+control still fails 13 checks, so dependency detection remains effective.
+The texture-registry test also checks both independent and shared identities.

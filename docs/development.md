@@ -152,7 +152,7 @@ audit contains no input paths or patch bytes. It stays in the private rewrite
 output directory.
 
 Static selections are fixed in the generated module images. Rebuild from the
-original NSOs without `--cheat-file`, `--cheat` or `--ips` to disable all
+original NSOs without `--experimental-60fps`, `--cheat-file`, `--cheat` or `--ips` to disable all
 patches, then replace the module directory or reinstall the unsigned IPA.
 Runtime groups can be switched in memory during play; disabling a group does
 not undo changes already made to game state or saves. Use a separate save copy
