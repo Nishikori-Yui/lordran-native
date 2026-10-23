@@ -2,6 +2,7 @@
 // Only entry points that go to a service are hooked; library functions that only read and write the game's own buffers (prepo Add / Array / Struct, err ErrorResultVariant, friends getters, socket byte-order conversion) keep running in the SDK.
 // Return convention as in hle_friends.c: Result returns RES_FAIL ("saved / submitted" kinds return RES_OK so the game does not retry); bool returns false; events get a bound SystemEvent that never fires.
 #include "hle.h"
+#include "hle_net_wait.h"
 
 static _Alignas(16) uint8_t g_ev_ldn[0x100];
 
@@ -52,7 +53,11 @@ HLE_FORCE("_ZN2nn6socket12GetLastErrnoEv", "离线：ENETDOWN", int, h_sk_Errno,
 HLE_FORCE("_ZN2nn6socket6SocketEiii", "离线（剪）：-1", int, h_sk_Socket3i, int a, int b, int c) { (void)a; (void)b; (void)c; return -1; }
 HLE_FORCE("_ZN2nn6socket8ShutdownEii", "离线（剪）", int, h_sk_Shutdown, int s, int h) { (void)s; (void)h; return -1; }
 HLE_FORCE("_ZN2nn6socket4BindEiPK8sockaddrj", "离线（剪）", int, h_sk_Bind, int s, const void *a, unsigned n) { (void)s; (void)a; (void)n; return -1; }
-HLE_FORCE("_ZN2nn6socket4PollEP6pollfdmi", "离线（剪）", int, h_sk_Poll, void *p, uint64_t n, int t) { (void)p; (void)n; (void)t; return -1; }
+HLE_FORCE("_ZN2nn6socket4PollEP6pollfdmi", "离线：空等待遵守 timeout；有 descriptor 时返回失败", int, h_sk_Poll, void *p, uint64_t n, int t) {
+    (void)p;
+    if (!n) { dm_net_wait_timeout_ms(t); return 0; }
+    return -1;
+}
 HLE_FORCE("_ZN2nn6socket6SendToEiPKvmiPK8sockaddrj", "离线（剪）", long, h_sk_SendTo, int s, const void *b, unsigned long n, int f, const void *a, unsigned al) { (void)s; (void)b; (void)n; (void)f; (void)a; (void)al; return -1; }
 HLE_FORCE("_ZN2nn6socket6SendToEiPKvmNS0_7MsgFlagEPKNS0_8SockAddrEj", "离线（剪）", long, h_sk_SendTo2, int s, const void *b, unsigned long n, int f, const void *a, unsigned al) { (void)s; (void)b; (void)n; (void)f; (void)a; (void)al; return -1; }
 HLE_FORCE("_ZN2nn6socket8RecvFromEiPvmiP8sockaddrPj", "离线（剪）", long, h_sk_RecvFrom2, int s, void *b, unsigned long n, int f, void *a, unsigned *al) { (void)s; (void)b; (void)n; (void)f; (void)a; (void)al; return -1; }

@@ -32,6 +32,11 @@ the SDK's service-manager object null and crashed at `sdk+0xa0974`; that hook
 was removed. Do not bypass service initialization without also handling the
 actual service client.
 
+Offline socket waits preserve timeout behavior. Empty `Poll` and `Select`
+requests consume their requested timeout and return zero, while requests that
+contain descriptors still take the unavailable-network failure path. This
+prevents the game's offline networking threads from retrying in a tight loop.
+
 ## Validation
 
 The game's work folder is `<NSP folder>/01004AB00A260000-work`.

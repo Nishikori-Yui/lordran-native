@@ -6,7 +6,7 @@ endif
 B = build
 GAME_H = ../gen/$(GAME)/game_profile.h
 GINC = -I../gen/$(GAME) -I../../games/$(GAME)
-TESTS = t_padmap t_touch t_oe t_fs t_thread_leak t_fs_case t_audio t_audio_spsc t_swkbd t_altstack t_condvar t_condvar_old t_time t_log_timestamp t_log t_crash_log t_cheats t_hid_motion
+TESTS = t_padmap t_touch t_oe t_fs t_thread_leak t_fs_case t_audio t_audio_spsc t_swkbd t_altstack t_condvar t_condvar_old t_time t_log_timestamp t_log t_crash_log t_cheats t_hid_motion t_net_wait
 .DEFAULT_GOAL := run
 .PHONY: mac-cheats-test
 mac-cheats-test: $(B)/t_cheats_mac
@@ -33,6 +33,7 @@ $(GAME_H): ../../games/$(GAME)/game.tsv ../../games/game.py
 run: $(addprefix $(B)/,$(TESTS))
 	$(B)/t_cheats
 	$(B)/t_hid_motion
+	$(B)/t_net_wait
 	$(B)/t_touch
 	$(B)/t_oe 2>/dev/null
 	$(B)/t_fs 2>/dev/null
@@ -62,6 +63,8 @@ $(B)/t_cheats: t_cheats.c ../cheats.c ../cheats.h $(GAME_H) | $(B)
 	clang -O1 -g -Wall -Wextra -Werror $(GINC) -o $@ t_cheats.c ../cheats.c
 $(B)/t_hid_motion: t_hid_motion.c ../hle_hid.c ../dm_input.h ../dm_input_motion.h ../hle.h | $(B)
 	clang -O1 -g -Wall -Wno-unused-function $(GINC) -I.. -o $@ t_hid_motion.c
+$(B)/t_net_wait: t_net_wait.c ../hle_net.c ../hle_net_wait.h ../hle.h ../dm.h $(GAME_H) | $(B)
+	clang -O1 -g -Wall -Wextra -Werror -I.. $(GINC) -o $@ t_net_wait.c
 $(B)/t_padmap: t_padmap.c ../dm_padmap.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -o $@ t_padmap.c
 $(B)/t_touch: t_touch.c ../hle_touch.c ../front.h ../dm.h | $(B)
