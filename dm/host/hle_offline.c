@@ -101,23 +101,6 @@ HLE_FORCE("_ZN2nn7friends12AsyncContext7HasDoneEPb", "异步上下文：恒已�
 HLE_FORCE("_ZN2nn7friends14AddPlayHistoryERKNS_7account3UidERKNS0_26PlayHistoryRegistrationKeyERKNS0_15InAppScreenNameESA_", "游玩记录不登记（剪）",
           Result, h_fr_PlayHist2, const void *uid, const void *key, const void *a, const void *b) { (void)uid; (void)key; (void)a; (void)b; return RES_FAIL; }
 
-// ---------- ngc: newer SDK overloads (with bool). Always judged as no profanity ----------
-HLE_FORCE("_ZN2nn3ngc15ProfanityFilter10InitializeEPvmb", "敏感词过滤初始化；宿主无词库", Result, h_ngc_Init3, void *self, void *work, uint64_t sz, unsigned check) { (void)self; (void)work; (void)sz; (void)check; return RES_OK; }
-HLE_FORCE("_ZN2nn3ngc15ProfanityFilter19CheckProfanityWordsEPjjPPKDsm", "敏感词检查：全部无敏感词", Result, h_ngc_Check16, void *self, uint32_t *out, unsigned mask, const void **words, uint64_t n) {
-    (void)self; (void)mask; (void)words; for (uint64_t i = 0; out && i < n; i++) out[i] = 0; return RES_OK;
-}
-// Masking also goes through the filter's private work heap. The offline host
-// has no system word-list save, so bypass both text overloads instead of
-// entering the SDK with an uninitialized filter object.
-HLE_FORCE("_ZN2nn3ngc15ProfanityFilter24MaskProfanityWordsInTextEPiPtj", "敏感词替换：宿主无词库，不修改 UTF-16 文本", Result, h_ngc_Mask16, void *self, int *out, uint16_t *text, unsigned length) {
-    (void)self; (void)text; (void)length; if (out) *out = 0; return RES_OK;
-}
-HLE_FORCE("_ZN2nn3ngc15ProfanityFilter24MaskProfanityWordsInTextEPiPcj", "敏感词替换：宿主无词库，不修改 UTF-8 文本", Result, h_ngc_Mask8, void *self, int *out, char *text, unsigned length) {
-    (void)self; (void)text; (void)length; if (out) *out = 0; return RES_OK;
-}
-HLE_FORCE("_ZN2nn3ngc15ProfanityFilter11SetMaskModeENS1_8MaskModeE", "敏感词替换模式：离线过滤器忽略", void, h_ngc_SetMaskMode, void *self, int mode) { (void)self; (void)mode; }
-HLE_FORCE("_ZN2nn3ngc15ProfanityFilter8FinalizeEv", "敏感词过滤结束：宿主无词库", void, h_ngc_Finalize, void *self) { (void)self; }
-
 // ---------- err: error display applet. Only logged, no UI is shown ----------
 HLE_FORCE("_ZN2nn3err9ShowErrorENS0_9ErrorCodeE", "错误显示小程序；宿主只记日志", void, h_err_ShowCode, uint64_t code) { LOG("Guest requested error display: %04u-%04u", (unsigned)(code & 0xffffffff), (unsigned)(code >> 32)); }
 HLE_FORCE("_ZN2nn3err9ShowErrorERKNS0_18ErrorResultVariantE", "错误显示小程序；宿主只记日志", void, h_err_ShowVar, const void *v) { (void)v; LOG("Guest requested error display: ErrorResultVariant"); }
