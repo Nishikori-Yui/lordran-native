@@ -864,7 +864,7 @@ void mtl_drain(void) { present_drop_for_suspend(); mtl_present_flush(); mtl_init
 
 // ================= Render replay =================
 #include "../../host/front.h"
-static int g_red_once[87];
+static int g_red_once[88];
 #define RED_ONCE(k, ...) do { if (!g_red_once[k]++) DM_LOG_ERROR("metal", "" __VA_ARGS__); } while (0)
 // NVN vertex streams 0–15 → Metal vertex buffer slots: 0–13 go to 16–29 (30 is the constant fallback buffer), 14 and 15 to 14 and 15. Metal has only the 31 slots 0–30; translated shaders use only buffer(0) (the argument buffer),
 // and the host's own vertex functions read no vertex buffers. 13 Sentinels uses stream 15, and the old 16 + stream went out of range (Metal assertion: buffer index (31) must be < 31)
@@ -2499,13 +2499,18 @@ typedef struct { tex_t t; int ok; view_t v; int has_v; void *view; uint64_t view
                  void *alt, *alt_of; uint64_t alt_rid; uint8_t alt_type;   // alt: compatible view used when the shader's declared type differs from view (tex_fit), alt_of = the view it was built from
                  void *ar, *ar_of; uint64_t ar_rid; } treg_t;              // ar: the alpha-from-red view for the profile's alpha_from_red shaders (tex_alpha_red), ar_of = the view it was built from
 static treg_t *g_treg; static int g_ntreg;
-// Lock-free copy of texture ID → serial (the replay hot path only needs the serial: store lookahead index, binding set of the clear-only hoist): texture IDs are 20 bits, fixed 1M entries (BSS, only touched pages are used),
-// release write at registration, relaxed atomic read on the reader side, without entering g_rmu (the former h_ser locked and unlocked on every lookup, thousands of times per frame in the camp)
-static _Atomic uint64_t g_tser[1 << 20];
+enum { TEX_DESC_SIZE = 32, SAMP_DESC_SIZE = 32 };   // NVN_DEVICE_INFO_*_DESCRIPTOR_SIZE
+static nvn_hmap g_treg_pool = {.klen = sizeof(uintptr_t)};
+typedef struct { uintptr_t base; int n; } tex_pool_state;
+static tex_pool_state g_tpool;
+static uintptr_t tex_pool_base(const dpool_t *p) {
+    if (!p || !p->pool || !p->pool->mem || p->off < 0 || p->n <= 0 ||
+        (uint64_t)p->off > p->pool->size || (uint64_t)p->n * TEX_DESC_SIZE > p->pool->size - (uint64_t)p->off) return 0;
+    return (uintptr_t)p->pool->mem + (uint64_t)p->off;
+}
 // Dark Souls creates twelve sampler pools and switches them within a frame.
 // IDs are local to each pool. Key by descriptor address so overlapping views
 // and distinct memory-pool wrappers over the same storage share registrations.
-enum { SAMP_DESC_SIZE = 32 };   // NVN_DEVICE_INFO_SAMPLER_DESCRIPTOR_SIZE
 typedef struct { samp_par p; void *view; uint64_t rid; } sreg_t;
 static nvn_hmap g_sreg = {.klen = sizeof(uintptr_t)};
 static struct { uintptr_t base; int n; } g_spool;
@@ -2546,10 +2551,28 @@ static void treg_drop_views(treg_t *r) {
     treg_drop_ar(r);
 }
 static void treg_drop_pool_views(const void *pool) {
+    const pool_t *mp = (const pool_t *)pool;
     rmu_lock();
     for (int i = 0; i < g_ntreg; i++)
         if (g_treg[i].ok && (const void *)g_treg[i].t.pool == pool)
             treg_drop_views(&g_treg[i]);
+    uintptr_t *keys = malloc((size_t)g_treg_pool.n * sizeof *keys); size_t n = 0;
+    if (g_treg_pool.n && !keys) MDIE("texture registry cleanup allocation failed");
+    if (mp && mp->mem) {
+        uintptr_t lo = (uintptr_t)mp->mem;
+        for (uint32_t i = 0; i < g_treg_pool.cap; i++) if (g_treg_pool.vals[i]) {
+            uintptr_t key; memcpy(&key, g_treg_pool.keys + (size_t)i * g_treg_pool.klen, sizeof key);
+            if (key >= lo && key - lo < mp->size) keys[n++] = key;
+        }
+    }
+    for (size_t i = 0; i < n; i++) {
+        treg_t *r = nvn_hm_del(&g_treg_pool, &keys[i]);
+        if (r) { treg_drop_views(r); free(r); }
+    }
+    if (mp && mp->mem && g_tpool.base >= (uintptr_t)mp->mem && g_tpool.base - (uintptr_t)mp->mem < mp->size)
+        memset(&g_tpool, 0, sizeof g_tpool);
+    if (n) g_reg_gen++;
+    free(keys);
     rmu_unlock();
 }
 static unsigned treg_view_count(void) {
@@ -2580,6 +2603,10 @@ static void treg_drop_serial_locked(uint64_t serial) {
         treg_drop_views(r);
         g_treg_serial_drops++;
     }
+    for (uint32_t i = 0; i < g_treg_pool.cap; i++) if (g_treg_pool.vals[i]) {
+        treg_t *r = g_treg_pool.vals[i];
+        if (r->ok && r->t.serial == serial) { treg_drop_views(r); g_treg_serial_drops++; }
+    }
 }
 void mtl_reg_tex(int tid, const tex_t *t, const view_t *v) {
     int id_ = tid; if (id_ < 0) return;
@@ -2588,7 +2615,6 @@ void mtl_reg_tex(int tid, const tex_t *t, const view_t *v) {
     g_reg_gen++;
     treg_drop_views(&g_treg[id_]);
     g_treg[id_].ok = t != NULL; if (t) g_treg[id_].t = *t; g_treg[id_].has_v = v != NULL; if (v) g_treg[id_].v = *v;
-    if (id_ < (1 << 20)) atomic_store_explicit(&g_tser[id_], t ? t->serial : 0, memory_order_release);
     rmu_unlock();
     {   // DM_NVN_TEXINFO=WxH also logs registrations of textures of that size: the channel swizzle from the builder and from the view
         static int ti = -1; static uint32_t tw, th; static uint64_t n;
@@ -2598,6 +2624,18 @@ void mtl_reg_tex(int tid, const tex_t *t, const view_t *v) {
                  t->set_swz, t->swz & 7, t->swz >> 3 & 7, t->swz >> 6 & 7, t->swz >> 9 & 7, v != NULL, v ? v->set_swizzle : 0, v ? v->swz[0] : 0, v ? v->swz[1] : 0, v ? v->swz[2] : 0, v ? v->swz[3] : 0,
                  v ? v->set_format : 0, v ? v->format : 0);
     }
+}
+void mtl_reg_tex_pool(const dpool_t *pool, int tid, const tex_t *t, const view_t *v) {
+    uintptr_t base = tex_pool_base(pool);
+    if (!base || tid < 0 || tid >= pool->n) { RED_ONCE(87, "invalid texture registration: pool=%p tid=%d", (const void *)pool, tid); return; }
+    uintptr_t key = base + (uintptr_t)tid * TEX_DESC_SIZE;
+    rmu_lock();
+    treg_t *r = nvn_hm_get(&g_treg_pool, &key);
+    if (!r) { r = calloc(1, sizeof *r); if (!r) MDIE("texture registry allocation failed"); nvn_hm_put(&g_treg_pool, &key, r); }
+    g_reg_gen++;
+    treg_drop_views(r);
+    r->ok = t != NULL; if (t) r->t = *t; r->has_v = v != NULL; if (v) r->v = *v;
+    rmu_unlock();
 }
 void mtl_reg_samp(const dpool_t *pool, int sid, const samp_par *sp) {
     uintptr_t base = samp_pool_base(pool);
@@ -2624,6 +2662,15 @@ static MTLTextureType ttype(int target, int fallback) {
 // Out-of-pool texture ID = empty slot: the game itself uses GetSeparateTextureHandle(0xFFFFF) to get a handle and bind it to unused slots (measured call site main+0x1746820,
 // texture pool capacity 15256) and never registers that ID. Read 0 per D3D / empty-slot semantics (the same all-zero dummy textures as unbound), no failure; unregistered IDs inside the pool are still reported a failure
 static int g_tpool_n; static uint64_t g_stat_tex_oob;
+static treg_t *treg_current(int tid) {
+    if (tid < 0) return NULL;
+    if (g_tpool.base) {
+        if (tid >= g_tpool.n) return NULL;
+        uintptr_t key = g_tpool.base + (uintptr_t)tid * TEX_DESC_SIZE;
+        return nvn_hm_get(&g_treg_pool, &key);
+    }
+    return tid < g_ntreg ? &g_treg[tid] : NULL;
+}
 // NVN window origin. In lower-left mode (GL convention, NVN's default) NDC y = -1 lands on a render target's first memory row and window y grows with the row; Metal puts NDC y = +1 on the first row.
 // Viewport and scissor rectangles, fragment coordinates, copies and texture coordinates all address the same memory rows in both conventions, so only the direction inside the viewport differs:
 // lower-left draws get a viewport of negative height (and the opposite front-face winding), and the window image, stored bottom-up, is flipped at present (and in raw screenshots).
@@ -2633,9 +2680,10 @@ static _Atomic int g_origin_ll;
 void mtl_set_origin_lower_left(int on) { if (atomic_exchange(&g_origin_ll, on) != on) MLOG("Window origin: %s", on ? "bottom-left (GL; viewport, winding and presentation flipped)" : "top-left"); }
 void mtl_set_tex_pool_n(int n) { g_tpool_n = n; }
 static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
-    if (g_tpool_n && tid >= g_tpool_n) { if (!g_stat_tex_oob++) MLOG("Texture ID=%d exceeds pool capacity=%d; treating as empty slot and returning zero", tid, g_tpool_n); return nil; }
-    if (tid < 0 || tid >= g_ntreg || !g_treg[tid].ok) { RED_ONCE(10, "Unregistered texture ID: %d", tid); return nil; }
-    treg_t *rp = &g_treg[tid];
+    int n = g_tpool.base ? g_tpool.n : g_tpool_n;
+    if (n && tid >= n) { if (!g_stat_tex_oob++) MLOG("Texture ID=%d exceeds pool capacity=%d; treating as empty slot and returning zero", tid, n); return nil; }
+    treg_t *rp = treg_current(tid);
+    if (!rp || !rp->ok) { RED_ONCE(10, "Unregistered texture ID: %d", tid); return nil; }
     uint64_t sg = g_ser_gen, dg = nvn_dirty_now();   // Take the generations first and then look up: if a change happens in between, the next time must take the slow path
     if (rp->view && rp->view_ser == sg && rp->view_dirty == dg) return (__bridge id<MTLTexture>)rp->view;
     // Resolution can re-upload storage and clear this entry (and its aliases).
@@ -2679,7 +2727,8 @@ static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
 }
 // Hot-path object fetch: if the table entry is valid, return the table-held pointer directly (without ARC retain / autorelease), otherwise take the slow path to build / validate. Caller holds g_rmu.
 static inline __attribute__((always_inline)) void *tex_fast(int tid) {
-    if (tid > 0 && tid < g_ntreg && g_treg[tid].ok && g_treg[tid].view && g_treg[tid].view_ser == g_ser_gen && g_treg[tid].view_dirty == nvn_dirty_now()) return g_treg[tid].view;
+    treg_t *r = treg_current(tid);
+    if (r && r->ok && r->view && r->view_ser == g_ser_gen && r->view_dirty == nvn_dirty_now()) return r->view;
     return (__bridge void *)tex_by_id(tid);
 }
 // The texture type the shader declares differs from the one the descriptor gives: use a compatible view. Maxwell sample instructions carry their own dimension, and a non-array instruction reading a 2D array texture reads layer 0;
@@ -2692,8 +2741,9 @@ static id<MTLTexture> tex_fit(int tid, id<MTLTexture> t, MTLTextureType want, ui
     else if (want == MTLTextureTypeCube && have == MTLTextureType2DArray && t.arrayLength >= 6) ns = 6;
     else if (want == MTLTextureTypeCubeArray && have == MTLTextureType2DArray && t.arrayLength >= 6) ns = t.arrayLength / 6 * 6;
     else if (want == MTLTextureTypeCube && have == MTLTextureTypeCubeArray) ns = 6;   // a cube array read as a cube: the first cube
-    if (!ns || tid <= 0 || tid >= g_ntreg) { RED_ONCE(76, "Texture type mismatch: shader_type=%lu texture_type=%lu id=%d; binding unchanged", (unsigned long)want, (unsigned long)have, tid); return nil; }
-    treg_t *r = &g_treg[tid];
+    if (!ns || tid <= 0) { RED_ONCE(76, "Texture type mismatch: shader_type=%lu texture_type=%lu id=%d; binding unchanged", (unsigned long)want, (unsigned long)have, tid); return nil; }
+    treg_t *r = treg_current(tid);
+    if (!r) return nil;
     if (r->alt && r->alt_of == (__bridge void *)t && r->alt_type == (uint8_t)want) { *rid = r->alt_rid; return (__bridge id<MTLTexture>)r->alt; }
     if (r->alt) { defer_obj_unref((__bridge id)r->alt); CFRelease(r->alt); r->alt = r->alt_of = NULL; r->alt_rid = 0; }
     id<MTLTexture> v = [t newTextureViewWithPixelFormat:t.pixelFormat textureType:want levels:NSMakeRange(0, t.mipmapLevelCount) slices:NSMakeRange(0, ns) swizzle:t.swizzle];
@@ -2721,10 +2771,11 @@ static int afr_want(NvShader *sh) {
 static id<MTLTexture> tex_alpha_red(int tid, id<MTLTexture> t, uint64_t *rid) {
     MTLPixelFormat pf = t.pixelFormat; MTLTextureSwizzleChannels sw = t.swizzle;
     if (pf != MTLPixelFormatR8Unorm && pf != MTLPixelFormatR16Unorm && pf != MTLPixelFormatR16Float && pf != MTLPixelFormatR32Float) return nil;
-    if (sw.red != MTLTextureSwizzleRed || sw.green != MTLTextureSwizzleZero || sw.blue != MTLTextureSwizzleZero || sw.alpha != MTLTextureSwizzleOne || tid <= 0 || tid >= g_ntreg) return nil;
+    if (sw.red != MTLTextureSwizzleRed || sw.green != MTLTextureSwizzleZero || sw.blue != MTLTextureSwizzleZero || sw.alpha != MTLTextureSwizzleOne || tid <= 0) return nil;
     id<MTLTexture> base = t.parentTexture ? t.parentTexture : t;
     if (!(base.usage & MTLTextureUsageRenderTarget)) return nil;   // packaged and CPU-written textures are built without render-target usage
-    treg_t *r = &g_treg[tid];
+    treg_t *r = treg_current(tid);
+    if (!r) return nil;
     if (r->ar && r->ar_of == (__bridge void *)t) { *rid = r->ar_rid; return (__bridge id<MTLTexture>)r->ar; }
     treg_drop_ar(r);
     NSUInteger l0 = t.parentTexture ? t.parentRelativeLevel : 0, s0 = t.parentTexture ? t.parentRelativeSlice : 0;
@@ -2737,7 +2788,8 @@ static id<MTLTexture> tex_alpha_red(int tid, id<MTLTexture> t, uint64_t *rid) {
     *rid = r->ar_rid; return v;
 }
 static inline __attribute__((always_inline)) uint64_t tex_fast_rid(int tid, void **out) {
-    if (tid > 0 && tid < g_ntreg && g_treg[tid].ok && g_treg[tid].view && g_treg[tid].view_ser == g_ser_gen && g_treg[tid].view_dirty == nvn_dirty_now()) { if (out) *out = g_treg[tid].view; return g_treg[tid].view_rid; }
+    treg_t *r = treg_current(tid);
+    if (r && r->ok && r->view && r->view_ser == g_ser_gen && r->view_dirty == nvn_dirty_now()) { if (out) *out = r->view; return r->view_rid; }
     id<MTLTexture> t = tex_by_id(tid); if (out) *out = (__bridge void *)t; return t ? dm_m4_resource_id(t)._impl : 0;
 }
 static MTLSamplerAddressMode wrapm(int w) {
@@ -3392,10 +3444,11 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             uint64_t handle = b->kind == NVN_RB_TEXU ? ubo_handle(nvn_stage, reg, b->off) : reg < 128 ? S.tex[nvn_stage][reg] : 0;
             int tid = (int)(handle & 0xfffff);
             void *tv = NULL; uint64_t trid = tid ? tex_fast_rid(tid, &tv) : 0; __unsafe_unretained id<MTLTexture> t = (__bridge id<MTLTexture>)tv;
+            treg_t *tr = treg_current(tid);
             if (t && g_fb_n && g_fb_seq == g_draw_seq && nvn_stage == 1) for (int q = 0; q < g_fb_n; q++) if (t == g_fb_src[q]) { t = g_fb_use[q]; trid = g_fb_rid[q]; break; }   // same-pass feedback sampling: read the snapshot instead (see fb_prepare)
-            if (t && passdump() && tid < g_ntreg) PD("R %llu st%d ser=%llu", g_stat_pass, nvn_stage, g_treg[tid].t.serial);
+            if (t && passdump() && tr) PD("R %llu st%d ser=%llu", g_stat_pass, nvn_stage, tr->t.serial);
             if (bl) PD("B %llu st%d tex reg%d tid=%d %s ser=%llu fmt=%lu %lux%lux%lu view_lv=%lu+%lu view_sl=%lu array=%lu target=%lu swz=%d%d%d%d mtl=%p aid=%d kind=%u off=%u handle=%#llx",
-                       g_stat_pass, nvn_stage, reg, tid, t ? "real" : "dummy", t && tid < g_ntreg ? g_treg[tid].t.serial : 0ull,
+                       g_stat_pass, nvn_stage, reg, tid, t ? "real" : "dummy", t && tr ? tr->t.serial : 0ull,
                        (unsigned long)t.pixelFormat, (unsigned long)t.width, (unsigned long)t.height, (unsigned long)t.depth,
                        (unsigned long)(t.parentTexture ? t.parentRelativeLevel : 0), (unsigned long)t.mipmapLevelCount,
                        (unsigned long)(t.parentTexture ? t.parentRelativeSlice : 0), (unsigned long)t.arrayLength, (unsigned long)t.textureType, t ? (int)t.swizzle.red : 0, t ? (int)t.swizzle.green : 0, t ? (int)t.swizzle.blue : 0, t ? (int)t.swizzle.alpha : 0, (__bridge void *)(t.parentTexture ? t.parentTexture : t),
@@ -3418,7 +3471,8 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
         } else if (b->kind == NVN_RB_IMG) {   // Writable texture: NVN image slot r (BindImages) ↔ D3D u_r
             int tid = reg < 32 ? (int)(S.img[nvn_stage][reg] & 0xfffff) : 0;
             void *tv = NULL; uint64_t trid = tid ? tex_fast_rid(tid, &tv) : 0; __unsafe_unretained id<MTLTexture> t = (__bridge id<MTLTexture>)tv;
-            if (passdump()) PD("W %llu st%d reg%d tid=%d %s ser=%llu", g_stat_pass, nvn_stage, reg, tid, t ? "real" : "dummy", t && tid < g_ntreg ? g_treg[tid].t.serial : 0ull);
+            treg_t *tr = treg_current(tid);
+            if (passdump()) PD("W %llu st%d reg%d tid=%d %s ser=%llu", g_stat_pass, nvn_stage, reg, tid, t ? "real" : "dummy", t && tr ? tr->t.serial : 0ull);
             if (t && !(t.usage & MTLTextureUsageShaderWrite)) { RED_ONCE(32, "Image binding texture lacks shader-write usage: texture_id=%d", tid); t = nil; }
             if (!t) { t = dummy_img(b->dtt, b->dpf); trid = g_dummy_img_rid[b->dtt & 7][b->dpf & 3]; }   // Unbound: D3D semantics discard the write - write into a dedicated dummy texture so the set that reads 0 is not polluted
             slots[aid] = trid;
@@ -3426,8 +3480,9 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
         } else if (b->kind == NVN_RB_TBUF) {   // Typed buffer: the buffer texture (target BUFFER) in texture slot r
             int tid = reg < 128 ? (int)(S.tex[nvn_stage][reg] & 0xfffff) : 0;
             void *tv = NULL; uint64_t trid = tid ? tex_fast_rid(tid, &tv) : 0; __unsafe_unretained id<MTLTexture> t = (__bridge id<MTLTexture>)tv;
+            treg_t *tr = treg_current(tid);
             if (t && t.textureType != MTLTextureTypeTextureBuffer) { RED_ONCE(40, "Typed-buffer binding is not a buffer texture: texture_id=%d type=%lu", tid, (unsigned long)t.textureType); t = nil; }
-            if (bl) PD("B %llu st%d tbuf reg%d tid=%d %s ser=%llu", g_stat_pass, nvn_stage, reg, tid, t ? "real" : "dummy", t && tid < g_ntreg ? g_treg[tid].t.serial : 0ull);
+            if (bl) PD("B %llu st%d tbuf reg%d tid=%d %s ser=%llu", g_stat_pass, nvn_stage, reg, tid, t ? "real" : "dummy", t && tr ? tr->t.serial : 0ull);
             if (!t) { t = dummy_tbuf(b->dpf); trid = g_dummy_tbuf_rid[b->dpf & 3]; }
             slots[aid] = trid;
             USE(t, MTLResourceUsageRead);
@@ -3912,7 +3967,7 @@ static int draw_samples_rt(NvProg *pr) {   // Sampled attachments keep the origi
         for (int i = 0; i < sh->rf.nb; i++) { const nvn_rbind *b = &sh->rf.b[i]; uint64_t h;
             if (b->kind == NVN_RB_IMG) h = b->reg < 32 && sh->stage < 6 ? S.img[sh->stage][b->reg] : 0; else if (b->kind == NVN_RB_TEX || b->kind == NVN_RB_TBUF) h = b->reg < 128 && sh->stage < 6 ? S.tex[sh->stage][b->reg] : 0; else continue;
             int tid = (int)(h & 0xfffff); if (!tid) continue;
-            rmu_lock(); uint64_t ser = tid < g_ntreg && g_treg[tid].ok ? g_treg[tid].t.serial : 0; rmu_unlock();
+            rmu_lock(); treg_t *tr = treg_current(tid); uint64_t ser = tr && tr->ok ? tr->t.serial : 0; rmu_unlock();
             for (int j = 0; j < nr; j++) if (ser && ser == rs[j]) return 1; } }
     return 0;
 }
@@ -3937,7 +3992,13 @@ static int pass_ds_need(void) {
 // (character select page: grunge and particles both draw 28 / 27 level 0 + depth, with only levels 1 and 2 cleared in between).
 // Equivalence conditions (hoist only if all hold, otherwise leave as-is): the scan range has only draws, state and these clears, no copies / dispatches / texture clears / sub-lists; the cleared subresources (texture + level + layer)
 // are disjoint from this render pass's attachments; the cleared textures are neither on any current texture / image slot nor bound within the scan range (conservative: regardless of whether the program samples them); the scissor at the time of the clear covers the whole block (same requirement as executing at the original position)
-static uint64_t h_ser(uint64_t h) { int tid = (int)(h & 0xfffff); return tid ? atomic_load_explicit(&g_tser[tid], memory_order_relaxed) : 0; }
+static uint64_t h_ser(uint64_t h) {
+    int tid = (int)(h & 0xfffff); if (!tid || tid >= (1 << 20)) return 0;
+    int locked = !g_rmu_depth; if (locked) rmu_lock();
+    treg_t *r = treg_current(tid); uint64_t serial = r && r->ok ? r->t.serial : 0;
+    if (locked) rmu_unlock();
+    return serial;
+}
 // ---------- Store lookahead index: at the start of a submit do one linear scan in replay order and record events per texture; when a render pass ends, binary-search each attachment for "the first valid event afterwards" to decide ----------
 // Replaces the original "scan the whole remainder forward at every render pass end" (pass count x command count, 49 render passes per frame in camp). Cross-checked per attachment against the original scan: after 0 mismatches over the 17 pages of the screenshot gate + a camp run with about 340,000 attachment decisions (about 46,000 redundant), the original scan was removed.
 // Events (seq = replay sequence number): READ a draw / dispatch reads this texture per program reflection; ATT it is a current attachment at a draw; CLEAR cleared as a whole block while an attachment; COPY / CLRTEX either end of a copy / the cleared texture.
@@ -3993,6 +4054,10 @@ static void sdx_walk(const uint8_t *p, int depth) {
             case OP_BIND_TEX: case OP_BIND_IMG: { const p_bind_handles *b = a; bh_fresh(b); int base = h.op == OP_BIND_IMG ? 128 : 0, lim = h.op == OP_BIND_IMG ? 32 : 128;
                 if (b->stage < 6 && b->first >= 0 && b->first + b->n <= lim) for (int k = 0; k < b->n; k++) g_pp_slot[b->stage][base + b->first + k] = h_ser(b->h[k]);
                 break; }
+            case OP_SET_TEX_POOL: {
+                const dpool_t *pool = ((const p_set_pool *)a)->pool;
+                g_tpool.base = tex_pool_base(pool); g_tpool.n = g_tpool.base ? pool->n : 0;
+                break; }
             case OP_BIND_PROGRAM: g_pp_prog = ((const p_bind_program *)a)->prog; break;
             case OP_DRAW: case OP_DRAW_IDX: case OP_DISPATCH: {
                 if (h.op != OP_DISPATCH) seq_push(&g_drx_seq, &g_drx_n, &g_drx_cap, seq);
@@ -4020,6 +4085,7 @@ void mtl_sub_index(const uint64_t *h, int n) {   // Start of submit (hle_nvn.c Q
     g_xv_ntouch = 0; g_sdx_n = g_sdx_nop = 0; g_rtx_n = g_drx_n = 0; g_exec_seq = 0; g_sdx_ok = tbdr_on();
     if (!g_sdx_ok) { g_xv_n = 0; g_xv_block = 1; return; }   // Index unavailable: clear the ledger and add nothing in this submit (the next touch cannot be verified)
     g_xv_block = 0;
+    tex_pool_state saved_tex_pool = g_tpool;
     memset(g_sdx_hk, 0, sizeof g_sdx_hk); g_sdx_nb = 0;
     for (int i = 0; i < g_xv_n; i++) sdx_bucket(g_xv[i].ser, 1);   // Textures in the ledger enter the candidate set: otherwise, when one is only sampled and not used as an attachment in this submit, its read events are not indexed and the fallback cannot see them
     if (R.has_rt) { for (int k = 0; k < R.rt.n && k < 8; k++) if (R.rt.color[k]) sdx_bucket(R.rt.color[k]->serial, 1); if (R.rt.depth) sdx_bucket(R.rt.depth->serial, 1); }   // The targets at the start of the submit (the first draw may reopen the render pass without going through SetRenderTargets)
@@ -4027,6 +4093,7 @@ void mtl_sub_index(const uint64_t *h, int n) {   // Start of submit (hle_nvn.c Q
     for (int st = 0; st < 6; st++) { for (int k = 0; k < 128; k++) g_pp_slot[st][k] = S.tex[st][k] ? h_ser(S.tex[st][k]) : 0;
                                      for (int k = 0; k < 32; k++) g_pp_slot[st][128 + k] = S.img[st][k] ? h_ser(S.img[st][k]) : 0; }
     for (int i = 0; i < n && g_sdx_ok; i++) sdx_walk((const uint8_t *)h[i], 0);
+    g_tpool = saved_tex_pool;
     if (!g_sdx_ok) return;
     // Counting sort into buckets: events are appended in sequence-number order, and within the same sequence number READ precedes ATT (the same draw is judged for reads first, then attachments), so after a stable scatter each bucket is ordered
     memset(g_sdx_bcnt, 0, (g_sdx_nb + 1) * sizeof *g_sdx_bcnt);
@@ -4226,10 +4293,10 @@ static int defer_on(void) {
     if (g_defer_ab < 0) { g_defer_ab = 0; g_defer_ab_on = 0; }
     return tbdr_on() && (g_defer_ab || g_defer_ab_on); }
 static int defer_handle_sub(uint64_t h, const p_set_rt *r, int k, int cover) {
-    int tid = (int)(h & 0xfffff); if (!tid || tid >= g_ntreg || !g_treg[tid].ok) return 0;
-    uint64_t ser; int lv, sl; rt_sub(r, k, &ser, &lv, &sl); if (!ser || g_treg[tid].t.serial != ser) return 0;
-    if (!g_treg[tid].has_v || !g_treg[tid].v.set_levels) return cover;
-    view_t v = g_treg[tid].v; int n = v.nlevels > 0 ? v.nlevels : 1;
+    int tid = (int)(h & 0xfffff); treg_t *tr = treg_current(tid); if (!tid || !tr || !tr->ok) return 0;
+    uint64_t ser; int lv, sl; rt_sub(r, k, &ser, &lv, &sl); if (!ser || tr->t.serial != ser) return 0;
+    if (!tr->has_v || !tr->v.set_levels) return cover;
+    view_t v = tr->v; int n = v.nlevels > 0 ? v.nlevels : 1;
     return lv >= v.base_level && lv < v.base_level + n && (!v.set_layers || (sl >= v.min_layer && sl < v.min_layer + (v.nlayers > 0 ? v.nlayers : 1)));
 }
 static int defer_prog_hits(const prog_t *pg, uint64_t tex[6][128], uint64_t img[6][32], const p_set_rt *r, int color_only, int cover) {
@@ -4632,8 +4699,8 @@ static int zskip_fact_for(const char *key, zskip_fact *out) {
     return 0;
 }
 static int zskip_view_zero(int tid) {
-    if (!tid || tid >= g_ntreg || !g_treg[tid].ok) return 0;
-    treg_t *r = &g_treg[tid]; const tex_t *t = &r->t; int lv0 = r->has_v && r->v.set_levels ? r->v.base_level : 0;
+    treg_t *r = treg_current(tid); if (!tid || !r || !r->ok) return 0;
+    const tex_t *t = &r->t; int lv0 = r->has_v && r->v.set_levels ? r->v.base_level : 0;
     int nl = r->has_v && r->v.set_levels && r->v.nlevels > 0 ? r->v.nlevels : 1;
     int sl0 = r->has_v && r->v.set_layers ? r->v.min_layer : 0;
     int ns = r->has_v && r->v.set_layers && r->v.nlayers > 0 ? r->v.nlayers : 1;
@@ -4983,7 +5050,7 @@ static void fb_prepare(NvProg *pr) {
     NvShader *fs = pr->sh[1];
     for (int i = 0; i < fs->rf.nb && g_fb_n < 4; i++) { const nvn_rbind *b = &fs->rf.b[i]; if (b->kind != NVN_RB_TEX || b->reg >= 128) continue;
         int tid = (int)(S.tex[1][b->reg] & 0xfffff); if (!tid) continue;
-        rmu_lock(); uint64_t ser = tid < g_ntreg && g_treg[tid].ok ? g_treg[tid].t.serial : 0; rmu_unlock();
+        rmu_lock(); treg_t *tr = treg_current(tid); uint64_t ser = tr && tr->ok ? tr->t.serial : 0; rmu_unlock();
         if (!ser) continue;
         for (int k = 0; k < R.rt.n && k < 8 && g_fb_n < 4; k++) { if (!R.rt.color[k] || R.rt.color[k]->serial != ser) continue;
             uint64_t aser; int lv, sl; rt_sub(&R.rt, k, &aser, &lv, &sl);
@@ -5054,7 +5121,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
             if (bloomq_target(&tgt, &lv, &sl) && R.rt.color[0]) {
                 uint64_t h = 0; const tex_t *st = NULL; int cbuf = 0;
                 for (int i = 0; i < f->rf.nb; i++) { nvn_rbind *b = &f->rf.b[i];
-                    if (b->kind == NVN_RB_TEX && b->reg < 128 && !h) { h = S.tex[1][b->reg]; int tid = (int)(h & 0xfffff); if (tid > 0 && tid < g_ntreg && g_treg[tid].ok) st = &g_treg[tid].t; }
+                    if (b->kind == NVN_RB_TEX && b->reg < 128 && !h) { h = S.tex[1][b->reg]; int tid = (int)(h & 0xfffff); treg_t *tr = treg_current(tid); if (tid > 0 && tr && tr->ok) st = &tr->t; }
                     if (b->kind == NVN_RB_SAMPT && b->reg < 128) g_bloomq.samp_h = S.tex[1][b->reg] >> 20;
                     if (b->kind == NVN_RB_SAMP && b->reg < 128) g_bloomq.samp_h = S.samp[1][b->reg] >> 20;
                     if (b->kind == NVN_RB_CBUF && !cbuf) cbuf = ubo_float(1, (uint16_t)(b->reg << 8), &g_bloomq.threshold);   // c7[0].x
@@ -6088,7 +6155,17 @@ void mtl_exec(const uint8_t *p) {
                 rmu_unlock();
                 PD("S sampler_pool=%#llx n=%d", (unsigned long long)base, n);
                 break; }
-            case OP_BARRIER: case OP_SET_TEX_POOL: break;
+            case OP_SET_TEX_POOL: {
+                const dpool_t *pool = ((const p_set_pool *)a)->pool;
+                uintptr_t base = tex_pool_base(pool); int n = base ? pool->n : 0;
+                rmu_lock();
+                if (g_tpool.base != base || g_tpool.n != n) {
+                    g_tpool.base = base; g_tpool.n = n; args_dirty_all();
+                }
+                rmu_unlock();
+                PD("S texture_pool=%#llx n=%d", (unsigned long long)base, n);
+                break; }
+            case OP_BARRIER: break;
             default: break;
         }
         p += h.size;

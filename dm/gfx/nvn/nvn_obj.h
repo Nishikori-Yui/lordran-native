@@ -144,7 +144,7 @@ void mtl_present_wait(uint64_t ticket);                    // Wait until the pre
 void mtl_present_flush(void);                              // Wait until all enqueued presents have been processed
 void mtl_present_test_stall(uint64_t ns);                  // Unit test: extra pause in ns before each present on the present thread
 int mtl_display_hz(void);                                   // Maximum refresh rate of the screen (Hz) when there is a window, 0 without a window
-void mtl_set_tex_pool_n(int n);                            // Texture descriptor pool capacity: texture IDs outside the pool are treated as 'empty slots' (read 0)
+void mtl_set_tex_pool_n(int n);                            // Default texture descriptor pool capacity before a command buffer selects one
 // Timing instrumentation (shared by Mac / iOS): submissions are tagged with the frame number; GPU time = sum of GPUEnd−GPUStart over all of that frame's command buffers, readable only after all complete (otherwise −1)
 void mtl_set_frame(uint64_t f);
 void mtl_ub_present(double iv_ms);   // Same-process alternating measurement (DM_NVN_UB): the present thread reports the actual present interval every frame
@@ -176,7 +176,8 @@ void mtl_create_stats(uint64_t *lib, uint64_t *pso);   // Cumulative: number of 
 // CPU texture read: starting at level / layer0, written into dst with row / img byte strides
 void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNcopyRegion *r, uint8_t *dst, size_t row, size_t img);
 // Descriptor pool registration (texture ID / sampler ID → object snapshot), program release
-void mtl_reg_tex(int id, const tex_t *t, const view_t *v);
+void mtl_reg_tex(int id, const tex_t *t, const view_t *v); // Legacy registration for tests and code without a selected pool
+void mtl_reg_tex_pool(const dpool_t *pool, int id, const tex_t *t, const view_t *v);
 // textures written by WriteTexels (recorded by serial): the replay layer treats them like packaged textures, uploaded from guest memory and re-uploaded on dirty pages
 void mtl_tex_cpu_written(const tex_t *t);
 // A program's per-stage shader key (hle_nvn.c): the first 8 bytes of sha256(first 0x880 bytes of the control section (its own length when shorter) + code area). Computed at SetShaders (NVN lets the caller free the control section once it returns, and Unity does);
