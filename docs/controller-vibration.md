@@ -401,6 +401,51 @@ the game called `nn::hid`, and an OS-accepted report still does not prove that
 an actuator moved. The variable is intentionally opt-in and has no effect
 when unset.
 
+## Game validation procedure
+
+Use a separate run for input evidence and for the synthetic haptics sequence.
+This keeps a diagnostic pulse from being mistaken for a game-generated
+vibration request.
+
+1. Build and launch the reviewed Mac host with the normal game environment,
+   adding these two optional paths:
+
+   ```sh
+   DM_CONTROLLER_INPUT_LOG=/tmp/nxnative-controller-input.jsonl
+   DM_HID_RECEIPT_LOG=/tmp/nxnative-npad-receipt.jsonl
+   ```
+
+2. Connect only the controller under test, or use the Controller menu to lock
+   the selected pad. Move the left stick up, down, left and right, then repeat
+   with the right stick. Press one face button and one shoulder button. Keep
+   keyboard input idle during this capture.
+3. After the game exits, compare the traces:
+
+   ```sh
+   python3 dm/tools/analyze_controller_trace.py \
+     --controller /tmp/nxnative-controller-input.jsonl \
+     --receipt /tmp/nxnative-npad-receipt.jsonl
+   ```
+
+   Save the analyzer output with the tested commit and controller transport.
+   `input_reached_game` proves the host-to-HLE-to-game read path for at least
+   one nonzero sample. The other verdicts identify the first boundary that
+   still lacks evidence.
+4. For output-only validation, close the game and start a separate windowed
+   run with `DM_HAPTICS_TEST=1`. Record controller discovery, backend
+   preparation, ACK or Core Haptics acceptance, stop behavior and the physical
+   result separately. Then repeat with a game-generated vibration event.
+5. For each transport, record USB or Bluetooth, macOS version, controller
+   model, tested commit, whether the controller was selected automatically or
+   manually, and whether the observed result was source capture, host
+   publication, game receipt, OS acceptance or physical feedback. Do not
+   collapse these into a single "works" result.
+
+The minimum useful evidence bundle is the two JSONL files, the analyzer
+summary, the sanitized runtime output containing the vibration witnesses, and
+the human observation of the controller. Keep the original files private and
+share only a sanitized excerpt.
+
 ## Timing and synthesis
 
 The synthesis stage should operate on timestamped frames, not on UI callback
@@ -570,6 +615,10 @@ or incomparable timestamp rather than a zero-latency result.
 
 ### 2026-10-23
 
+- Added a reusable game-validation procedure covering separate input and
+  synthetic-haptics runs, controller selection, four-direction stick capture,
+  trace analysis and evidence labeling by layer. This is the handoff
+  procedure for the first connected NS Pro/Switch Pro/DualSense session.
 - Implemented the previously documented `DM_HID_RECEIPT_LOG` path. Actual
   `GetNpadState` returns can now be recorded as bounded JSONL evidence with
   read/publish timestamps, negotiated style, sampling number, buttons, both
