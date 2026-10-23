@@ -46,12 +46,23 @@ int main(void) {
     fill(&s, NPAD_NO1, STYLE_FULLKEY); assert(s.attributes && !s.rx && !s.ry);
     dm_pad_set(0, 0, 0, 2345, -3456);
     fill(&s, NPAD_NO1, STYLE_JOYDUAL);
-    assert(s.attributes && s.rx == 2345 && s.ry == -3456);
+    assert(!s.attributes);
     dm_pad_set(0, -4567, 5678, 2345, -3456);
     fill(&s, NPAD_NO1, STYLE_FULLKEY);
     assert(s.attributes && s.lx == -4567 && s.ly == 5678 &&
            s.rx == 2345 && s.ry == -3456);
     fill(&s, NPAD_NO1, STYLE_JOYDUAL);
+    assert(!s.attributes);
+    h_hid_SetStyles(STYLE_JOYDUAL);
+    assert(h_hid_GetStyle(&handle) == STYLE_JOYDUAL);
+    fill(&s, NPAD_NO1, STYLE_JOYDUAL);
+    assert(s.attributes && s.lx == -4567 && s.ly == 5678 &&
+           s.rx == 2345 && s.ry == -3456);
+    fill(&s, NPAD_NO1, STYLE_FULLKEY);
+    assert(!s.attributes);
+    h_hid_SetStyles(STYLE_FULLKEY | STYLE_JOYDUAL);
+    assert(h_hid_GetStyle(&handle) == STYLE_FULLKEY);
+    fill(&s, NPAD_NO1, STYLE_FULLKEY);
     assert(s.attributes && s.lx == -4567 && s.ly == 5678 &&
            s.rx == 2345 && s.ry == -3456);
     dm_pad_set(0, 0, 0, 0, 0);

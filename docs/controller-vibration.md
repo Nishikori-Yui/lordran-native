@@ -513,7 +513,7 @@ or incomparable timestamp rather than a zero-latency result.
 | DualSense Core Haptics | Independent handle channels plus combined/default-locality fallback are implemented; iOS recreates its player after unexpected engine stops; parameter updates are currently the same combined spectrum on both Mac handles | Start, update, stop, recovery, locality behavior, and actual feedback on USB and Bluetooth |
 | DualSense raw HID | Research only; public reference describes conventional motor fields and transport-specific report framing | Only implement if Core Haptics device tests expose a concrete gap; then validate USB/Bluetooth framing and physical output independently |
 | Switch Pro raw HID | Four-field encoder, report-ID-inclusive 10-byte rumble frame, 64-byte rumble-enable report, asynchronous serialized writes, owned callback buffers, stop-priority/latest-frame queueing, per-device completion generations, dual actuator payload, packet counter, low-band range clamp, ACK/NACK parsing, retry throttling, descriptor-size boundary handling, and disconnected-result classification are unit-tested | Physical USB/Bluetooth rumble, callback timing, ACK behavior, and unplug/reconnect recovery |
-| NS Pro JoyDual input | Selected host axes are published through both FullKey and JoyDual layouts; Mac promotes a recognized Nintendo pad over other current controllers, prevents non-Nintendo input from stealing it, and offers explicit selection lock; HLE axis forwarding and selection-policy tests pass | Confirm both sticks and buttons in the running game |
+| NS Pro input | The HLE reports one negotiated active style: FullKey for a normal Pro Controller, or JoyDual only when the game supports no FullKey path; the selected Mac axes are forwarded through that style, Nintendo pads are preferred over other current controllers, and explicit selection locks are available | Confirm both sticks and buttons in the running game |
 | Low/high frequency preservation | Preserved through HLE and encoded natively by Switch raw HID; both Core Haptics paths map amplitude-weighted log-frequency to perceptual sharpness | Compare captured source parameters with rendered results on hardware; calibrate per device |
 | Timing and waveform synthesis | Sequence/timestamp capture and bounded ordered delivery are implemented; timestamps schedule inter-frame updates with a 100 ms step cap; no sample waveform is reconstructed | Measure queue latency and fidelity, then decide whether interpolation or waveform reconstruction is needed |
 | Background and disconnect | Lifecycle stop code is implemented | Device and scene transition test |
@@ -647,6 +647,14 @@ or incomparable timestamp rather than a zero-latency result.
 - Rebuilt the current macOS host to a temporary output after the disconnect
   handling change. Re-ran the four focused host tests, the iOS diagnostics and
   controller-axis tests, and the Simulator UI harness build; all passed.
+- Follow-up to the NS Pro stick report: `GetNpadStyleSet` now returns one
+  negotiated active style instead of the `FullKey | JoyDual` union. A normal
+  Pro Controller uses `FullKey`; a game that only supports `JoyDual` receives
+  that style and the same host axes through its JoyDual state. The Mac input
+  callback now consumes the coherent `GCExtendedGamepad` sample supplied by
+  the callback itself. The HLE regression covers FullKey, JoyDual-only and
+  mixed-style negotiation. A connected-controller game run is still required
+  to prove the two physical sticks.
 - Added a reusable integration checklist and clarified the source/output
   boundary: this title's `VibrationValue` is already four floats, so the host
   encodes it for Switch HID rather than decoding a raw HD Rumble byte stream.

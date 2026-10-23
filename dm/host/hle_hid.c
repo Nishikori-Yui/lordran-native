@@ -144,12 +144,17 @@ void hid_keys_init(void) {
 
 static uint32_t connected_id(void) { return dm_opmode() == 0 ? NPAD_HANDHELD : NPAD_NO1; }
 uint32_t hle_hid_connected_npad(void) { return connected_id(); }   // nfp's NFC device sits on this controller (hle_sdk16.c)
+static uint32_t g_styles_supported = 0xffffffffu;
 static uint32_t style_of(uint32_t id) {
     if (id != connected_id()) return 0;
-    // Some titles read a normal wireless pad through the JoyDual state even
-    // when the physical device is a Pro Controller. Publish the same host
-    // state through both standard layouts so that path does not discard axes.
-    return id == NPAD_HANDHELD ? STYLE_HANDHELD : STYLE_FULLKEY | STYLE_JOYDUAL;
+    if (id == NPAD_HANDHELD) return STYLE_HANDHELD;
+    // A real Switch Pro reports one active style. Returning a bitwise union
+    // makes titles that select their reader by equality skip both paths. Use
+    // the game's negotiated preference when it is available, retaining
+    // FullKey as the normal Pro Controller style.
+    if (g_styles_supported & STYLE_FULLKEY) return STYLE_FULLKEY;
+    if (g_styles_supported & STYLE_JOYDUAL) return STYLE_JOYDUAL;
+    return STYLE_FULLKEY;
 }
 static int32_t ax(uint64_t v, int i) { return (int16_t)(v >> (16 * i)); }
 static int32_t pick(int32_t a, int32_t b) { return (a < 0 ? -a : a) >= (b < 0 ? -b : b) ? a : b; }   // whichever of the two paths is deflected more
@@ -200,7 +205,6 @@ HLE_FORCE("_ZN2nn3hid16GetDebugPadStateEPNS0_13DebugPadStateE", "Development con
     memset(out, 0, 32); out[0] = atomic_fetch_add(&sample, 1) + 1;
 }
 HLE_FORCE("_ZN2nn3hid22SetSupportedNpadIdTypeEPKjm", "支持的手柄号；宿主固定", void, h_hid_SetIds, const uint32_t *ids, uint64_t n) { (void)ids; (void)n; }
-static uint32_t g_styles_supported = 0xffffffffu;
 HLE_FORCE("_ZN2nn3hid24SetSupportedNpadStyleSetENS_4util10BitFlagSetILi32ENS0_12NpadStyleTagEEE", "支持的手柄样式；宿主记下，按它选报的样式", void, h_hid_SetStyles, uint32_t styles) {
     if (styles != g_styles_supported) LOG("Supported controller styles: %#x", styles); g_styles_supported = styles; }
 HLE_FORCE("_ZN2nn3hid15GetNpadStyleSetERKj", "手柄样式查询；跟 DM_OPMODE 走", uint32_t, h_hid_GetStyle, const uint32_t *id) { return style_of(*id); }

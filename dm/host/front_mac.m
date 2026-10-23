@@ -566,10 +566,11 @@ static void pad_refresh(void) {
                             pad_controller_kind(source), g_pad_controller != nil,
                             g_pad_controller_selection_locked))
                         pad_select_controller(source);
-                    // Read from the selected controller's current wrapper. A
-                    // stale callback wrapper must not erase valid stick input.
+                    // The callback wrapper contains the coherent sample that
+                    // caused this event. Read it directly while the source is
+                    // still selected; the 60 Hz poll handles idle samples.
                     if (source == g_pad_controller)
-                        pad_read(source.extendedGamepad);
+                        pad_read(callbackGamepad ?: source.extendedGamepad);
                 };
                 if (NSThread.isMainThread) publishInput();
                 else dispatch_async(dispatch_get_main_queue(), publishInput);
