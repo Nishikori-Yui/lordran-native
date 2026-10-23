@@ -2,7 +2,6 @@
 // Cuts: nifm reports no network; socket only hooks up Initialize (returns success, creates no session), the rest of socket/ssl/friends are hooked up as failures when they come into use.
 #include "hle.h"
 #include "hle_net_wait.h"
-#include <limits.h>
 
 HLE_FORCE("_ZN2nn6socket10InitializeERKNS0_6ConfigE", "连 bsd 套接字服务；离线，不建会话（剪）", Result, h_socket_Initialize, const void *cfg) { (void)cfg; return RES_OK; }
 HLE_FORCE("_ZN2nn4nifm10InitializeEv", "连 nifm 网络管理服务；离线（剪）", Result, h_nifm_Initialize, void) { return RES_OK; }
@@ -40,15 +39,7 @@ SKF("_ZN2nn6socket4PollEPNS0_6PollFdEmi", h_sk_Poll, void *f, unsigned long n, i
 }
 SKF("_ZN2nn6socket6SelectEiPNS0_5FdSetES2_S2_PNS0_7TimeValE", h_sk_Select, int n, void *r, void *w, void *e, void *t) {
     (void)r; (void)w; (void)e;
-    if (n <= 0 && t) {
-        struct timeval tv;
-        memcpy(&tv, t, sizeof tv);
-        if (tv.tv_sec >= 0 && tv.tv_usec >= 0 && tv.tv_usec < 1000000) {
-            uint64_t ms = (uint64_t)tv.tv_sec * 1000 + (uint64_t)(tv.tv_usec + 999) / 1000;
-            dm_net_wait_timeout_ms(ms > INT_MAX ? INT_MAX : (int)ms);
-            return 0;
-        }
-    }
+    if (dm_net_empty_select(n, t) == 0) return 0;
     return sk_fail();
 }
 SKF("_ZN2nn6socket7EventFdEmNS0_12EventFdFlagsE", h_sk_EventFd, unsigned long v, int f) { (void)v; (void)f; return sk_fail(); }
@@ -75,7 +66,7 @@ SKF("nnsocketGetSockName", h_nsk_GetSockName, int s, void *a, unsigned *n) { (vo
 SKF("nnsocketGetSockOpt", h_nsk_GetSockOpt, int s, int l, int o, void *v, unsigned *n) { (void)s; (void)l; (void)o; (void)v; (void)n; return sk_fail(); }
 SKF("nnsocketSetSockOpt", h_nsk_SetSockOpt, int s, int l, int o, const void *v, unsigned n) { (void)s; (void)l; (void)o; (void)v; (void)n; return sk_fail(); }
 SKF("nnsocketFcntl", h_nsk_Fcntl, int s, int c) { (void)s; (void)c; return sk_fail(); }
-SKF("nnsocketPoll", h_nsk_Poll, void *f, unsigned long n, int t) { (void)f; (void)n; (void)t; return sk_fail(); }
+SKF("nnsocketPoll", h_nsk_Poll, void *f, unsigned long n, int t) { return h_sk_Poll(f, n, t); }
 SKF("nnsocketResolverGetOption", h_nsk_ResGet, void *o, int k) { (void)o; (void)k; return sk_fail(); }
 SKF("nnsocketResolverSetOption", h_nsk_ResSet, const void *o) { (void)o; return sk_fail(); }
 HLE_FORCE("nnsocketRecv", "bsd 套接字服务（剪）", long, h_nsk_Recv, int s, void *b, unsigned long n, int f) { (void)s; (void)b; (void)n; (void)f; return sk_fail(); }

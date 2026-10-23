@@ -58,6 +58,11 @@ HLE_FORCE("_ZN2nn6socket4PollEP6pollfdmi", "离线：空等待遵守 timeout；�
     if (!n) { dm_net_wait_timeout_ms(t); return 0; }
     return -1;
 }
+HLE_FORCE("_ZN2nn6socket6SelectEiP6fd_setS2_S2_P7timeval", "Offline empty select honors the guest timeout", int, h_sk_SelectLegacy,
+          int n, void *r, void *w, void *e, const void *timeout) {
+    (void)r; (void)w; (void)e;
+    return dm_net_empty_select(n, timeout);
+}
 HLE_FORCE("_ZN2nn6socket6SendToEiPKvmiPK8sockaddrj", "离线（剪）", long, h_sk_SendTo, int s, const void *b, unsigned long n, int f, const void *a, unsigned al) { (void)s; (void)b; (void)n; (void)f; (void)a; (void)al; return -1; }
 HLE_FORCE("_ZN2nn6socket6SendToEiPKvmNS0_7MsgFlagEPKNS0_8SockAddrEj", "离线（剪）", long, h_sk_SendTo2, int s, const void *b, unsigned long n, int f, const void *a, unsigned al) { (void)s; (void)b; (void)n; (void)f; (void)a; (void)al; return -1; }
 HLE_FORCE("_ZN2nn6socket8RecvFromEiPvmiP8sockaddrPj", "离线（剪）", long, h_sk_RecvFrom2, int s, void *b, unsigned long n, int f, void *a, unsigned *al) { (void)s; (void)b; (void)n; (void)f; (void)a; (void)al; return -1; }

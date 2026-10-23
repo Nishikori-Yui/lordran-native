@@ -6,7 +6,7 @@ endif
 B = build
 GAME_H = ../gen/$(GAME)/game_profile.h
 GINC = -I../gen/$(GAME) -I../../games/$(GAME)
-TESTS = t_padmap t_touch t_oe t_fs t_thread_leak t_fs_case t_audio t_audio_spsc t_swkbd t_altstack t_condvar t_condvar_old t_time t_log_timestamp t_log t_crash_log t_cheats t_hid_motion t_net_wait
+TESTS = t_padmap t_touch t_oe t_fs t_thread_leak t_fs_case t_audio t_audio_spsc t_swkbd t_altstack t_condvar t_condvar_old t_time t_log_timestamp t_log t_crash_log t_cheats t_hid_motion t_net_wait t_net_wait_legacy
 .DEFAULT_GOAL := run
 .PHONY: mac-cheats-test
 mac-cheats-test: $(B)/t_cheats_mac
@@ -34,6 +34,7 @@ run: $(addprefix $(B)/,$(TESTS))
 	$(B)/t_cheats
 	$(B)/t_hid_motion
 	$(B)/t_net_wait
+	$(B)/t_net_wait_legacy
 	$(B)/t_touch
 	$(B)/t_oe 2>/dev/null
 	$(B)/t_fs 2>/dev/null
@@ -100,3 +101,6 @@ $(B)/t_oe: t_oe.c ../hle_oe.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_oe.c
 $(B)/t_time: t_time.c ../hle_time.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. $(GINC) -o $@ t_time.c
+
+$(B)/t_net_wait_legacy: t_net_wait_legacy.c ../hle_offline.c ../hle_net_wait.h ../hle.h $(GAME_H) | $(B)
+	clang -O1 -g -Wall -Wextra -Werror -I.. $(GINC) -o $@ t_net_wait_legacy.c
