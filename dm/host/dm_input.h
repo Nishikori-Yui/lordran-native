@@ -37,6 +37,7 @@ void dm_vibration_set_enabled(int enabled);
 // Fields read_start_ns/read_end_ns/publish_ns use the same host now_ns(); a read interval that spans a publish is recorded as evidence, not force-matched to that publish.
 // State changes + at most one activity witness per second, limit_reached after 1024 entries; no file is written when the environment variable is not set.
 // Each record includes id, requested/active style, sampling, buttons, four axes and attributes; front-end output is not treated as received.
+// Mac-only DM_CONTROLLER_INPUT_LOG=<writable JSONL path> records the selected GameController callback/poll samples before the game reads them. It is bounded and state-change/one-second rate-limited like the Npad receipt log.
 // No new line does not prove that a blank touch point was read; a valid connection / sampling activity / evidence from the original UI and command packets is required; the log has IO overhead and is not used for timing.
 
 // Private skill-aim-v1: takes only paired received samples of the right axis that GetNpad has actually returned, not values the front end has not yet had consumed.

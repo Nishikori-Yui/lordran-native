@@ -512,6 +512,15 @@ that the game reached the HLE state-return path; it does not prove that the
 player physically moved a stick or that the front-end callback was the source
 of the returned state.
 
+For the preceding macOS front-end boundary, set
+`DM_CONTROLLER_INPUT_LOG` to another writable JSONL path. It records the
+selected GameController callback or 60 Hz poll sample after axis normalization
+and immediately around the `dm_pad_set` publication, including the recognized
+controller kind, buttons and four axes. It uses the same state-change and
+one-second activity limits with a 1024-record cap. Comparing the two files
+shows whether a nonzero NS Pro sample was published but never returned by
+the game's Npad read.
+
 The first successful Core Haptics parameter submission now records
 `source_to_accept_ms`; the first successful raw Switch output callback records
 `source_to_completion_callback_ms`. Both are measured from the captured frame's
@@ -526,7 +535,7 @@ or incomparable timestamp rather than a zero-latency result.
 |---|---|---|
 | HID single and batch values | Four-field forwarding, handle filtering, sequence, and timestamp are implemented; focused tests pass (2026-10-23) | In-game single/batch dispatch and physical stop behavior |
 | Shared dual-band normalization | `dm_vibration_bands_from_frame` gives Mac Core Haptics, iOS Core Haptics and Switch raw HID the same finite amplitude/frequency inputs; boundary tests pass | Compare source values with each backend's accepted/rendered values on hardware |
-| Runtime input/vibration evidence | Rate-limited HLE source witnesses distinguish guest capture from renderer/HID evidence; optional Npad receipt JSONL records actual game reads; Core Haptics/raw HID parameter-submission witnesses include frame sequence and timestamp; first output witnesses include host/OS latency; stale handles are rejected after capability loss. API acceptance is not physical actuator evidence. | Capture one in-game record containing Npad receipt, vibration source capture, renderer acceptance, measured host/OS latency and the physical test result |
+| Runtime input/vibration evidence | Rate-limited front-end input and HLE Npad receipt JSONL records distinguish GameController publication from actual game reads; HLE vibration witnesses distinguish guest capture from renderer/HID evidence; Core Haptics/raw HID parameter-submission witnesses include frame sequence and timestamp; first output witnesses include host/OS latency; stale handles are rejected after capability loss. API acceptance is not physical actuator evidence. | Capture one in-game record containing both input files, vibration source capture, renderer acceptance, measured host/OS latency and the physical test result |
 | Mac host build | Isolated full host link passes again during the 2026-10-23 review; an earlier isolated smoke run reached normal rendering and shut down cleanly; existing Metal/compiler warnings remain | Launch this exact build with a connected controller and validate gameplay |
 | iOS controller UI build | Simulator UI harness compiles; app-settings and controller mapping tests pass (2026-10-23) | Physical controller test |
 | iOS built-in haptics | Device-local Core Haptics engine is hardware-gated and selected only when controller haptics are unavailable; one combined intensity/sharpness output is implemented | Physical iOS-device start/update/stop, background transition and perceived strength/frequency comparison |
@@ -552,6 +561,11 @@ or incomparable timestamp rather than a zero-latency result.
   reads are sampled at most once per second, with a 1024-record cap. Added
   regression coverage; the file remains opt-in and is not used for input
   timing.
+- Added the Mac-only `DM_CONTROLLER_INPUT_LOG` boundary record. It captures
+  selected GameController callback/poll samples after normalization and before
+  the game reads Npad state, with the same bounded state-change/activity
+  policy as the receipt log. Together the two files separate host publication
+  from game receipt without changing controller timing.
 - Added the shared `DmVibrationBands` normalization stage after HLE capture.
   Mac and iOS Core Haptics and the Switch raw-HID encoder now consume the same
   finite, clamped amplitudes and fallback frequencies before applying their

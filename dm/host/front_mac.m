@@ -23,6 +23,7 @@
 #include <signal.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdio.h>
 
 #define HAPTICS_CHANNEL_COUNT 2
 
@@ -120,6 +121,18 @@ static uint64_t g_haptics_frame_sequence;
 static uint64_t g_haptics_frame_timestamp_ns;
 static int g_haptics_test_started;
 static uint64_t g_haptics_test_sequence = UINT64_C(1) << 63;
+static FILE *g_pad_input_log;
+static int g_pad_input_log_initialized;
+static unsigned g_pad_input_log_count;
+static int g_pad_input_log_limit_logged;
+typedef struct {
+    int kind;
+    uint64_t buttons;
+    int32_t lx, ly, rx, ry;
+} DmPadInputLogState;
+static DmPadInputLogState g_last_pad_input_log_state;
+static int g_have_pad_input_log_state;
+static uint64_t g_last_pad_input_log_activity_ns;
 static DmMacPerfHUD *g_perf_hud;
 static DmMacCheats *g_cheats;
 static NSMenu *g_controller_menu;
@@ -152,6 +165,53 @@ static int pad_controller_kind(GCController *controller) {
 }
 static void pad_clear(void) {
     dm_pad_set(0, 0, 0, 0, 0);
+}
+static void pad_input_log(const char *source, uint64_t timestamp_ns,
+                          int kind, uint64_t buttons,
+                          int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
+    if (!source) source = "unknown";
+    if (!g_pad_input_log_initialized) {
+        g_pad_input_log_initialized = 1;
+        const char *path = getenv("DM_CONTROLLER_INPUT_LOG");
+        if (path && *path) g_pad_input_log = fopen(path, "w");
+        if (path && *path && !g_pad_input_log)
+            DM_LOG_WARN("controller", "Could not open controller input log");
+    }
+    if (!g_pad_input_log || g_pad_input_log_count >= 1024) {
+        if (g_pad_input_log && !g_pad_input_log_limit_logged) {
+            g_pad_input_log_limit_logged = 1;
+            DM_LOG_INFO("controller", "Controller input log reached 1024 entries; further records suppressed");
+        }
+        return;
+    }
+    DmPadInputLogState state = {
+        .kind = kind, .buttons = buttons,
+        .lx = lx, .ly = ly, .rx = rx, .ry = ry,
+    };
+    int state_changed = !g_have_pad_input_log_state ||
+        state.kind != g_last_pad_input_log_state.kind ||
+        state.buttons != g_last_pad_input_log_state.buttons ||
+        state.lx != g_last_pad_input_log_state.lx ||
+        state.ly != g_last_pad_input_log_state.ly ||
+        state.rx != g_last_pad_input_log_state.rx ||
+        state.ry != g_last_pad_input_log_state.ry;
+    int activity_due = !state_changed &&
+        (!g_last_pad_input_log_activity_ns ||
+         timestamp_ns < g_last_pad_input_log_activity_ns ||
+         timestamp_ns - g_last_pad_input_log_activity_ns >= 1000000000ull);
+    if (!state_changed && !activity_due) return;
+    fprintf(g_pad_input_log,
+            "{\"event\":\"controller_input\",\"kind\":\"%s\","
+            "\"source\":\"%s\",\"timestamp_ns\":%llu,\"buttons\":%llu,"
+            "\"lx\":%d,\"ly\":%d,\"rx\":%d,\"ry\":%d}\n",
+            kind == DM_PADKIND_NINTENDO ? "nintendo" : "other",
+            source, (unsigned long long)timestamp_ns,
+            (unsigned long long)buttons, lx, ly, rx, ry);
+    fflush(g_pad_input_log);
+    g_pad_input_log_count++;
+    g_last_pad_input_log_state = state;
+    g_have_pad_input_log_state = 1;
+    g_last_pad_input_log_activity_ns = timestamp_ns;
 }
 static void pad_stop_core_haptics(void) {
     for (NSUInteger i = 0; i < g_pad_haptics_channel_count; i++) {
@@ -492,9 +552,10 @@ void front_vibration_set_enabled(int enabled) {
         if (!enabled) { vibration_cancel_pending(); pad_stop_vibration(); }
     });
 }
-static void pad_read(GCExtendedGamepad *g) {
+static void pad_read(GCExtendedGamepad *g, const char *source) {
     if (!g) return;
-    uint64_t buttons = dm_padmap_face(pad_controller_kind(g_pad_controller),
+    int kind = pad_controller_kind(g_pad_controller);
+    uint64_t buttons = dm_padmap_face(kind,
                                       g.buttonA.isPressed, g.buttonB.isPressed,
                                       g.buttonX.isPressed, g.buttonY.isPressed);
     if (g.leftShoulder.isPressed) buttons |= DM_BTN_L;
@@ -514,6 +575,7 @@ static void pad_read(GCExtendedGamepad *g) {
     int32_t rx = pad_axis(g.rightThumbstick.xAxis.value);
     int32_t ry = pad_axis(g.rightThumbstick.yAxis.value);
     dm_pad_set(buttons, lx, ly, rx, ry);
+    pad_input_log(source, now_ns(), kind, buttons, lx, ly, rx, ry);
     if ((buttons || lx || ly || rx || ry) && !atomic_exchange(&g_pad_input_logged, 1))
         DM_LOG_INFO("controller", "First nonzero controller input received: buttons=%#llx left=(%d,%d) right=(%d,%d)",
                     (unsigned long long)buttons, lx, ly, rx, ry);
@@ -540,7 +602,7 @@ static void pad_select_controller(GCController *selected) {
             LOG("Mac controller disconnected");
         }
     }
-    if (selected) pad_read(selected.extendedGamepad); else pad_clear();
+    if (selected) pad_read(selected.extendedGamepad, "select"); else pad_clear();
     atomic_store(&g_pad_haptics_supported,
                  g_pad_haptics_channel_count > 0 && pad_haptics_ready());
     pad_schedule_haptics_test(selected);
@@ -574,7 +636,7 @@ static void pad_refresh(void) {
                     // caused this event. Read it directly while the source is
                     // still selected; the 60 Hz poll handles idle samples.
                     if (source == g_pad_controller)
-                        pad_read(callbackGamepad ?: source.extendedGamepad);
+                        pad_read(callbackGamepad ?: source.extendedGamepad, "callback");
                 };
                 if (NSThread.isMainThread) publishInput();
                 else dispatch_async(dispatch_get_main_queue(), publishInput);
@@ -660,7 +722,7 @@ static void pad_update_controller_menu(void) {
 
 static void pad_poll(void) {
     if (g_pad_controller && [g_pad_controllers containsObject:g_pad_controller])
-        pad_read(g_pad_controller.extendedGamepad);
+        pad_read(g_pad_controller.extendedGamepad, "poll");
     else
         pad_clear();
 }
