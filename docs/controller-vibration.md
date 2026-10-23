@@ -516,10 +516,11 @@ For the preceding macOS front-end boundary, set
 `DM_CONTROLLER_INPUT_LOG` to another writable JSONL path. It records the
 selected GameController callback or 60 Hz poll sample after axis normalization
 and immediately around the `dm_pad_set` publication, including the recognized
-controller kind, buttons and four axes. It uses the same state-change and
-one-second activity limits with a 1024-record cap. Comparing the two files
-shows whether a nonzero NS Pro sample was published but never returned by
-the game's Npad read.
+controller kind, the four finite raw GameController axes, buttons and the four
+normalized integer axes. It uses the same state-change and one-second activity
+limits with a 1024-record cap. Comparing the two files shows whether a
+nonzero NS Pro sample was published but never returned by the game's Npad read,
+and whether an axis problem already exists in the macOS source values.
 
 The two files can be compared offline without exposing the game or controller
 to another tool:
@@ -577,8 +578,8 @@ or incomparable timestamp rather than a zero-latency result.
   regression coverage; the file remains opt-in and is not used for input
   timing.
 - Added the Mac-only `DM_CONTROLLER_INPUT_LOG` boundary record. It captures
-  selected GameController callback/poll samples after normalization and before
-  the game reads Npad state, with the same bounded state-change/activity
+  selected GameController callback/poll samples with finite raw axes and their
+  normalized values before the game reads Npad state, with the same bounded state-change/activity
   policy as the receipt log. Together the two files separate host publication
   from game receipt without changing controller timing.
 - Added `dm/tools/analyze_controller_trace.py`, a reusable offline comparator

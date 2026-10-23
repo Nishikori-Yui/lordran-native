@@ -24,6 +24,7 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include <math.h>
 
 #define HAPTICS_CHANNEL_COUNT 2
 
@@ -168,7 +169,9 @@ static void pad_clear(void) {
 }
 static void pad_input_log(const char *source, uint64_t timestamp_ns,
                           int kind, uint64_t buttons,
-                          int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
+                          int32_t lx, int32_t ly, int32_t rx, int32_t ry,
+                          float raw_lx, float raw_ly,
+                          float raw_rx, float raw_ry) {
     if (!source) source = "unknown";
     if (!g_pad_input_log_initialized) {
         g_pad_input_log_initialized = 1;
@@ -203,10 +206,12 @@ static void pad_input_log(const char *source, uint64_t timestamp_ns,
     fprintf(g_pad_input_log,
             "{\"event\":\"controller_input\",\"kind\":\"%s\","
             "\"source\":\"%s\",\"timestamp_ns\":%llu,\"buttons\":%llu,"
+            "\"raw_lx\":%.6f,\"raw_ly\":%.6f,\"raw_rx\":%.6f,\"raw_ry\":%.6f,"
             "\"lx\":%d,\"ly\":%d,\"rx\":%d,\"ry\":%d}\n",
             kind == DM_PADKIND_NINTENDO ? "nintendo" : "other",
             source, (unsigned long long)timestamp_ns,
-            (unsigned long long)buttons, lx, ly, rx, ry);
+            (unsigned long long)buttons, raw_lx, raw_ly, raw_rx, raw_ry,
+            lx, ly, rx, ry);
     fflush(g_pad_input_log);
     g_pad_input_log_count++;
     g_last_pad_input_log_state = state;
@@ -574,8 +579,13 @@ static void pad_read(GCExtendedGamepad *g, const char *source) {
     int32_t ly = pad_axis(g.leftThumbstick.yAxis.value);
     int32_t rx = pad_axis(g.rightThumbstick.xAxis.value);
     int32_t ry = pad_axis(g.rightThumbstick.yAxis.value);
+    float raw_lx = isfinite(g.leftThumbstick.xAxis.value) ? g.leftThumbstick.xAxis.value : 0.f;
+    float raw_ly = isfinite(g.leftThumbstick.yAxis.value) ? g.leftThumbstick.yAxis.value : 0.f;
+    float raw_rx = isfinite(g.rightThumbstick.xAxis.value) ? g.rightThumbstick.xAxis.value : 0.f;
+    float raw_ry = isfinite(g.rightThumbstick.yAxis.value) ? g.rightThumbstick.yAxis.value : 0.f;
     dm_pad_set(buttons, lx, ly, rx, ry);
-    pad_input_log(source, now_ns(), kind, buttons, lx, ly, rx, ry);
+    pad_input_log(source, now_ns(), kind, buttons, lx, ly, rx, ry,
+                  raw_lx, raw_ly, raw_rx, raw_ry);
     if ((buttons || lx || ly || rx || ry) && !atomic_exchange(&g_pad_input_logged, 1))
         DM_LOG_INFO("controller", "First nonzero controller input received: buttons=%#llx left=(%d,%d) right=(%d,%d)",
                     (unsigned long long)buttons, lx, ly, rx, ry);
