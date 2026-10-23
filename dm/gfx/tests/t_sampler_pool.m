@@ -208,6 +208,11 @@ int main(void) { @autoreleasepool {
     S.ubo[1][10].addr = UINT64_MAX - 16;
     CHECK("overflowing UBO addresses are empty", ubo_handle(1, 10, 48) == 0);
     S.ubo[1][10].addr = (uintptr_t)storage + 40000;
+    tex_pool_state active_pool = g_tpool;
+    g_sdx_ok = 1;
+    sdx_walk((const uint8_t *)tex_b, 0);
+    CHECK("store lookahead rejects descriptor-pool remapping", !g_sdx_ok);
+    CHECK("lookahead leaves replay pool unchanged", g_tpool.base == active_pool.base && g_tpool.n == active_pool.n);
     h_nvnMemoryPoolFinalize(&memory);
     CHECK("finalizing storage removes its sampler descriptors", samp_by_id(256) == nil);
     free(storage);

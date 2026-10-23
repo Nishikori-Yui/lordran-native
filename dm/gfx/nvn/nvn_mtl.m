@@ -4060,9 +4060,10 @@ static void sdx_walk(const uint8_t *p, int depth) {
                 if (b->stage < 6 && b->first >= 0 && b->first + b->n <= lim) for (int k = 0; k < b->n; k++) g_pp_slot[b->stage][base + b->first + k] = h_ser(b->h[k]);
                 break; }
             case OP_SET_TEX_POOL: {
-                const p_set_pool *pool = a;
-                g_tpool.base = pool->base; g_tpool.n = pool->n;
-                break; }
+                // Cached slot serials cannot describe handles remapped by a
+                // later pool selection. Keep stores rather than miss readers.
+                g_sdx_ok = 0;
+                return; }
             case OP_BIND_PROGRAM: g_pp_prog = ((const p_bind_program *)a)->prog; break;
             case OP_DRAW: case OP_DRAW_IDX: case OP_DISPATCH: {
                 if (h.op != OP_DISPATCH) seq_push(&g_drx_seq, &g_drx_n, &g_drx_cap, seq);
@@ -4090,7 +4091,6 @@ void mtl_sub_index(const uint64_t *h, int n) {   // Start of submit (hle_nvn.c Q
     g_xv_ntouch = 0; g_sdx_n = g_sdx_nop = 0; g_rtx_n = g_drx_n = 0; g_exec_seq = 0; g_sdx_ok = tbdr_on();
     if (!g_sdx_ok) { g_xv_n = 0; g_xv_block = 1; return; }   // Index unavailable: clear the ledger and add nothing in this submit (the next touch cannot be verified)
     g_xv_block = 0;
-    tex_pool_state saved_tex_pool = g_tpool;
     memset(g_sdx_hk, 0, sizeof g_sdx_hk); g_sdx_nb = 0;
     for (int i = 0; i < g_xv_n; i++) sdx_bucket(g_xv[i].ser, 1);   // Textures in the ledger enter the candidate set: otherwise, when one is only sampled and not used as an attachment in this submit, its read events are not indexed and the fallback cannot see them
     if (R.has_rt) { for (int k = 0; k < R.rt.n && k < 8; k++) if (R.rt.color[k]) sdx_bucket(R.rt.color[k]->serial, 1); if (R.rt.depth) sdx_bucket(R.rt.depth->serial, 1); }   // The targets at the start of the submit (the first draw may reopen the render pass without going through SetRenderTargets)
@@ -4098,7 +4098,6 @@ void mtl_sub_index(const uint64_t *h, int n) {   // Start of submit (hle_nvn.c Q
     for (int st = 0; st < 6; st++) { for (int k = 0; k < 128; k++) g_pp_slot[st][k] = S.tex[st][k] ? h_ser(S.tex[st][k]) : 0;
                                      for (int k = 0; k < 32; k++) g_pp_slot[st][128 + k] = S.img[st][k] ? h_ser(S.img[st][k]) : 0; }
     for (int i = 0; i < n && g_sdx_ok; i++) sdx_walk((const uint8_t *)h[i], 0);
-    g_tpool = saved_tex_pool;
     if (!g_sdx_ok) return;
     // Counting sort into buckets: events are appended in sequence-number order, and within the same sequence number READ precedes ATT (the same draw is judged for reads first, then attachments), so after a stable scatter each bucket is ordered
     memset(g_sdx_bcnt, 0, (g_sdx_nb + 1) * sizeof *g_sdx_bcnt);
