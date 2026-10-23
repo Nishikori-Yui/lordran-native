@@ -10,6 +10,9 @@
 #include <strings.h>
 #include <pthread.h>
 #include <time.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 enum { NPAD_NO1 = 0, NPAD_HANDHELD = 0x20 };
 enum { STYLE_FULLKEY = 1u << 0, STYLE_HANDHELD = 1u << 1, STYLE_JOYDUAL = 1u << 2, STYLE_JOYLEFT = 1u << 3, STYLE_JOYRIGHT = 1u << 4 };
@@ -24,6 +27,23 @@ _Static_assert(sizeof(NpadState) == 0x28, "NpadState");
 // Front-end publishing: the keyboard / touch path (dm_input_set) and the physical controller path (dm_pad_set) are ORed; press edges are latched until the game's next read so short presses are not lost
 static _Atomic uint64_t g_btn, g_axes, g_latch, g_pad_btn, g_pad_axes, g_pad_latch;
 static _Atomic int64_t g_sampling;
+static _Atomic uint64_t g_last_input_publish_ns;
+static pthread_mutex_t g_receipt_mu = PTHREAD_MUTEX_INITIALIZER;
+static FILE *g_receipt_log;
+static int g_receipt_initialized;
+static unsigned g_receipt_count;
+static int g_receipt_limit_logged;
+typedef struct {
+    uint32_t id;
+    uint32_t requested_style;
+    uint32_t active_style;
+    uint64_t buttons;
+    int32_t lx, ly, rx, ry;
+    uint32_t attributes;
+} DmNpadReceiptState;
+static DmNpadReceiptState g_last_receipt_state;
+static int g_have_receipt_state;
+static uint64_t g_last_receipt_activity_ns;
 static _Atomic uint32_t g_vibration_devices;
 static _Atomic uint64_t g_vibration_sequence;
 static _Atomic uint64_t g_vibration_log_ns;
@@ -48,9 +68,11 @@ static uint64_t pack(int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
 }
 void dm_input_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
     uint64_t old = atomic_exchange(&g_btn, buttons); atomic_fetch_or(&g_latch, buttons & ~old); atomic_store(&g_axes, pack(lx, ly, rx, ry));
+    atomic_store(&g_last_input_publish_ns, now_ns());
 }
 void dm_pad_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
     uint64_t old = atomic_exchange(&g_pad_btn, buttons); atomic_fetch_or(&g_pad_latch, buttons & ~old); atomic_store(&g_pad_axes, pack(lx, ly, rx, ry));
+    atomic_store(&g_last_input_publish_ns, now_ns());
 }
 uint64_t dm_input_samples(void) { return (uint64_t)atomic_load(&g_sampling); }
 void dm_vibration_set(const DmVibrationFrame *frame) {
@@ -159,10 +181,89 @@ static uint32_t style_of(uint32_t id) {
 static int32_t ax(uint64_t v, int i) { return (int16_t)(v >> (16 * i)); }
 static int32_t pick(int32_t a, int32_t b) { return (a < 0 ? -a : a) >= (b < 0 ? -b : b) ? a : b; }   // whichever of the two paths is deflected more
 
+static void receipt_log_init_locked(void) {
+    if (g_receipt_initialized) return;
+    g_receipt_initialized = 1;
+    const char *path = getenv("DM_HID_RECEIPT_LOG");
+    if (path && *path) g_receipt_log = fopen(path, "w");
+    if (path && *path && !g_receipt_log)
+        DM_LOG_WARN("controller", "Could not open Npad receipt log");
+}
+
+static int receipt_state_equal(const DmNpadReceiptState *a,
+                               const DmNpadReceiptState *b) {
+    return a->id == b->id &&
+        a->requested_style == b->requested_style &&
+        a->active_style == b->active_style &&
+        a->buttons == b->buttons &&
+        a->lx == b->lx && a->ly == b->ly &&
+        a->rx == b->rx && a->ry == b->ry &&
+        a->attributes == b->attributes;
+}
+
+static void receipt_log_state(uint64_t read_start_ns, uint64_t read_end_ns,
+                              uint32_t id, uint32_t requested_style,
+                              uint32_t active_style, int64_t sampling,
+                              uint64_t buttons, int32_t lx, int32_t ly,
+                              int32_t rx, int32_t ry, uint32_t attributes) {
+    DmNpadReceiptState state = {
+        .id = id,
+        .requested_style = requested_style,
+        .active_style = active_style,
+        .buttons = buttons,
+        .lx = lx, .ly = ly, .rx = rx, .ry = ry,
+        .attributes = attributes,
+    };
+    pthread_mutex_lock(&g_receipt_mu);
+    receipt_log_init_locked();
+    if (!g_receipt_log || g_receipt_count >= 1024) {
+        if (g_receipt_log && !g_receipt_limit_logged) {
+            g_receipt_limit_logged = 1;
+            DM_LOG_INFO("controller", "Npad receipt log reached 1024 entries; further records suppressed");
+        }
+        pthread_mutex_unlock(&g_receipt_mu);
+        return;
+    }
+    int state_changed = !g_have_receipt_state ||
+        !receipt_state_equal(&state, &g_last_receipt_state);
+    int activity_due = !state_changed &&
+        (!g_last_receipt_activity_ns ||
+         read_end_ns < g_last_receipt_activity_ns ||
+         read_end_ns - g_last_receipt_activity_ns >= 1000000000ull);
+    if (!state_changed && !activity_due) {
+        pthread_mutex_unlock(&g_receipt_mu);
+        return;
+    }
+    fprintf(g_receipt_log,
+            "{\"event\":\"npad_receipt\",\"kind\":\"%s\","
+            "\"read_start_ns\":%llu,\"read_end_ns\":%llu,"
+            "\"publish_ns\":%llu,\"id\":%u,\"requested_style\":%u,"
+            "\"active_style\":%u,\"sampling\":%lld,\"buttons\":%llu,"
+            "\"lx\":%d,\"ly\":%d,\"rx\":%d,\"ry\":%d,\"attributes\":%u}\n",
+            state_changed ? "state_change" : "activity",
+            (unsigned long long)read_start_ns,
+            (unsigned long long)read_end_ns,
+            (unsigned long long)atomic_load(&g_last_input_publish_ns),
+            id, requested_style, active_style, (long long)sampling,
+            (unsigned long long)buttons, lx, ly, rx, ry, attributes);
+    fflush(g_receipt_log);
+    g_receipt_count++;
+    g_last_receipt_state = state;
+    g_have_receipt_state = 1;
+    g_last_receipt_activity_ns = read_end_ns;
+    pthread_mutex_unlock(&g_receipt_mu);
+}
+
 static void fill(NpadState *s, uint32_t id, uint32_t style) {
+    uint64_t read_start_ns = now_ns();
     memset(s, 0, sizeof *s);
     s->sampling = atomic_fetch_add(&g_sampling, 1) + 1;
-    if (!(style_of(id) & style)) return;   // no controller of this id / style: attributes = 0
+    uint32_t active_style = style_of(id);
+    if (!(active_style & style)) {   // no controller of this id / style: attributes = 0
+        receipt_log_state(read_start_ns, now_ns(), id, style, active_style,
+                          s->sampling, 0, 0, 0, 0, 0, 0);
+        return;
+    }
     uint64_t b = atomic_load(&g_btn) | atomic_exchange(&g_latch, 0) | atomic_load(&g_pad_btn) | atomic_exchange(&g_pad_latch, 0);
     uint64_t k = atomic_load(&g_axes), p = atomic_load(&g_pad_axes);
     s->lx = pick(ax(k, 0), ax(p, 0)); s->ly = pick(ax(k, 1), ax(p, 1)); s->rx = pick(ax(k, 2), ax(p, 2)); s->ry = pick(ax(k, 3), ax(p, 3));
@@ -188,6 +289,9 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
     if (s->ry < -STICK_THRESH) b |= 1u << 23;
     s->buttons = b;
     s->attributes = ATTR_CONNECTED | (id == NPAD_HANDHELD ? ATTR_WIRED | ATTR_LEFT_CONN | ATTR_LEFT_WIRED | ATTR_RIGHT_CONN | ATTR_RIGHT_WIRED : ATTR_LEFT_CONN | ATTR_RIGHT_CONN);
+    receipt_log_state(read_start_ns, now_ns(), id, style, active_style,
+                      s->sampling, s->buttons, s->lx, s->ly, s->rx, s->ry,
+                      s->attributes);
     if ((p || atomic_load(&g_pad_btn)) && !atomic_exchange(&g_npad_input_logged, 1))
         DM_LOG_INFO("controller", "Npad state returned: id=%#x style=%#x buttons=%#llx left=(%d,%d) right=(%d,%d)",
                     id, style, (unsigned long long)s->buttons,

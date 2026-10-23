@@ -34,9 +34,9 @@ int dm_vibration_supported(void);
 void dm_vibration_set_enabled(int enabled);
 
 // Optional diagnostic DM_HID_RECEIPT_LOG=<writable JSONL path>: received samples of real GetNpadState returns.
-// Fields read_start_ns/time_ns use the same host now_ns(); the front-end publish window must use the same helper, and a read interval that spans a publish must not be force-matched.
+// Fields read_start_ns/read_end_ns/publish_ns use the same host now_ns(); a read interval that spans a publish is recorded as evidence, not force-matched to that publish.
 // State changes + at most one activity witness per second, limit_reached after 1024 entries; no file is written when the environment variable is not set.
-// The actual return includes id/style/sampling/buttons/four axes/attributes/script_mask; front-end output is not treated as received.
+// Each record includes id, requested/active style, sampling, buttons, four axes and attributes; front-end output is not treated as received.
 // No new line does not prove that a blank touch point was read; a valid connection / sampling activity / evidence from the original UI and command packets is required; the log has IO overhead and is not used for timing.
 
 // Private skill-aim-v1: takes only paired received samples of the right axis that GetNpad has actually returned, not values the front end has not yet had consumed.

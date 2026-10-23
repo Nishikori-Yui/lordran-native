@@ -1,6 +1,10 @@
 // Exercise the actual HID fill path; the clock is deterministic, no game data is needed.
 #include "../hle_hid.c"
 #include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 static uint64_t test_time = 1000000000ull;
 static int vibration_supported = 1;
@@ -22,6 +26,9 @@ void hle_signal_system_event(void *g) { (void)g; }
 
 int main(void) {
     NpadState s;
+    const char *receipt_path = "/tmp/nxnative-hid-receipt-test.jsonl";
+    unlink(receipt_path);
+    setenv("DM_HID_RECEIPT_LOG", receipt_path, 1);
     uint32_t handle = NPAD_NO1;
     float value[4] = {0.3f, 80.f, 0.7f, 160.f};
     uint32_t devices[2] = {NPAD_NO1, NPAD_HANDHELD};
@@ -97,5 +104,15 @@ int main(void) {
     dm_input_swipe_cancel(0); dm_input_swipe_cancel(1);
     fill(&s, NPAD_NO1, STYLE_FULLKEY); assert(!s.rx && !s.ry && !s.lx && !s.ly);
     dm_input_swipe_add(-1, 1, 1); dm_input_swipe_cancel(3);
+    FILE *receipt = fopen(receipt_path, "r");
+    assert(receipt);
+    char receipt_text[4096] = {0};
+    fread(receipt_text, 1, sizeof receipt_text - 1, receipt);
+    fclose(receipt);
+    assert(strstr(receipt_text, "\"event\":\"npad_receipt\""));
+    assert(strstr(receipt_text, "\"read_start_ns\""));
+    assert(strstr(receipt_text, "\"publish_ns\""));
+    if (g_receipt_log) { fclose(g_receipt_log); g_receipt_log = NULL; }
+    unlink(receipt_path);
     puts("HID input: motion, button latch, controller priority, vibration device filtering and single/batch forwarding passed");
 }
