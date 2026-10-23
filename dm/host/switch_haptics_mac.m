@@ -8,6 +8,7 @@
 #include <mach/mach_time.h>
 #include "dm_log.h"
 #include "dm_switch_haptics_state.h"
+#include "dm_vibration_bands.h"
 #include "dm_vibration_timing.h"
 #include "switch_haptics_mac.h"
 
@@ -306,10 +307,6 @@ static uint8_t encode_low_frequency(float frequency) {
     return encoded > 0x40 ? (uint8_t)(encoded - 0x40) : 1;
 }
 
-static float normalized_frequency(float frequency, float fallback) {
-    return isfinite(frequency) && frequency > 0.f ? frequency : fallback;
-}
-
 static uint8_t encode_amplitude(float amplitude) {
     if (!(amplitude > 0.f)) return 0;
     if (amplitude > 1.f) amplitude = 1.f;
@@ -558,10 +555,11 @@ int switch_haptics_supported(void) {
 
 void switch_haptics_encode_report(const DmVibrationFrame *frame, uint8_t out[8]) {
     if (!frame || !out) return;
+    DmVibrationBands bands = dm_vibration_bands_from_frame(frame);
     // Each actuator receives the same low/high-band pair: the Switch value is
     // spectral, not a left/right spatial pair.
-    encode_rumble(out + 0, frame->low_amplitude, frame->low_frequency,
-                  frame->high_amplitude, frame->high_frequency);
+    encode_rumble(out + 0, bands.low_amplitude, bands.low_frequency,
+                  bands.high_amplitude, bands.high_frequency);
     memcpy(out + 4, out, 4);
 }
 
@@ -583,10 +581,7 @@ static void send_rumble_frame(const DmVibrationFrame *frame) {
         return;
     }
     uint8_t report[kSwitchRumbleReportLength] = {0};
-    DmVibrationFrame normalized = *frame;
-    normalized.low_frequency = normalized_frequency(frame->low_frequency, 160.f);
-    normalized.high_frequency = normalized_frequency(frame->high_frequency, 320.f);
-    int expected_length = encode_output_report(&normalized, g_packet_counter, report);
+    int expected_length = encode_output_report(frame, g_packet_counter, report);
     int report_length = g_report_length > 0 ? g_report_length : kSwitchRumbleReportLength;
     if (report_length != expected_length) {
         if (!g_logged_failure) {

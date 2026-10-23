@@ -6,7 +6,7 @@ endif
 B = build
 GAME_H = ../gen/$(GAME)/game_profile.h
 GINC = -I../gen/$(GAME) -I../../games/$(GAME)
-TESTS = t_padmap t_touch t_oe t_fs t_thread_leak t_fs_case t_audio t_audio_spsc t_swkbd t_altstack t_condvar t_condvar_old t_time t_log_timestamp t_log t_crash_log t_cheats t_hid_motion t_switch_haptics t_vibration_queue t_vibration_haptics
+TESTS = t_padmap t_touch t_oe t_fs t_thread_leak t_fs_case t_audio t_audio_spsc t_swkbd t_altstack t_condvar t_condvar_old t_time t_log_timestamp t_log t_crash_log t_cheats t_hid_motion t_switch_haptics t_vibration_queue t_vibration_bands t_vibration_haptics
 .DEFAULT_GOAL := run
 .PHONY: mac-cheats-test
 mac-cheats-test: $(B)/t_cheats_mac
@@ -66,6 +66,8 @@ $(B)/t_switch_haptics: t_switch_haptics.c ../switch_haptics_mac.m ../switch_hapt
 	clang -O1 -g -Wall -Wextra -Werror -Wno-unused-function -I.. -fobjc-arc -framework IOKit -o $@ t_switch_haptics.c
 $(B)/t_vibration_queue: t_vibration_queue.c ../dm_vibration_queue.h ../dm_vibration_timing.h ../dm_input.h | $(B)
 	clang -O1 -g -Wall -Wextra -Werror -o $@ t_vibration_queue.c
+$(B)/t_vibration_bands: t_vibration_bands.c ../dm_vibration_bands.h ../dm_input.h | $(B)
+	clang -O1 -g -Wall -Wextra -Werror -o $@ t_vibration_bands.c -lm
 $(B)/t_vibration_haptics: t_vibration_haptics.c ../dm_vibration_haptics.h | $(B)
 	clang -O1 -g -Wall -Wextra -Werror -o $@ t_vibration_haptics.c -lm
 $(B)/t_padmap: t_padmap.c ../dm_padmap.h ../dm_input.h | $(B)

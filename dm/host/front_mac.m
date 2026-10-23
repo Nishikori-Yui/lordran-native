@@ -319,9 +319,14 @@ static void pad_start_haptics(GCController *controller) {
     }
 }
 static void pad_apply_haptics(void) {
-    DmVibrationHapticsParameters parameters = dm_vibration_haptics_parameters(
-        g_haptics_low, g_haptics_low_frequency,
-        g_haptics_high, g_haptics_high_frequency);
+    DmVibrationBands bands = {
+        .low_amplitude = g_haptics_low,
+        .low_frequency = g_haptics_low_frequency,
+        .high_amplitude = g_haptics_high,
+        .high_frequency = g_haptics_high_frequency,
+    };
+    DmVibrationHapticsParameters parameters =
+        dm_vibration_haptics_parameters_for_bands(bands);
     if (parameters.intensity <= 0.f) { pad_stop_vibration(); return; }
     NSUInteger accepted_channels = 0;
     for (NSUInteger i = 0; i < g_pad_haptics_channel_count; i++) {
@@ -371,12 +376,11 @@ static BOOL pad_haptics_ready(void) {
 }
 static void pad_apply_vibration_frame(const DmVibrationFrame *frame) {
     if (!frame) return;
-    float low = isfinite(frame->low_amplitude) ? fminf(1.f, fmaxf(0.f, frame->low_amplitude)) : 0.f;
-    float high = isfinite(frame->high_amplitude) ? fminf(1.f, fmaxf(0.f, frame->high_amplitude)) : 0.f;
-    float low_frequency = isfinite(frame->low_frequency) && frame->low_frequency > 0.f
-        ? frame->low_frequency : 160.f;
-    float high_frequency = isfinite(frame->high_frequency) && frame->high_frequency > 0.f
-        ? frame->high_frequency : 320.f;
+    DmVibrationBands bands = dm_vibration_bands_from_frame(frame);
+    float low = bands.low_amplitude;
+    float high = bands.high_amplitude;
+    float low_frequency = bands.low_frequency;
+    float high_frequency = bands.high_frequency;
     if (!atomic_load(&g_vibration_enabled) || !g_pad_controller ||
         !g_vibration_app_active || !g_vibration_window_active) {
         g_haptics_low = g_haptics_high = 0.f;

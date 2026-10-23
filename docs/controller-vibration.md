@@ -46,6 +46,15 @@ also carries a monotonic sequence number and the host's `now_ns()` timestamp,
 so tests and renderers can distinguish dropped, reordered and coalesced
 updates.
 
+Immediately after that boundary, `dm_vibration_bands_from_frame` produces the
+shared normalized dual-band representation used by every renderer. Non-finite
+or negative amplitudes become zero, amplitudes above one are clamped, and
+missing or non-positive frequencies use the Switch-side fallback values of
+160 Hz for the low band and 320 Hz for the high band. The raw HID encoder then
+applies its protocol-specific frequency limits, while Core Haptics maps the
+same normalized bands to intensity and perceptual sharpness. This keeps
+backend-specific output limits after, rather than inside, source decoding.
+
 ## Target architecture
 
 ```text
@@ -506,6 +515,7 @@ or incomparable timestamp rather than a zero-latency result.
 | Area | Current status | Required evidence |
 |---|---|---|
 | HID single and batch values | Four-field forwarding, handle filtering, sequence, and timestamp are implemented; focused tests pass (2026-10-23) | In-game single/batch dispatch and physical stop behavior |
+| Shared dual-band normalization | `dm_vibration_bands_from_frame` gives Mac Core Haptics, iOS Core Haptics and Switch raw HID the same finite amplitude/frequency inputs; boundary tests pass | Compare source values with each backend's accepted/rendered values on hardware |
 | Runtime vibration evidence | Rate-limited HLE source witnesses distinguish guest capture from renderer/HID evidence; Npad receipt and Core Haptics/raw HID parameter-submission witnesses include frame sequence and timestamp; first output witnesses include host/OS-path latency; stale handles are rejected after capability loss. API acceptance is not physical actuator evidence. | Capture one in-game log containing source capture, renderer acceptance, measured host/OS latency, and the physical test result |
 | Mac host build | Isolated full host link passes again during the 2026-10-23 review; an earlier isolated smoke run reached normal rendering and shut down cleanly; existing Metal/compiler warnings remain | Launch this exact build with a connected controller and validate gameplay |
 | iOS controller UI build | Simulator UI harness compiles; app-settings and controller mapping tests pass (2026-10-23) | Physical controller test |
@@ -525,6 +535,13 @@ or incomparable timestamp rather than a zero-latency result.
 
 ### 2026-10-23
 
+- Added the shared `DmVibrationBands` normalization stage after HLE capture.
+  Mac and iOS Core Haptics and the Switch raw-HID encoder now consume the same
+  finite, clamped amplitudes and fallback frequencies before applying their
+  device-specific synthesis or protocol limits. Added a standalone boundary
+  test for ordinary, invalid and missing values. This unifies parameter
+  interpretation; it does not turn the already-decoded four-float
+  `VibrationValue` into a raw HD Rumble byte-stream decoder.
 - Added an iOS device-local Core Haptics fallback for hardware that advertises
   built-in haptic support. A prepared selected-controller engine remains the
   preferred route; otherwise the app can use the device actuator without

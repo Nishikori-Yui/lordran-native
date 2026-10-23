@@ -627,9 +627,9 @@ static CGPathRef arm(CGFloat angle) {
 - (void)applyVibrationFrame:(DmVibrationFrame)frame {
     if (!atomic_load(&g_gamepad_vibration_enabled)) { [self stopVibration]; return; }
     if (!_foreground || _inputSuspended || !self.window) { [self stopVibration]; return; }
-    DmVibrationHapticsParameters parameters = dm_vibration_haptics_parameters(
-        frame.low_amplitude, frame.low_frequency,
-        frame.high_amplitude, frame.high_frequency);
+    DmVibrationBands bands = dm_vibration_bands_from_frame(&frame);
+    DmVibrationHapticsParameters parameters =
+        dm_vibration_haptics_parameters_for_bands(bands);
     if (!parameters.intensity) { [self stopVibration]; return; }
     if (!atomic_load(&_hapticsSupported) || !_hapticsEngine || !_hapticsPlayer)
         [self prepareHapticsForController:_activeController];
