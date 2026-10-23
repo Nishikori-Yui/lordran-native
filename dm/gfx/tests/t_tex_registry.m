@@ -10,6 +10,31 @@ module_t g_mod[MAX_MOD]; int g_nmod;
 void svc_thread_dump(void) {}
 uint64_t now_ns(void) { return bp_now(); }
 
+static void test_storage_identity(void) {
+    tex_t a = {.magic = MAGIC('T', 'E', 'X', 0), .serial = 79001};
+    a.d = (nvn_texdesc){.width = 8, .height = 8, .depth = 1, .levels = 1,
+        .target = NVN_TEXTURE_TARGET_2D, .format = NVN_FORMAT_RGBA8, .samples = 1};
+    tex_t b = a; b.serial = 79002;
+    id<MTLTexture> first = tex_mtl(&a), second = tex_mtl(&b);
+    assert(first && second && first != second);
+    assert(tex_mtl(&a) == first && tex_mtl(&b) == second);
+    tex_t copied = a;
+    assert(tex_mtl(&copied) == first);
+    mtl_tex_release(&a); mtl_tex_release(&b);
+
+    uint8_t storage[4096] = {0};
+    pool_t pool = {.mem = storage, .size = sizeof storage};
+    a.serial = 79003; a.pool = &pool;
+    b = a; b.serial = 79004;
+    tex_t different_offset = a; different_offset.serial = 79005; different_offset.off = 2048;
+    first = tex_mtl(&a); second = tex_mtl(&b);
+    assert(first && first == second);
+    assert(tex_mtl(&different_offset) != first);
+    mtl_tex_release(&a); mtl_tex_release(&b); mtl_tex_release(&different_offset);
+    mtl_alias_drop_pool(&pool);
+    puts("texture identity: poolless serials stay distinct; real storage aliases still share");
+}
+
 static void test_separate_backing_pool(void) {
     uint8_t descriptors[64] = {0}, backing[64] = {0};
     pool_t descriptor_pool = {.mem = descriptors, .size = sizeof descriptors};
@@ -140,6 +165,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     alarm(30);
     mtl_init();
     test_memory_text();
+    test_storage_identity();
     test_separate_backing_pool();
     test_feedback_pool();
     if (argc == 2 && !strcmp(argv[1], "--pools-only")) {

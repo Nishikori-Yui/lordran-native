@@ -1501,7 +1501,12 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
         return mt;
     }
     alias_key ak; memset(&ak, 0, sizeof ak); ak.pool = (uint64_t)(uintptr_t)t->pool; ak.off = t->off; ak.d = t->d;
-    pthread_mutex_lock(&g_smu); __unsafe_unretained id shared = hm_get_id(&g_alias, &ak); pthread_mutex_unlock(&g_smu);
+    // Without guest storage there is no alias relationship to prove. Such
+    // host-only textures retain their serial identity, even at equal sizes.
+    __unsafe_unretained id shared = nil;
+    if (t->pool) {
+        pthread_mutex_lock(&g_smu); shared = hm_get_id(&g_alias, &ak); pthread_mutex_unlock(&g_smu);
+    }
     if (shared) { serial_put(t->serial, shared); return shared; }
     id<MTLTexture> mt = tex_linear(t);
     if (!mt) {
@@ -1514,10 +1519,12 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
     if (g_allocprof > 0) { static int n; if (n++ < 30 || n % 500 == 0) MLOG("Texture created: source=%s index=%d serial=%llu size=%ux%ux%u format=%#x target=%d levels=%u storage=%p", __func__, n, (unsigned long long)t->serial, t->d.width, t->d.height, t->d.depth, t->d.format, t->d.target, t->d.levels, (void *)t->mem); }
     if (getenv("DM_NVN_TEXCPU") && t->pool && !(t->pool->flags & NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS)) MLOG("CPU-visible non-prepacked texture: serial=%llu size=%ux%ux%u format=%#x target=%d levels=%u texture_flags=%#x pool_flags=%#x storage=%p", (unsigned long long)t->serial, t->d.width, t->d.height, t->d.depth, t->d.format, t->d.target, t->d.levels, t->d.flags, t->pool->flags, (void *)t->mem);
     res_add(mt);
-    pthread_mutex_lock(&g_smu);
-    if (!g_alias_set) g_alias_set = CFSetCreateMutable(NULL, 0, NULL);
-    hm_put_id(&g_alias, &ak, mt); CFSetAddValue(g_alias_set, (__bridge const void *)mt);
-    pthread_mutex_unlock(&g_smu);
+    if (t->pool) {
+        pthread_mutex_lock(&g_smu);
+        if (!g_alias_set) g_alias_set = CFSetCreateMutable(NULL, 0, NULL);
+        hm_put_id(&g_alias, &ak, mt); CFSetAddValue(g_alias_set, (__bridge const void *)mt);
+        pthread_mutex_unlock(&g_smu);
+    }
     serial_put(t->serial, mt);
     return mt;
 }
