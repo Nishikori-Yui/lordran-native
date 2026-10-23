@@ -165,7 +165,23 @@ int main(void) { @autoreleasepool {
     h_nvnSamplerPoolFinalize(&first);
     CHECK("reinitializing a wrapper at another offset succeeds", h_nvnSamplerPoolInitialize(&first, &memory, 16384, 257));
     select_pool(a);
-    check_sample(shader, pipeline, texture, .5, "reinitialized wrapper resolves its current storage");
+    check_sample(shader, pipeline, texture, .5, "recorded sampler pool keeps its original storage");
+    register_sampler(&first, 256, 0);
+    select_pool(a);
+    check_sample(shader, pipeline, texture, .5, "old sampler command is independent of a reused wrapper");
+    NVNcommandHandle rebound_sampler = selection(&cmd, &first);
+    select_pool(rebound_sampler);
+    check_sample(shader, pipeline, texture, 1, "new sampler command captures the reused wrapper");
+    register_sampler(&second, 256, 1);
+    select_pool(b);
+    h_nvnTexturePoolFinalize(&tex_first);
+    CHECK("reinitialize texture wrapper", h_nvnTexturePoolInitialize(&tex_first, &memory, 40960, 257));
+    select_pool(tex_a);
+    check_sample(shader, pipeline, texture, .5, "old texture command is independent of a reused wrapper");
+    NVNcommandHandle rebound_texture = selection_tex(&cmd, &tex_first);
+    select_pool(rebound_texture);
+    check_sample(shader, pipeline, texture2, .125, "new texture command captures the reused wrapper");
+    select_pool(tex_a);
     // The game's water/material shaders read combined handles from a uniform.
     shader->rf.b[0].kind = NVN_RB_TEXU; shader->rf.b[0].reg = 10; shader->rf.b[0].off = 48;
     shader->rf.b[1].kind = NVN_RB_SAMPU; shader->rf.b[1].reg = 10; shader->rf.b[1].off = 48;

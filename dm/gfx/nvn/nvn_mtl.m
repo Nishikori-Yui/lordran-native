@@ -2504,9 +2504,7 @@ static nvn_hmap g_treg_pool = {.klen = sizeof(uintptr_t)};
 typedef struct { uintptr_t base; int n; } tex_pool_state;
 static tex_pool_state g_tpool;
 static uintptr_t tex_pool_base(const dpool_t *p) {
-    if (!p || !p->pool || !p->pool->mem || p->off < 0 || p->n <= 0 ||
-        (uint64_t)p->off > p->pool->size || (uint64_t)p->n * TEX_DESC_SIZE > p->pool->size - (uint64_t)p->off) return 0;
-    return (uintptr_t)p->pool->mem + (uint64_t)p->off;
+    return nvn_descriptor_pool_snapshot(p).base;
 }
 // Dark Souls creates twelve sampler pools and switches them within a frame.
 // IDs are local to each pool. Key by descriptor address so overlapping views
@@ -2515,9 +2513,7 @@ typedef struct { samp_par p; void *view; uint64_t rid; } sreg_t;
 static nvn_hmap g_sreg = {.klen = sizeof(uintptr_t)};
 static struct { uintptr_t base; int n; } g_spool;
 static uintptr_t samp_pool_base(const dpool_t *p) {
-    if (!p || !p->pool || !p->pool->mem || p->off < 0 || p->n <= 0 ||
-        (uint64_t)p->off > p->pool->size || (uint64_t)p->n * SAMP_DESC_SIZE > p->pool->size - (uint64_t)p->off) return 0;
-    return (uintptr_t)p->pool->mem + (uint64_t)p->off;
+    return nvn_descriptor_pool_snapshot(p).base;
 }
 static void sreg_drop_view(sreg_t *r) {
     if (r->view) { defer_obj_unref((__bridge id)r->view); CFRelease(r->view); r->view = NULL; r->rid = 0; }
@@ -4055,8 +4051,8 @@ static void sdx_walk(const uint8_t *p, int depth) {
                 if (b->stage < 6 && b->first >= 0 && b->first + b->n <= lim) for (int k = 0; k < b->n; k++) g_pp_slot[b->stage][base + b->first + k] = h_ser(b->h[k]);
                 break; }
             case OP_SET_TEX_POOL: {
-                const dpool_t *pool = ((const p_set_pool *)a)->pool;
-                g_tpool.base = tex_pool_base(pool); g_tpool.n = g_tpool.base ? pool->n : 0;
+                const p_set_pool *pool = a;
+                g_tpool.base = pool->base; g_tpool.n = pool->n;
                 break; }
             case OP_BIND_PROGRAM: g_pp_prog = ((const p_bind_program *)a)->prog; break;
             case OP_DRAW: case OP_DRAW_IDX: case OP_DISPATCH: {
@@ -6146,8 +6142,8 @@ void mtl_exec(const uint8_t *p) {
             case OP_CLEAR_TEX: clear_tex(a); break;
             case OP_DISPATCH: dispatch(a); break;
             case OP_SET_SAMP_POOL: {
-                const dpool_t *pool = ((const p_set_pool *)a)->pool;
-                uintptr_t base = samp_pool_base(pool); int n = base ? pool->n : 0;
+                const p_set_pool *pool = a;
+                uintptr_t base = pool->base; int n = pool->n;
                 rmu_lock();
                 if (g_spool.base != base || g_spool.n != n) {
                     g_spool.base = base; g_spool.n = n; args_dirty_all();
@@ -6156,8 +6152,8 @@ void mtl_exec(const uint8_t *p) {
                 PD("S sampler_pool=%#llx n=%d", (unsigned long long)base, n);
                 break; }
             case OP_SET_TEX_POOL: {
-                const dpool_t *pool = ((const p_set_pool *)a)->pool;
-                uintptr_t base = tex_pool_base(pool); int n = base ? pool->n : 0;
+                const p_set_pool *pool = a;
+                uintptr_t base = pool->base; int n = pool->n;
                 rmu_lock();
                 if (g_tpool.base != base || g_tpool.n != n) {
                     g_tpool.base = base; g_tpool.n = n; args_dirty_all();

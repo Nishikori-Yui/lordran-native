@@ -123,7 +123,15 @@ typedef struct { float factor, units, clamp; } p_poly_offset;
 typedef struct { int32_t prim, first, count, instances, base_instance; } p_draw;   // instances 0 counts as 1
 typedef struct { int32_t prim, itype, count, base_vertex, base_instance, instances; uint64_t ibuf; } p_draw_idx;
 typedef struct { int32_t x, y, z; uint64_t caller; } p_dispatch;   // caller: return address of the game call site (to locate the dispatcher)
-typedef struct { const dpool_t *pool; } p_set_pool;
+typedef struct { uintptr_t base; int n; } p_set_pool;
+static inline p_set_pool nvn_descriptor_pool_snapshot(const dpool_t *p) {
+    if (!p || !p->pool || !p->pool->mem || p->off < 0 || p->n <= 0 ||
+        (uint64_t)p->off > p->pool->size ||
+        (uint64_t)p->n * 32 > p->pool->size - (uint64_t)p->off ||
+        (uintptr_t)p->pool->mem > UINTPTR_MAX - p->pool->size)
+        return (p_set_pool){0};
+    return (p_set_pool){(uintptr_t)p->pool->mem + (uintptr_t)p->off, p->n};
+}
 typedef struct { uint64_t src; const tex_t *tex; view_t view; uint8_t has_view; NVNcopyRegion r; int32_t flags; } p_copy_b2t;
 // A host-only bit in flags: DM_COPY_RESOLVE = this is a Downsample (multisample resolve), recorded as a texture copy so everything else treats it as one (reads the source, writes the destination)
 #define DM_COPY_RESOLVE 0x40000000
