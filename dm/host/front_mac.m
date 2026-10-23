@@ -2,10 +2,16 @@
 // Without DM_WINDOW: the guest runs directly on the current thread, behaving the same as with no front end (windowless tests use this).
 // Key map (Nintendo layout): WASD left stick, arrow keys D-pad, J=A K=B U=X I=Y, Q=L E=R, Z=ZL C=ZR, F=press left stick G=press right stick, Return=+ Tab=−.
 #import <Cocoa/Cocoa.h>
+#import <Foundation/Foundation.h>
 #import <GameController/GameController.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
+#import <CoreHaptics/CoreHaptics.h>
 #include "dm.h"
+#include "dm_vibration_queue.h"
+#include "dm_vibration_timing.h"
+#include "dm_vibration_haptics.h"
+#include "dm_log.h"
 #include "dm_input.h"
 #include "dm_padmap.h"
 #include "../gfx/nvn/nvn_mtl.h"
@@ -13,7 +19,80 @@
 #include "hle.h"
 #import "perf_hud_mac.h"
 #import "cheats_mac.h"
+#import "switch_haptics_mac.h"
 #include <signal.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdio.h>
+#include <math.h>
+
+#define HAPTICS_CHANNEL_COUNT 2
+
+static pthread_mutex_t g_vibration_queue_mu = PTHREAD_MUTEX_INITIALIZER;
+static DmVibrationQueue g_vibration_queue;
+static DmVibrationTimeline g_vibration_timeline;
+static _Atomic uint64_t g_vibration_generation = 1;
+static BOOL g_vibration_app_active = YES;
+static BOOL g_vibration_window_active = YES;
+static BOOL g_front_shutdown_started;
+static BOOL g_front_shutdown_finished;
+
+static void pad_apply_vibration_frame(const DmVibrationFrame *frame);
+static void pad_start_haptics(GCController *controller);
+static void pad_schedule_haptics_test(GCController *controller);
+static void pad_update_controller_menu(void);
+static void vibration_drain(void);
+
+static void vibration_cancel_pending(void) {
+    atomic_fetch_add(&g_vibration_generation, 1);
+    pthread_mutex_lock(&g_vibration_queue_mu);
+    g_vibration_queue = (DmVibrationQueue){0};
+    pthread_mutex_unlock(&g_vibration_queue_mu);
+    g_vibration_timeline = (DmVibrationTimeline){0};
+}
+
+static void vibration_drain(void) {
+    while (1) {
+        pthread_mutex_lock(&g_vibration_queue_mu);
+        DmVibrationFrame frame = {0};
+        int have_frame = dm_vibration_queue_pop(&g_vibration_queue, &frame);
+        if (!have_frame) {
+            g_vibration_queue.drain_scheduled = 0;
+            g_vibration_timeline = (DmVibrationTimeline){0};
+        }
+        pthread_mutex_unlock(&g_vibration_queue_mu);
+        if (!have_frame) return;
+        uint64_t now_ns_value = now_ns();
+        uint64_t target_ns = dm_vibration_timeline_schedule(
+            &g_vibration_timeline, &frame, now_ns_value);
+        if (target_ns > now_ns_value) {
+            uint64_t generation = atomic_load(&g_vibration_generation);
+            DmVibrationFrame scheduled = frame;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(target_ns - now_ns_value)),
+                           dispatch_get_main_queue(), ^{
+                if (atomic_load(&g_vibration_generation) != generation) return;
+                pad_apply_vibration_frame(&scheduled);
+                vibration_drain();
+            });
+            return;
+        }
+        pad_apply_vibration_frame(&frame);
+    }
+}
+
+static void vibration_push(const DmVibrationFrame *frame) {
+    if (!frame) return;
+    int schedule_drain = 0;
+    pthread_mutex_lock(&g_vibration_queue_mu);
+    dm_vibration_queue_push(&g_vibration_queue, frame);
+    if (!g_vibration_queue.drain_scheduled) {
+        g_vibration_queue.drain_scheduled = 1;
+        schedule_drain = 1;
+    }
+    pthread_mutex_unlock(&g_vibration_queue_mu);
+    if (!schedule_drain) return;
+    dispatch_async(dispatch_get_main_queue(), ^{ vibration_drain(); });
+}
 
 static CAMetalLayer *g_layer;
 static uint64_t g_btn, g_key_btn, g_mouse_btn;
@@ -23,9 +102,48 @@ static int g_mouse_left, g_mouse_right, g_mouse_middle;
 static int32_t g_mouse_rx, g_mouse_ry;
 static uint64_t g_mouse_motion_seq;
 static GCController *g_pad_controller;
+static NSArray<GCController *> *g_pad_controllers;
+static BOOL g_pad_controller_selection_locked;
+typedef struct {
+    CHHapticEngine *engine;
+    id<CHHapticPatternPlayer> player;
+    BOOL playing;
+} DmHapticsChannel;
+static _Atomic int g_vibration_enabled = 1;
+static _Atomic int g_pad_haptics_supported;
+static _Atomic int g_haptics_request_logged;
+static _Atomic int g_haptics_render_logged;
+static _Atomic int g_pad_input_logged;
+static DmHapticsChannel g_pad_haptics_channels[HAPTICS_CHANNEL_COUNT];
+static NSUInteger g_pad_haptics_channel_count;
+static float g_haptics_low, g_haptics_high;
+static float g_haptics_low_frequency, g_haptics_high_frequency;
+static uint64_t g_haptics_frame_sequence;
+static uint64_t g_haptics_frame_timestamp_ns;
+static int g_haptics_test_started;
+static uint64_t g_haptics_test_sequence = UINT64_C(1) << 63;
+static FILE *g_pad_input_log;
+static int g_pad_input_log_initialized;
+static unsigned g_pad_input_log_count;
+static int g_pad_input_log_limit_logged;
+typedef struct {
+    int kind;
+    uint64_t buttons;
+    int32_t lx, ly, rx, ry;
+} DmPadInputLogState;
+static DmPadInputLogState g_last_pad_input_log_state;
+static int g_have_pad_input_log_state;
+static uint64_t g_last_pad_input_log_activity_ns;
 static DmMacPerfHUD *g_perf_hud;
 static DmMacCheats *g_cheats;
+static NSMenu *g_controller_menu;
+static NSMenuItem *g_vibration_menu_item;
+static id g_controller_menu_target;
 
+static GCDeviceHaptics *controller_haptics(GCController *controller) {
+    if (@available(macOS 11.0, *)) return controller.haptics;
+    return nil;
+}
 void *front_metal_layer(void) { return (__bridge void *)g_layer; }
 static int ds_layout(void) { return !strcmp(DM_GAME_MAC_LAYOUT, "dark_souls_pc"); }
 // The original game's 16:9 constants, behavior unchanged; DM_GAME_RES=<width>x<height> (docked mode; handheld scaled by 720/900) is only for side-by-side comparison with iOS widescreen
@@ -41,11 +159,408 @@ static int32_t clamp_axis(long v) {
 static int32_t pad_axis(float v) {
     return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * DM_STICK_MAX);
 }
+static int pad_controller_kind(GCController *controller) {
+    if (!controller) return DM_PADKIND_XBOX;
+    return dm_padmap_kind(controller.productCategory.UTF8String,
+                           controller.vendorName.UTF8String);
+}
 static void pad_clear(void) {
     dm_pad_set(0, 0, 0, 0, 0);
 }
-static void pad_read(GCExtendedGamepad *g) {
-    uint64_t buttons = dm_padmap_face(DM_PADKIND_NINTENDO,
+static void pad_input_log(const char *source, uint64_t timestamp_ns,
+                          int kind, uint64_t buttons,
+                          int32_t lx, int32_t ly, int32_t rx, int32_t ry,
+                          float raw_lx, float raw_ly,
+                          float raw_rx, float raw_ry) {
+    if (!source) source = "unknown";
+    if (!g_pad_input_log_initialized) {
+        g_pad_input_log_initialized = 1;
+        const char *path = getenv("DM_CONTROLLER_INPUT_LOG");
+        if (path && *path) g_pad_input_log = fopen(path, "w");
+        if (path && *path && !g_pad_input_log)
+            DM_LOG_WARN("controller", "Could not open controller input log");
+    }
+    if (!g_pad_input_log || g_pad_input_log_count >= 1024) {
+        if (g_pad_input_log && !g_pad_input_log_limit_logged) {
+            g_pad_input_log_limit_logged = 1;
+            DM_LOG_INFO("controller", "Controller input log reached 1024 entries; further records suppressed");
+        }
+        return;
+    }
+    DmPadInputLogState state = {
+        .kind = kind, .buttons = buttons,
+        .lx = lx, .ly = ly, .rx = rx, .ry = ry,
+    };
+    int state_changed = !g_have_pad_input_log_state ||
+        state.kind != g_last_pad_input_log_state.kind ||
+        state.buttons != g_last_pad_input_log_state.buttons ||
+        state.lx != g_last_pad_input_log_state.lx ||
+        state.ly != g_last_pad_input_log_state.ly ||
+        state.rx != g_last_pad_input_log_state.rx ||
+        state.ry != g_last_pad_input_log_state.ry;
+    int activity_due = !state_changed &&
+        (!g_last_pad_input_log_activity_ns ||
+         timestamp_ns < g_last_pad_input_log_activity_ns ||
+         timestamp_ns - g_last_pad_input_log_activity_ns >= 1000000000ull);
+    if (!state_changed && !activity_due) return;
+    fprintf(g_pad_input_log,
+            "{\"event\":\"controller_input\",\"kind\":\"%s\","
+            "\"source\":\"%s\",\"timestamp_ns\":%llu,\"buttons\":%llu,"
+            "\"raw_lx\":%.6f,\"raw_ly\":%.6f,\"raw_rx\":%.6f,\"raw_ry\":%.6f,"
+            "\"lx\":%d,\"ly\":%d,\"rx\":%d,\"ry\":%d}\n",
+            kind == DM_PADKIND_NINTENDO ? "nintendo" : "other",
+            source, (unsigned long long)timestamp_ns,
+            (unsigned long long)buttons, raw_lx, raw_ly, raw_rx, raw_ry,
+            lx, ly, rx, ry);
+    fflush(g_pad_input_log);
+    g_pad_input_log_count++;
+    g_last_pad_input_log_state = state;
+    g_have_pad_input_log_state = 1;
+    g_last_pad_input_log_activity_ns = timestamp_ns;
+}
+static void pad_stop_core_haptics(void) {
+    for (NSUInteger i = 0; i < g_pad_haptics_channel_count; i++) {
+        DmHapticsChannel *channel = &g_pad_haptics_channels[i];
+        NSError *error = nil;
+        if (channel->player && ![channel->player stopAtTime:CHHapticTimeImmediate error:&error])
+            DM_LOG_WARN("controller", "Could not stop haptics channel %lu: %s",
+                        (unsigned long)i, error.localizedDescription.UTF8String ?: "unknown error");
+        channel->playing = NO;
+    }
+}
+static void pad_stop_vibration(void) {
+    g_haptics_low = g_haptics_high = 0.f;
+    g_haptics_low_frequency = g_haptics_high_frequency = 0.f;
+    pad_stop_core_haptics();
+    switch_haptics_stop();
+}
+static void front_finish_shutdown(int neutral_report_completed, int timed_out) {
+    if (g_front_shutdown_finished) return;
+    g_front_shutdown_finished = YES;
+    if (timed_out)
+        DM_LOG_WARN("controller", "Timed out waiting for final neutral rumble report");
+    else if (!neutral_report_completed)
+        DM_LOG_WARN("controller", "Exiting without confirmation of the final neutral rumble report");
+    exit(0);
+}
+static void front_begin_shutdown(void) {
+    if (g_front_shutdown_started) return;
+    g_front_shutdown_started = YES;
+    g_vibration_app_active = NO;
+    g_vibration_window_active = NO;
+    atomic_store(&g_vibration_enabled, 0);
+    vibration_cancel_pending();
+    g_haptics_low = g_haptics_high = 0.f;
+    g_haptics_low_frequency = g_haptics_high_frequency = 0.f;
+    pad_stop_core_haptics();
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2250 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+        front_finish_shutdown(0, 1);
+    });
+    switch_haptics_stop_with_completion(^(int completed) {
+        front_finish_shutdown(completed, 0);
+    });
+}
+static void pad_discard_haptics(void) {
+    atomic_store(&g_pad_haptics_supported, 0);
+    atomic_store(&g_haptics_render_logged, 0);
+    pad_stop_vibration();
+    for (NSUInteger i = 0; i < HAPTICS_CHANNEL_COUNT; i++) {
+        DmHapticsChannel *channel = &g_pad_haptics_channels[i];
+        [channel->engine stopWithCompletionHandler:nil];
+        channel->player = nil;
+        channel->engine = nil;
+    }
+    g_pad_haptics_channel_count = 0;
+}
+
+static BOOL pad_configure_haptics_channel(DmHapticsChannel *out,
+                                          GCDeviceHaptics *haptics,
+                                          GCHapticsLocality locality,
+                                          NSString *name) {
+    DmHapticsChannel channel = {0};
+    NSError *error = nil;
+    channel.engine = [haptics createEngineWithLocality:locality];
+    if (!channel.engine) {
+        const char *log_name = name.UTF8String ?: "unknown locality";
+        DM_LOG_ERROR("controller", "Could not create haptics engine for %s", log_name);
+        return NO;
+    }
+    channel.engine.playsHapticsOnly = YES;
+    channel.engine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (reason != CHHapticEngineStoppedReasonNotifyWhenFinished) {
+                const char *log_name = name.UTF8String ?: "unknown locality";
+                DM_LOG_WARN("controller", "Haptics engine stopped for %s: reason=%ld",
+                            log_name, (long)reason);
+            }
+            for (NSUInteger i = 0; i < HAPTICS_CHANNEL_COUNT; i++) {
+                if (g_pad_haptics_channels[i].engine != channel.engine) continue;
+                g_pad_haptics_channels[i].playing = NO;
+                g_pad_haptics_channels[i].player = nil;
+                atomic_store(&g_pad_haptics_supported, 0);
+            }
+        });
+    };
+    channel.engine.resetHandler = ^{
+        dispatch_async(dispatch_get_main_queue(), ^{
+            GCController *controller = g_pad_controller;
+            if (!controller) return;
+            // Rebuild all channels together because a reset may invalidate either handle.
+            pad_discard_haptics();
+            if (controller == g_pad_controller) pad_start_haptics(controller);
+        });
+    };
+    if (![channel.engine startAndReturnError:&error]) {
+        const char *log_name = name.UTF8String ?: "unknown locality";
+        DM_LOG_ERROR("controller", "Could not start haptics engine for %s: %s",
+                     log_name, error.localizedDescription.UTF8String ?: "unknown error");
+        return NO;
+    }
+    // Dynamic intensity is multiplicative and sharpness is additive. Use
+    // neutral event values so the live controls can represent the full range.
+    CHHapticEventParameter *intensity = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:1.0];
+    CHHapticEventParameter *sharpness = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.0];
+    CHHapticEventParameter *sustained = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDSustained value:1.0];
+    // The basic player is used deliberately: on macOS the advanced-player
+    // factory can fail to connect to gamecontrollerd even for simple patterns.
+    // A long continuous event can still be stopped immediately when the game
+    // sends a zero frame.
+    CHHapticEvent *event = [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous parameters:@[intensity, sharpness, sustained] relativeTime:0 duration:3600.0];
+    CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[event] parameters:@[] error:&error];
+    channel.player = pattern ? [channel.engine createPlayerWithPattern:pattern error:&error] : nil;
+    if (!channel.player) {
+        const char *log_name = name.UTF8String ?: "unknown locality";
+        DM_LOG_ERROR("controller", "Could not create haptics player for %s: %s",
+                     log_name, error.localizedDescription.UTF8String ?: "unknown error");
+        return NO;
+    }
+    *out = channel;
+    return YES;
+}
+
+static void pad_start_haptics(GCController *controller) {
+    if (@available(macOS 11.0, *)) {
+        GCDeviceHaptics *haptics = controller.haptics;
+        atomic_store(&g_pad_haptics_supported, 0);
+        if (!haptics) return;
+        NSSet<GCHapticsLocality> *supported = haptics.supportedLocalities;
+        BOOL split_handles = [supported containsObject:GCHapticsLocalityLeftHandle] &&
+            [supported containsObject:GCHapticsLocalityRightHandle];
+        BOOL ready = NO;
+        if (split_handles) {
+            // Some macOS/GameController versions advertise per-handle
+            // localities but reject their player connection. Try the precise
+            // path first, then fall back to the combined locality instead of
+            // disabling vibration for the controller altogether.
+            pad_discard_haptics();
+            NSArray<GCHapticsLocality> *localities =
+                @[GCHapticsLocalityLeftHandle, GCHapticsLocalityRightHandle];
+            NSArray<NSString *> *names = @[@"left handle", @"right handle"];
+            g_pad_haptics_channel_count = localities.count;
+            ready = YES;
+            for (NSUInteger i = 0; i < g_pad_haptics_channel_count; i++) {
+                if (!pad_configure_haptics_channel(&g_pad_haptics_channels[i], haptics,
+                                                   localities[i], names[i])) {
+                    ready = NO;
+                    break;
+                }
+            }
+        }
+        if (!ready) {
+            pad_discard_haptics();
+            GCHapticsLocality locality = [supported containsObject:GCHapticsLocalityHandles]
+                ? GCHapticsLocalityHandles : GCHapticsLocalityDefault;
+            g_pad_haptics_channel_count = 1;
+            ready = pad_configure_haptics_channel(&g_pad_haptics_channels[0], haptics,
+                                                  locality, @"combined handles");
+        }
+        if (ready) {
+            atomic_store(&g_pad_haptics_supported, 1);
+            DM_LOG_INFO("controller", "Controller haptics engines and players ready");
+        } else {
+            pad_discard_haptics();
+        }
+    }
+}
+static void pad_apply_haptics(void) {
+    DmVibrationBands bands = {
+        .low_amplitude = g_haptics_low,
+        .low_frequency = g_haptics_low_frequency,
+        .high_amplitude = g_haptics_high,
+        .high_frequency = g_haptics_high_frequency,
+    };
+    DmVibrationHapticsParameters parameters =
+        dm_vibration_haptics_parameters_for_bands(bands);
+    if (parameters.intensity <= 0.f) { pad_stop_vibration(); return; }
+    NSUInteger accepted_channels = 0;
+    for (NSUInteger i = 0; i < g_pad_haptics_channel_count; i++) {
+        DmHapticsChannel *channel = &g_pad_haptics_channels[i];
+        if (!channel->engine || !channel->player) continue;
+        NSError *error = nil;
+        if (![channel->engine startAndReturnError:&error]) {
+            DM_LOG_ERROR("controller", "Could not start haptics engine for channel %lu: %s",
+                         (unsigned long)i, error.localizedDescription.UTF8String ?: "unknown error");
+            continue;
+        }
+        CHHapticDynamicParameter *intensity = [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl value:parameters.intensity relativeTime:0];
+        CHHapticDynamicParameter *sharpness_parameter = [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticSharpnessControl value:parameters.sharpness relativeTime:0];
+        if (!channel->playing) {
+            if (![channel->player startAtTime:CHHapticTimeImmediate error:&error]) {
+                DM_LOG_ERROR("controller", "Could not start haptics player for channel %lu: %s",
+                             (unsigned long)i, error.localizedDescription.UTF8String ?: "unknown error");
+                continue;
+            }
+            channel->playing = YES;
+        }
+        if (![channel->player sendParameters:@[intensity, sharpness_parameter] atTime:CHHapticTimeImmediate error:&error])
+            DM_LOG_ERROR("controller", "Could not update haptics for channel %lu: %s",
+                         (unsigned long)i, error.localizedDescription.UTF8String ?: "unknown error");
+        else
+            accepted_channels++;
+    }
+    if (accepted_channels && !atomic_exchange(&g_haptics_render_logged, 1)) {
+        uint64_t elapsed_ns = 0;
+        double source_to_accept_ms = dm_vibration_elapsed_ns(
+            g_haptics_frame_timestamp_ns, now_ns(), &elapsed_ns)
+            ? (double)elapsed_ns / 1000000.0 : -1.0;
+        DM_LOG_INFO("controller", "Core Haptics parameters accepted: sequence=%llu timestamp_ns=%llu source_to_accept_ms=%.3f accepted_channels=%lu configured_channels=%lu intensity=%.3f sharpness=%.3f",
+                    (unsigned long long)g_haptics_frame_sequence,
+                    (unsigned long long)g_haptics_frame_timestamp_ns,
+                    source_to_accept_ms,
+                    (unsigned long)accepted_channels,
+                    (unsigned long)g_pad_haptics_channel_count,
+                    parameters.intensity, parameters.sharpness);
+    }
+}
+static BOOL pad_haptics_ready(void) {
+    if (!g_pad_haptics_channel_count) return NO;
+    for (NSUInteger i = 0; i < g_pad_haptics_channel_count; i++)
+        if (!g_pad_haptics_channels[i].engine || !g_pad_haptics_channels[i].player) return NO;
+    return YES;
+}
+static void pad_apply_vibration_frame(const DmVibrationFrame *frame) {
+    if (!frame) return;
+    DmVibrationBands bands = dm_vibration_bands_from_frame(frame);
+    float low = bands.low_amplitude;
+    float high = bands.high_amplitude;
+    float low_frequency = bands.low_frequency;
+    float high_frequency = bands.high_frequency;
+    if (!atomic_load(&g_vibration_enabled) || !g_pad_controller ||
+        !g_vibration_app_active || !g_vibration_window_active) {
+        g_haptics_low = g_haptics_high = 0.f;
+        g_haptics_low_frequency = g_haptics_high_frequency = 0.f;
+        pad_stop_vibration();
+        return;
+    }
+    if ((low > 0.f || high > 0.f) && !atomic_exchange(&g_haptics_request_logged, 1))
+        DM_LOG_INFO("controller", "First nonzero %s vibration frame received: low_amp=%.3f low_hz=%.3f high_amp=%.3f high_hz=%.3f",
+                    (frame->sequence & (UINT64_C(1) << 63)) ? "manual-test" : "game",
+                    low, low_frequency, high, high_frequency);
+    g_haptics_low = low;
+    g_haptics_high = high;
+    g_haptics_low_frequency = low_frequency;
+    g_haptics_high_frequency = high_frequency;
+    g_haptics_frame_sequence = frame->sequence;
+    g_haptics_frame_timestamp_ns = frame->timestamp_ns;
+    // Let the raw Switch backend retain the latest frame while its enable
+    // acknowledgement is still in flight. It is a no-op for other devices.
+    switch_haptics_set(frame);
+    // Preserve Switch HD Rumble by sending its native two-band values to the
+    // Nintendo HID device. Core Haptics is the fallback for devices such as
+    // DualSense that do not expose this Switch protocol.
+    if (switch_haptics_supported()) {
+        if (atomic_load(&g_pad_haptics_supported)) pad_stop_core_haptics();
+        return;
+    }
+    if (low > 0.f || high > 0.f) {
+        if (!atomic_load(&g_pad_haptics_supported) || !pad_haptics_ready())
+            pad_start_haptics(g_pad_controller);
+        if (!atomic_load(&g_pad_haptics_supported)) {
+            switch_haptics_set(frame);
+            return;
+        }
+        pad_apply_haptics();
+    } else pad_stop_vibration();
+}
+
+typedef struct {
+    float low_amplitude, low_frequency;
+    float high_amplitude, high_frequency;
+    uint64_t hold_ns;
+} DmHapticsTestStep;
+
+static int haptics_test_enabled(void) {
+    const char *value = getenv("DM_HAPTICS_TEST");
+    return value && *value && strcmp(value, "0") != 0;
+}
+
+static void pad_schedule_haptics_test(GCController *controller) {
+    if (!controller || !haptics_test_enabled() || g_haptics_test_started) return;
+    g_haptics_test_started = 1;
+    uint64_t generation = atomic_load(&g_vibration_generation);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+        if (atomic_load(&g_vibration_generation) != generation ||
+            controller != g_pad_controller || !g_vibration_app_active ||
+            !g_vibration_window_active) {
+            g_haptics_test_started = 0;
+            return;
+        }
+        // Explicitly opt-in diagnostic pattern: isolated low/high bands,
+        // combined dual-band output, then dot-dot-dash pulses.
+        static const DmHapticsTestStep steps[] = {
+            {0.75f, 160.f, 0.f, 320.f, 180000000ull},
+            {0.f, 160.f, 0.f, 320.f, 120000000ull},
+            {0.f, 160.f, 0.75f, 320.f, 180000000ull},
+            {0.f, 160.f, 0.f, 320.f, 120000000ull},
+            {0.85f, 80.f, 0.75f, 320.f, 240000000ull},
+            {0.f, 160.f, 0.f, 320.f, 120000000ull},
+            {0.9f, 160.f, 0.f, 320.f, 80000000ull},
+            {0.f, 160.f, 0.f, 320.f, 80000000ull},
+            {0.9f, 160.f, 0.f, 320.f, 80000000ull},
+            {0.f, 160.f, 0.f, 320.f, 80000000ull},
+            {0.9f, 160.f, 0.f, 320.f, 240000000ull},
+            {0.f, 160.f, 0.f, 320.f, 0},
+        };
+        uint64_t timestamp_ns = now_ns();
+        for (NSUInteger i = 0; i < sizeof steps / sizeof steps[0]; i++) {
+            DmVibrationFrame frame = {
+                .low_amplitude = steps[i].low_amplitude,
+                .low_frequency = steps[i].low_frequency,
+                .high_amplitude = steps[i].high_amplitude,
+                .high_frequency = steps[i].high_frequency,
+                .sequence = g_haptics_test_sequence++,
+                .timestamp_ns = timestamp_ns,
+            };
+            vibration_push(&frame);
+            timestamp_ns += steps[i].hold_ns;
+        }
+        DM_LOG_INFO("controller", "Manual haptics test scheduled: steps=%lu sequence_base=%llu",
+                    (unsigned long)(sizeof steps / sizeof steps[0]),
+                    (unsigned long long)(g_haptics_test_sequence - (sizeof steps / sizeof steps[0])));
+    });
+}
+
+void front_vibration(const DmVibrationFrame *frame) {
+    if (!frame || !atomic_load(&g_vibration_enabled)) return;
+    vibration_push(frame);
+}
+int front_vibration_supported(void) {
+    return atomic_load(&g_vibration_enabled) &&
+        (atomic_load(&g_pad_haptics_supported) || switch_haptics_supported());
+}
+void front_vibration_set_enabled(int enabled) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        atomic_store(&g_vibration_enabled, enabled != 0);
+        [NSUserDefaults.standardUserDefaults setBool:enabled != 0 forKey:@"DmVibrationEnabled"];
+        if (!enabled) { vibration_cancel_pending(); pad_stop_vibration(); }
+    });
+}
+static void pad_read(GCExtendedGamepad *g, const char *source) {
+    if (!g) return;
+    int kind = pad_controller_kind(g_pad_controller);
+    uint64_t buttons = dm_padmap_face(kind,
                                       g.buttonA.isPressed, g.buttonB.isPressed,
                                       g.buttonX.isPressed, g.buttonY.isPressed);
     if (g.leftShoulder.isPressed) buttons |= DM_BTN_L;
@@ -60,37 +575,177 @@ static void pad_read(GCExtendedGamepad *g) {
     if (g.dpad.up.isPressed) buttons |= DM_BTN_UP;
     if (g.dpad.right.isPressed) buttons |= DM_BTN_RIGHT;
     if (g.dpad.down.isPressed) buttons |= DM_BTN_DOWN;
-    dm_pad_set(buttons,
-               pad_axis(g.leftThumbstick.xAxis.value),
-               pad_axis(g.leftThumbstick.yAxis.value),
-               pad_axis(g.rightThumbstick.xAxis.value),
-               pad_axis(g.rightThumbstick.yAxis.value));
+    int32_t lx = pad_axis(g.leftThumbstick.xAxis.value);
+    int32_t ly = pad_axis(g.leftThumbstick.yAxis.value);
+    int32_t rx = pad_axis(g.rightThumbstick.xAxis.value);
+    int32_t ry = pad_axis(g.rightThumbstick.yAxis.value);
+    float raw_lx = isfinite(g.leftThumbstick.xAxis.value) ? g.leftThumbstick.xAxis.value : 0.f;
+    float raw_ly = isfinite(g.leftThumbstick.yAxis.value) ? g.leftThumbstick.yAxis.value : 0.f;
+    float raw_rx = isfinite(g.rightThumbstick.xAxis.value) ? g.rightThumbstick.xAxis.value : 0.f;
+    float raw_ry = isfinite(g.rightThumbstick.yAxis.value) ? g.rightThumbstick.yAxis.value : 0.f;
+    dm_pad_set(buttons, lx, ly, rx, ry);
+    pad_input_log(source, now_ns(), kind, buttons, lx, ly, rx, ry,
+                  raw_lx, raw_ly, raw_rx, raw_ry);
+    if ((buttons || lx || ly || rx || ry) && !atomic_exchange(&g_pad_input_logged, 1))
+        DM_LOG_INFO("controller", "First nonzero controller input received: buttons=%#llx left=(%d,%d) right=(%d,%d)",
+                    (unsigned long long)buttons, lx, ly, rx, ry);
 }
-static void pad_refresh(void) {
-    GCController *selected = nil;
-    GCController *current = GCController.current;
-    for (GCController *c in GCController.controllers) {
-        if (!c.extendedGamepad) continue;
-        if (!selected) selected = c;
-        if (c == current) { selected = c; break; }
-    }
-    if (selected != g_pad_controller) {
-        g_pad_controller.extendedGamepad.valueChangedHandler = nil;
+static void pad_select_controller(GCController *selected) {
+    BOOL changed = selected != g_pad_controller;
+    if (changed) {
+        vibration_cancel_pending();
+        pad_discard_haptics();
+        g_haptics_test_started = 0;
         g_pad_controller = selected;
+        atomic_store(&g_pad_input_logged, 0);
+        atomic_store(&g_pad_haptics_supported, 0);
         if (selected) {
-            selected.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *element) {
-                (void)element;
-                if (g == g_pad_controller.extendedGamepad) pad_read(g);
-            };
+            switch_haptics_init_for_controller(selected.vendorName.UTF8String,
+                                               selected.productCategory.UTF8String);
+            pad_start_haptics(selected);
             const char *vendor = selected.vendorName.UTF8String ?: "unknown";
             const char *category = selected.productCategory.UTF8String ?: "unknown";
-            LOG("Mac controller connected: %s / %s", category, vendor);
+            DM_LOG_INFO("controller", "Mac controller connected: category=%s vendor=%s haptics=%d",
+                        category, vendor, controller_haptics(selected) != nil);
         } else {
+            switch_haptics_init_for_controller(NULL, NULL);
             LOG("Mac controller disconnected");
         }
     }
-    if (selected) pad_read(selected.extendedGamepad); else pad_clear();
+    if (selected) pad_read(selected.extendedGamepad, "select"); else pad_clear();
+    atomic_store(&g_pad_haptics_supported,
+                 g_pad_haptics_channel_count > 0 && pad_haptics_ready());
+    pad_schedule_haptics_test(selected);
+    if (changed) pad_update_controller_menu();
 }
+static void pad_refresh(void) {
+    NSMutableArray<GCController *> *controllers = [NSMutableArray array];
+    for (GCController *controller in GCController.controllers)
+        if (controller.extendedGamepad) [controllers addObject:controller];
+    if (![controllers isEqualToArray:g_pad_controllers]) {
+        for (GCController *controller in g_pad_controllers)
+            controller.extendedGamepad.valueChangedHandler = nil;
+        g_pad_controllers = [controllers copy];
+        for (GCController *controller in g_pad_controllers) {
+            __weak GCController *weakController = controller;
+            controller.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *callbackGamepad, GCControllerElement *element) {
+                (void)callbackGamepad;
+                (void)element;
+                GCController *source = weakController;
+                if (!source) return;
+                void (^publishInput)(void) = ^{
+                    if (![g_pad_controllers containsObject:source]) return;
+                    if (g_pad_controller_selection_locked && source != g_pad_controller)
+                        return;
+                    if (dm_padmap_should_auto_select(
+                            pad_controller_kind(g_pad_controller),
+                            pad_controller_kind(source), g_pad_controller != nil,
+                            g_pad_controller_selection_locked))
+                        pad_select_controller(source);
+                    // The callback wrapper contains the coherent sample that
+                    // caused this event. Read it directly while the source is
+                    // still selected; the 60 Hz poll handles idle samples.
+                    if (source == g_pad_controller)
+                        pad_read(callbackGamepad ?: source.extendedGamepad, "callback");
+                };
+                if (NSThread.isMainThread) publishInput();
+                else dispatch_async(dispatch_get_main_queue(), publishInput);
+            };
+        }
+    }
+    // Keep an explicit or last-input selection stable. Falling back to
+    // GCController.current on every refresh can silently steal NS Pro input
+    // when DualSense is also connected.
+    if (!g_pad_controller || ![g_pad_controllers containsObject:g_pad_controller]) {
+        g_pad_controller_selection_locked = NO;
+        GCController *preferred = nil;
+        for (GCController *controller in g_pad_controllers) {
+            if (pad_controller_kind(controller) == DM_PADKIND_NINTENDO) {
+                preferred = controller;
+                break;
+            }
+        }
+        GCController *current = GCController.current;
+        if (preferred)
+            pad_select_controller(preferred);
+        else if (current && current.extendedGamepad && [g_pad_controllers containsObject:current])
+            pad_select_controller(current);
+        else
+            pad_select_controller(g_pad_controllers.firstObject);
+    } else {
+        if (!g_pad_controller_selection_locked &&
+            pad_controller_kind(g_pad_controller) != DM_PADKIND_NINTENDO) {
+            for (GCController *controller in g_pad_controllers) {
+                if (pad_controller_kind(controller) == DM_PADKIND_NINTENDO) {
+                    pad_select_controller(controller);
+                    break;
+                }
+            }
+        }
+        pad_update_controller_menu();
+    }
+}
+static NSString *controller_menu_title(GCController *controller, NSUInteger index) {
+    NSString *vendor = controller.vendorName.length ? controller.vendorName : nil;
+    NSString *category = controller.productCategory.length ? controller.productCategory : nil;
+    NSString *name = vendor ?: category ?: [NSString stringWithFormat:@"Controller %lu", (unsigned long)(index + 1)];
+    if (vendor && category && ![vendor isEqualToString:category])
+        name = [NSString stringWithFormat:@"%@ (%@)", vendor, category];
+    return name;
+}
+static void pad_update_controller_menu(void) {
+    if (!g_controller_menu) return;
+    [g_controller_menu removeAllItems];
+    if (!g_pad_controllers.count) {
+        NSMenuItem *empty = [g_controller_menu addItemWithTitle:@"No controller connected"
+                                                           action:nil keyEquivalent:@""];
+        empty.enabled = NO;
+    } else {
+        for (NSUInteger i = 0; i < g_pad_controllers.count; i++) {
+            GCController *controller = g_pad_controllers[i];
+            NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:controller_menu_title(controller, i)
+                                                            action:@selector(selectController:)
+                                                     keyEquivalent:@""];
+            item.target = g_controller_menu_target;
+            item.tag = (NSInteger)i;
+            item.state = controller == g_pad_controller ? NSControlStateValueOn : NSControlStateValueOff;
+            [g_controller_menu addItem:item];
+        }
+    }
+    if (g_vibration_menu_item) {
+        [g_controller_menu addItem:NSMenuItem.separatorItem];
+        [g_controller_menu addItem:g_vibration_menu_item];
+    }
+}
+
+@interface DmControllerMenuTarget : NSObject
+- (void)selectController:(NSMenuItem *)item;
+@end
+@implementation DmControllerMenuTarget
+- (void)selectController:(NSMenuItem *)item {
+    NSInteger index = item.tag;
+    if (index < 0 || index >= (NSInteger)g_pad_controllers.count) return;
+    g_pad_controller_selection_locked = YES;
+    pad_select_controller(g_pad_controllers[(NSUInteger)index]);
+}
+@end
+
+static void pad_poll(void) {
+    if (g_pad_controller && [g_pad_controllers containsObject:g_pad_controller])
+        pad_read(g_pad_controller.extendedGamepad, "poll");
+    else
+        pad_clear();
+}
+@interface DmVibrationMenuTarget : NSObject
+- (void)toggleVibration:(NSMenuItem *)item;
+@end
+@implementation DmVibrationMenuTarget
+- (void)toggleVibration:(NSMenuItem *)item {
+    item.state = item.state == NSControlStateValueOn ? NSControlStateValueOff : NSControlStateValueOn;
+    front_vibration_set_enabled(item.state == NSControlStateValueOn);
+}
+@end
+static DmVibrationMenuTarget *g_vibration_menu_target;
 static int game_key_event(NSEvent *e, NSWindow *win) {
     return e.window == win || (e.window == nil && NSApp.keyWindow == win);
 }
@@ -191,7 +846,10 @@ typedef struct { void (*fn)(void); } guest_arg;
 static void *guest_tramp(void *p) {
     static char alt[65536];                       // The signal alternate stack is per thread; crash printing must also work on the guest thread
     stack_t ss = {.ss_sp = alt, .ss_size = sizeof alt}; sigaltstack(&ss, 0);
-    ((guest_arg *)p)->fn(); LOG("Guest thread exited"); exit(0);
+    ((guest_arg *)p)->fn();
+    LOG("Guest thread exited");
+    dispatch_async(dispatch_get_main_queue(), ^{ front_begin_shutdown(); });
+    return NULL;
 }
 
 void front_run(void (*guest)(void)) {
@@ -215,18 +873,54 @@ void front_run(void (*guest)(void)) {
         [win center];
         [NSApp activateIgnoringOtherApps:YES];
         [win makeKeyAndOrderFront:nil];
+        g_vibration_app_active = NSApp.isActive;
+        g_vibration_window_active = win.isKeyWindow;
         win.initialFirstResponder = v;
         [win makeFirstResponder:v];
+        atomic_store(&g_vibration_enabled, [NSUserDefaults.standardUserDefaults objectForKey:@"DmVibrationEnabled"]
+            ? [NSUserDefaults.standardUserDefaults boolForKey:@"DmVibrationEnabled"] : YES);
         g_perf_hud = [[DmMacPerfHUD alloc] initWithWindow:win device:g_layer.device];
         g_cheats = [[DmMacCheats alloc] initWithWindow:win];
+        NSMenu *mainMenu = NSApp.mainMenu;
+        if (!mainMenu) {
+            mainMenu = [[NSMenu alloc] initWithTitle:@"Main"];
+            NSApp.mainMenu = mainMenu;
+        }
+        NSMenuItem *controllerRoot = [[NSMenuItem alloc] initWithTitle:@"Controller" action:nil keyEquivalent:@""];
+        g_controller_menu = [[NSMenu alloc] initWithTitle:@"Controller"];
+        controllerRoot.submenu = g_controller_menu;
+        g_controller_menu_target = [DmControllerMenuTarget new];
+        [mainMenu addItem:controllerRoot];
+        g_vibration_menu_item = [[NSMenuItem alloc] initWithTitle:@"Controller Vibration" action:@selector(toggleVibration:) keyEquivalent:@""];
+        g_vibration_menu_target = [DmVibrationMenuTarget new];
+        g_vibration_menu_item.target = g_vibration_menu_target;
+        g_vibration_menu_item.state = atomic_load(&g_vibration_enabled) ? NSControlStateValueOn : NSControlStateValueOff;
+        pad_update_controller_menu();
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
+        [nc addObserverForName:NSApplicationWillResignActiveNotification object:NSApp queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
+            (void)n; g_vibration_app_active = NO; vibration_cancel_pending(); pad_stop_vibration();
+        }];
+        [nc addObserverForName:NSApplicationDidBecomeActiveNotification object:NSApp queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
+            (void)n; g_vibration_app_active = YES; g_vibration_window_active = win.isKeyWindow;
+        }];
         [nc addObserverForName:GCControllerDidConnectNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
             (void)n; pad_refresh();
         }];
         [nc addObserverForName:GCControllerDidDisconnectNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
             (void)n; pad_refresh();
         }];
+        [nc addObserverForName:GCControllerDidBecomeCurrentNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
+            (void)n; pad_refresh();
+        }];
+        [nc addObserverForName:GCControllerDidStopBeingCurrentNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
+            (void)n; pad_refresh();
+        }];
         pad_refresh();
+        [NSTimer scheduledTimerWithTimeInterval:1.0 / 60.0 repeats:YES block:^(NSTimer *timer) {
+            (void)timer;
+            pad_poll();
+            switch_haptics_poll();
+        }];
         if (!GCController.controllers.count) [GCController startWirelessControllerDiscoveryWithCompletionHandler:nil];
         [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown | NSEventMaskKeyUp handler:^NSEvent *(NSEvent *e) {
             if (!game_key_event(e, win)) return e;   // Keep native text dialogs and other application windows independent
@@ -272,10 +966,13 @@ void front_run(void (*guest)(void)) {
             }];
         }
         [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowWillCloseNotification object:win queue:nil
-                                                      usingBlock:^(NSNotification *n) { (void)n; exit(0); }];
+                                                      usingBlock:^(NSNotification *n) { (void)n; front_begin_shutdown(); }];
         // Lifecycle (hle.h / dm.h): focus lost → 2, focus regained → 1; minimized → 3 + audio paused + GPU suspended, restored → resume (followed by focus regained → 1)
         [nc addObserverForName:NSWindowDidResignKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) {
             (void)n;
+            g_vibration_window_active = NO;
+            vibration_cancel_pending();
+            pad_stop_vibration();
             // A native text dialog can consume the key-up that opened it.
             g_btn = g_key_btn = g_mouse_btn = 0;
             g_w = g_a = g_s = g_d = g_walk = g_shift = 0;
@@ -284,6 +981,9 @@ void front_run(void (*guest)(void)) {
             push(); pad_clear(); dm_touch_set(NULL, 0);
             LOG("Game window lost keyboard focus");
             if (!win.miniaturized) dm_focus_set(2);
+        }];
+        [nc addObserverForName:NSWindowDidBecomeKeyNotification object:win queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
+            (void)n; g_vibration_window_active = YES;
         }];
         [nc addObserverForName:NSWindowDidBecomeKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) {
             (void)n;
@@ -294,8 +994,8 @@ void front_run(void (*guest)(void)) {
             mtl_link_resume();
             dm_focus_set(1);
         }];
-        [nc addObserverForName:NSWindowDidMiniaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_focus_set(3); dm_audio_suspend(1); dm_gfx_suspend(1); }];
-        [nc addObserverForName:NSWindowDidDeminiaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_gfx_suspend(0); dm_audio_suspend(0); dm_focus_set(2); }];
+        [nc addObserverForName:NSWindowDidMiniaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; g_vibration_window_active = NO; vibration_cancel_pending(); pad_stop_vibration(); dm_focus_set(3); dm_audio_suspend(1); dm_gfx_suspend(1); }];
+        [nc addObserverForName:NSWindowDidDeminiaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; g_vibration_window_active = win.isKeyWindow; dm_gfx_suspend(0); dm_audio_suspend(0); dm_focus_set(2); }];
         // Guest thread: 64 MiB stack (the Switch main thread stack is specified by npdm; the host gives plenty)
         static guest_arg ga; ga.fn = guest;
         pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a, 64u << 20);

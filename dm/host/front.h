@@ -7,7 +7,12 @@ void *front_metal_layer(void);
 // Game output resolution (the rewriter's PARAMS resolution parameter slot): docked = 1 docked mode / 0 handheld mode, returns (u64)height << 32 | width.
 // The original game's constants are 1600x900 / 1280x720 (16:9); front ends with a different screen aspect ratio widen at the same height, and the game natively renders at the new width and re-lays out the UI (width ≤ 4096).
 #include <stdint.h>
+#include "dm_input.h"
 uint64_t front_game_res(int docked);
+// Forward Switch vibration values to the active physical controller when supported.
+void front_vibration(const DmVibrationFrame *frame);
+int front_vibration_supported(void);
+void front_vibration_set_enabled(int enabled);
 // Text input box (for the software keyboard swkbd): the main thread shows a native input box and the calling thread blocks until the user confirms / cancels.
 // All text is UTF-8; max_chars is the maximum character count (0 = unlimited, only a hint for the front end; truncation is done uniformly by the caller hle_swkbd.c in UTF-16 units).
 // Confirm returns 1 and writes the result into out (including the terminating 0); cancel returns 0;

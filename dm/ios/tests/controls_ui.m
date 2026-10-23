@@ -4,6 +4,7 @@
 #import "../Sources/DmAppSettings.h"
 #import "../Sources/DmPerfHUD.h"
 #import <GameController/GameController.h>
+#import <CoreHaptics/CoreHaptics.h>
 #import <QuartzCore/QuartzCore.h>
 #include "../../host/dm_input.h"
 #include "../../host/dm_input_motion.h"
@@ -14,6 +15,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+
+void dm_vibration_set_enabled(int enabled) { (void)enabled; }
 
 #undef assert
 #define assert(condition) do { if (!(condition)) @throw [NSException exceptionWithName:@"TestFailure" reason:[NSString stringWithFormat:@"%s:%d: %s", __FILE__, __LINE__, #condition] userInfo:nil]; } while (0)
@@ -36,6 +39,7 @@
 - (void)panBall:(UIPanGestureRecognizer *)pan;
 - (void)exportLog;
 - (void)fpsToggled:(UISwitch *)toggle;
+- (void)vibrationToggled:(UISwitch *)toggle;
 - (void)lookInvertXToggled:(UISwitch *)toggle;
 - (void)lookInvertYToggled:(UISwitch *)toggle;
 - (void)resetTouchCamera;
@@ -293,6 +297,10 @@ static void runTests(UIViewController *presenter) {
     [overlay toggleMenu]; panelFits(overlay);
     assert(ball.hidden);
     assert([overlay hitTest:CGPointMake(100, 160) withEvent:nil] == overlay);
+    UISwitch *vibration = [UISwitch new]; vibration.on = NO; [overlay vibrationToggled:vibration];
+    assert(![defaults boolForKey:DmAppVibrationKey]);
+    vibration.on = YES; [overlay vibrationToggled:vibration];
+    assert([defaults boolForKey:DmAppVibrationKey]);
     __block BOOL showsFPS = NO;
     overlay.fpsChanged = ^(BOOL visible) { showsFPS = visible; };
     UISwitch *fps = [UISwitch new]; fps.on = YES; [overlay fpsToggled:fps];
@@ -443,6 +451,9 @@ static void runTests(UIViewController *presenter) {
     // Snapshot controllers exercise mapping and selection without external hardware.
     GCController *first = [GCController controllerWithExtendedGamepad], *second = [GCController controllerWithExtendedGamepad];
     [pad setValue:@[first, second] forKey:@"controllers"]; [pad selectController:0];
+    if ([CHHapticEngine capabilitiesForHardware].supportsHaptics &&
+        !first.haptics && pad.vibrationSupported)
+        assert([[pad valueForKey:@"hapticsDeviceLocal"] boolValue]);
 #if TARGET_OS_SIMULATOR
     assert(!pad.hidden); // Keep touch controls available alongside Simulator's virtual controller.
 #else

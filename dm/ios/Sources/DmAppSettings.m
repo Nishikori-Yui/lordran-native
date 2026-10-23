@@ -5,6 +5,7 @@
 NSString *const DmAppLanguageKey = @"DmLanguage";
 NSString *const DmAppOperationModeKey = @"DmOperationMode";
 NSString *const DmAppFPSKey = @"DmShowFPS";
+NSString *const DmAppVibrationKey = @"DmVibrationEnabled";
 
 NSString *DmAppLanguage(void) {
     NSString *language = [NSUserDefaults.standardUserDefaults stringForKey:DmAppLanguageKey];
@@ -20,6 +21,10 @@ BOOL DmAppPerformanceVisible(void) {
     NSNumber *saved = [NSUserDefaults.standardUserDefaults objectForKey:DmAppFPSKey];
     if (saved) return saved.boolValue;
     return YES;
+}
+BOOL DmAppVibrationEnabled(void) {
+    NSNumber *saved = [NSUserDefaults.standardUserDefaults objectForKey:DmAppVibrationKey];
+    return saved ? saved.boolValue : YES;
 }
 NSString *DmAppText(NSString *english, NSString *simplifiedChinese) {
     return DmAppUsesChinese() ? simplifiedChinese : english;

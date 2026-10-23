@@ -4,6 +4,7 @@
 #import "DmDiagnostics.h"
 #import "DmAppSettings.h"
 #include "../../host/cheats.h"
+#include "../../host/dm_input.h"
 #import <QuartzCore/QuartzCore.h>
 
 enum { PageClosed, PageMenu, PageEditor, PageInput, PageAppearance, PageCheats };
@@ -222,6 +223,7 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
     [self addButton:T(@"Button appearance", @"按键外观") symbol:@"paintbrush" action:@selector(buttonAppearance)].enabled = _gamepad != nil;
     [self addSwitch:T(@"Show FPS", @"显示帧率") on:self.showsFPS action:@selector(fpsToggled:)];
     [self addButton:T(@"Cheats", @"金手指") symbol:@"switch.2" action:@selector(cheats)];
+    [self addSwitch:T(@"Vibration feedback", @"震动反馈") on:DmAppVibrationEnabled() action:@selector(vibrationToggled:)];
     _export = [self addButton:T(@"Export log", @"导出日志") symbol:@"square.and.arrow.up" action:@selector(exportLog)];
     __weak DmControlOverlay *weakSelf = self;
     NSArray *languages = DmAppUsesChinese() ? @[@"英语", @"简体中文"] : @[@"English", @"Simplified Chinese"];
@@ -238,6 +240,10 @@ static NSString *T(NSString *english, NSString *simplifiedChinese) { return DmAp
 - (void)fpsToggled:(UISwitch *)toggle {
     self.showsFPS = toggle.on; [NSUserDefaults.standardUserDefaults setBool:toggle.on forKey:DmAppFPSKey];
     if (self.fpsChanged) self.fpsChanged(toggle.on);
+}
+- (void)vibrationToggled:(UISwitch *)toggle {
+    [NSUserDefaults.standardUserDefaults setBool:toggle.on forKey:DmAppVibrationKey];
+    dm_vibration_set_enabled(toggle.on);
 }
 - (void)exportLog { DmDiagnosticsShare(self.presenter, _export); }
 - (void)closeMenu {

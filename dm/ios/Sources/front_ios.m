@@ -20,6 +20,10 @@ int front_ios_recovery_needed(void);
 
 static CAMetalLayer *g_layer;
 
+void front_vibration(const DmVibrationFrame *frame) { if (frame) dm_gamepad_vibration(*frame); }
+int front_vibration_supported(void) { return dm_gamepad_vibration_supported(); }
+void front_vibration_set_enabled(int enabled) { dm_gamepad_vibration_enabled(enabled); }
+
 @interface DmGameView : UIView
 @end
 @implementation DmGameView

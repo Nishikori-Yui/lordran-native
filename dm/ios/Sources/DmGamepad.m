@@ -3,22 +3,61 @@
 #import <GameController/GameController.h>
 #import <CoreText/CoreText.h>
 #import <QuartzCore/QuartzCore.h>
+#import <CoreHaptics/CoreHaptics.h>
 #import <TargetConditionals.h>
+#import <mach/mach_time.h>
+#import "DmAppSettings.h"
+#include "../../host/dm_vibration_queue.h"
+#include "../../host/dm_vibration_timing.h"
+#include "../../host/dm_vibration_haptics.h"
 #include <pthread.h>
 #include "dm_input.h"
+#include "../../host/dm_log.h"
 #include "dm_padmap.h"
 #include "game_profile.h"
 #include "dm_camera_swipe.h"
 #include "dm_pad_axis.h"
+#include <stdatomic.h>
+#include <pthread.h>
 
 enum { B_A, B_B, B_X, B_Y, B_LS, B_RS, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_LEFT, B_UP, B_RIGHT, B_DOWN, B_N };
 enum { C_BUTTON = 1, C_FACE, C_DPAD, C_STICK, C_SWIPE };
 NSNotificationName const DmControllerChangedNotification = @"DmControllerChanged";
 static __weak DmGamepad *g_view;
+static _Atomic int g_gamepad_vibration_enabled = 1;
+static _Atomic int g_gamepad_haptics_ready;
+static _Atomic int g_gamepad_haptics_render_logged;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t g_touch_btn, g_pad_btn;
 static int32_t g_touch_axis[4], g_pad_axis[4];
 static UIColor *kIdle, *kPressed, *kText;
+static pthread_mutex_t g_vibration_queue_mu = PTHREAD_MUTEX_INITIALIZER;
+static DmVibrationQueue g_vibration_queue;
+static DmVibrationTimeline g_vibration_timeline;
+static _Atomic uint64_t g_vibration_generation = 1;
+
+@interface DmGamepad ()
+- (void)prepareHapticsForController:(GCController *)controller;
+- (BOOL)configureHapticsEngine:(CHHapticEngine *)engine
+                 forController:(GCController *)controller
+                    deviceLocal:(BOOL)deviceLocal;
+@end
+
+static uint64_t vibration_now_ns(void) {
+    static mach_timebase_info_data_t timebase;
+    if (!timebase.denom) mach_timebase_info(&timebase);
+    return mach_absolute_time() * timebase.numer / timebase.denom;
+}
+
+static void vibration_cancel_pending(void) {
+    atomic_fetch_add(&g_vibration_generation, 1);
+    pthread_mutex_lock(&g_vibration_queue_mu);
+    g_vibration_queue = (DmVibrationQueue){0};
+    pthread_mutex_unlock(&g_vibration_queue_mu);
+    g_vibration_timeline = (DmVibrationTimeline){0};
+}
+
+static void vibration_drain(void);
 static void publish(void) {
     pthread_mutex_lock(&g_mu);
     int32_t a[4];
@@ -82,6 +121,10 @@ static CGPathRef arm(CGFloat angle) {
     dm_camera_swipe _swipe[2];
     NSArray<GCController *> *_controllers;
     GCController *_activeController;
+    CHHapticEngine *_hapticsEngine;
+    id<CHHapticAdvancedPatternPlayer> _hapticsPlayer;
+    BOOL _hapticsPlaying, _hapticsDeviceLocal;
+    _Atomic int _hapticsSupported;
     BOOL _editingControls, _inputSuspended, _foreground;
     CGSize _lastSize;
     uint64_t _renderedButtons;
@@ -130,6 +173,7 @@ static CGPathRef arm(CGFloat angle) {
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
         [nc addObserver:self selector:@selector(padsChanged) name:GCControllerDidConnectNotification object:nil];
         [nc addObserver:self selector:@selector(padsChanged) name:GCControllerDidDisconnectNotification object:nil];
+        [nc addObserver:self selector:@selector(applicationWillTerminate:) name:UIApplicationWillTerminateNotification object:nil];
         [nc addObserver:self selector:@selector(resignActive) name:UIApplicationWillResignActiveNotification object:nil];
         [nc addObserver:self selector:@selector(becomeActive) name:UIApplicationDidBecomeActiveNotification object:nil];
         [self padsChanged];
@@ -459,11 +503,178 @@ static CGPathRef arm(CGFloat angle) {
     if (!_editingControls) { [_profile save]; [self readController]; }
 }
 - (void)setInputSuspended:(BOOL)suspended {
-    _inputSuspended = suspended; [self resetTouches]; clearPad(); if (!suspended) [self readController];
+    _inputSuspended = suspended; if (suspended) { vibration_cancel_pending(); [self stopVibration]; } [self resetTouches]; clearPad(); if (!suspended) [self readController];
 }
-- (void)resignActive { _foreground = NO; [self resetTouches]; clearPad(); }
+- (void)resignActive { _foreground = NO; vibration_cancel_pending(); [self stopVibration]; [self resetTouches]; clearPad(); }
+- (void)applicationWillTerminate:(NSNotification *)notification { (void)notification; vibration_cancel_pending(); [self stopVibration]; }
 - (void)becomeActive { _foreground = YES; [self padsChanged]; }
-- (void)didMoveToWindow { [super didMoveToWindow]; if (!self.window) { [self resetTouches]; clearPad(); } }
+- (void)didMoveToWindow { [super didMoveToWindow]; if (!self.window) { vibration_cancel_pending(); [self stopVibration]; [self resetTouches]; clearPad(); } }
+
+- (BOOL)configureHapticsEngine:(CHHapticEngine *)engine
+                 forController:(GCController *)controller
+                    deviceLocal:(BOOL)deviceLocal {
+    if (!engine) return NO;
+    NSError *error = nil;
+    _hapticsEngine = engine;
+    _hapticsDeviceLocal = deviceLocal;
+    engine.playsHapticsOnly = YES;
+    __weak CHHapticEngine *weakEngine = engine;
+    __weak DmGamepad *weakSelf = self;
+    engine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            DmGamepad *self = weakSelf;
+            CHHapticEngine *stoppedEngine = weakEngine;
+            if (!self || !stoppedEngine || self->_hapticsEngine != stoppedEngine) return;
+            self->_hapticsPlaying = NO;
+            if (reason == CHHapticEngineStoppedReasonNotifyWhenFinished) return;
+            self->_hapticsPlayer = nil;
+            atomic_store(&self->_hapticsSupported, 0);
+            atomic_store(&g_gamepad_haptics_ready, 0);
+            DM_LOG_WARN("controller", "%s haptics engine stopped: reason=%ld",
+                        self->_hapticsDeviceLocal ? "Device" : "Controller", (long)reason);
+            if (self->_activeController == controller && self->_foreground &&
+                !self->_inputSuspended && self.window) {
+                self->_hapticsEngine = nil;
+                [self prepareHapticsForController:controller];
+            }
+        });
+    };
+    engine.resetHandler = ^{
+        dispatch_async(dispatch_get_main_queue(), ^{
+            DmGamepad *self = weakSelf;
+            CHHapticEngine *resetEngine = weakEngine;
+            if (self && resetEngine && self->_hapticsEngine == resetEngine &&
+                self->_activeController == controller) {
+                [self discardHaptics];
+                [self prepareHapticsForController:controller];
+            }
+        });
+    };
+    if (![engine startAndReturnError:&error]) {
+        DM_LOG_ERROR("controller", "Could not start %s haptics engine: %s",
+                     deviceLocal ? "device" : "controller",
+                     error.localizedDescription.UTF8String ?: "unknown error");
+        [engine stopWithCompletionHandler:nil];
+        _hapticsEngine = nil;
+        _hapticsDeviceLocal = NO;
+        return NO;
+    }
+    // Dynamic intensity is multiplicative and sharpness is additive. Use
+    // neutral event values so the live controls can represent the full range.
+    CHHapticEventParameter *intensity = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:1.0];
+    CHHapticEventParameter *sharpness = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.0];
+    CHHapticEventParameter *sustained = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDSustained value:1.0];
+    NSTimeInterval duration = deviceLocal ? 0.0 : GCHapticDurationInfinite;
+    CHHapticEvent *event = [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous parameters:@[intensity, sharpness, sustained] relativeTime:0 duration:duration];
+    CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[event] parameters:@[] error:&error];
+    _hapticsPlayer = pattern ? [engine createAdvancedPlayerWithPattern:pattern error:&error] : nil;
+    if (!_hapticsPlayer) {
+        DM_LOG_ERROR("controller", "Could not create %s haptics player: %s",
+                     deviceLocal ? "device" : "controller",
+                     error.localizedDescription.UTF8String ?: "unknown error");
+        [engine stopWithCompletionHandler:nil];
+        _hapticsEngine = nil;
+        _hapticsDeviceLocal = NO;
+        return NO;
+    }
+    atomic_store(&_hapticsSupported, 1);
+    atomic_store(&g_gamepad_haptics_ready, 1);
+    DM_LOG_INFO("controller", "%s Core Haptics engine and player ready",
+                deviceLocal ? "Device-local" : "Controller");
+    return YES;
+}
+- (void)prepareHapticsForController:(GCController *)controller {
+    if (@available(iOS 14.0, *)) {
+        [self discardHaptics];
+        atomic_store(&g_gamepad_haptics_render_logged, 0);
+        NSError *error = nil;
+        CHHapticEngine *controllerEngine = controller.haptics
+            ? [controller.haptics createEngineWithLocality:GCHapticsLocalityDefault] : nil;
+        if (controllerEngine &&
+            [self configureHapticsEngine:controllerEngine forController:controller deviceLocal:NO])
+            return;
+        if (controller && controller.haptics)
+            DM_LOG_WARN("controller", "Controller haptics unavailable; checking device-local output");
+        if (![CHHapticEngine capabilitiesForHardware].supportsHaptics) {
+            if (!controllerEngine)
+                DM_LOG_INFO("controller", "No controller or device-local haptics backend is available");
+            return;
+        }
+        CHHapticEngine *deviceEngine = [[CHHapticEngine alloc] initAndReturnError:&error];
+        if (!deviceEngine) {
+            DM_LOG_WARN("controller", "Could not create device-local haptics engine: %s",
+                        error.localizedDescription.UTF8String ?: "unknown error");
+            return;
+        }
+        [self configureHapticsEngine:deviceEngine forController:controller deviceLocal:YES];
+    }
+}
+- (void)discardHaptics {
+    [self stopVibration];
+    [_hapticsEngine stopWithCompletionHandler:nil];
+    _hapticsEngine = nil;
+    _hapticsPlayer = nil;
+    _hapticsPlaying = NO;
+    _hapticsDeviceLocal = NO;
+    atomic_store(&_hapticsSupported, 0);
+    atomic_store(&g_gamepad_haptics_ready, 0);
+    atomic_store(&g_gamepad_haptics_render_logged, 0);
+}
+- (BOOL)vibrationSupported {
+    return atomic_load(&g_gamepad_vibration_enabled) && atomic_load(&_hapticsSupported) &&
+        _hapticsEngine != nil && _hapticsPlayer != nil;
+}
+- (void)applyVibrationFrame:(DmVibrationFrame)frame {
+    if (!atomic_load(&g_gamepad_vibration_enabled)) { [self stopVibration]; return; }
+    if (!_foreground || _inputSuspended || !self.window) { [self stopVibration]; return; }
+    DmVibrationBands bands = dm_vibration_bands_from_frame(&frame);
+    DmVibrationHapticsParameters parameters =
+        dm_vibration_haptics_parameters_for_bands(bands);
+    if (!parameters.intensity) { [self stopVibration]; return; }
+    if (!atomic_load(&_hapticsSupported) || !_hapticsEngine || !_hapticsPlayer)
+        [self prepareHapticsForController:_activeController];
+    if (!_hapticsEngine || !_hapticsPlayer) return;
+    NSError *error = nil;
+    if (![_hapticsEngine startAndReturnError:&error]) {
+        DM_LOG_ERROR("controller", "Could not restart controller haptics engine: %s", error.localizedDescription.UTF8String ?: "unknown error");
+        atomic_store(&_hapticsSupported, 0);
+        atomic_store(&g_gamepad_haptics_ready, 0);
+        return;
+    }
+    CHHapticDynamicParameter *parameter = [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl value:parameters.intensity relativeTime:0];
+    CHHapticDynamicParameter *sharpness = [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticSharpnessControl value:parameters.sharpness relativeTime:0];
+    if (!_hapticsPlaying) _hapticsPlaying = [_hapticsPlayer startAtTime:CHHapticTimeImmediate error:&error];
+    if (!_hapticsPlaying) {
+        DM_LOG_ERROR("controller", "Could not start controller haptics player: %s", error.localizedDescription.UTF8String ?: "unknown error");
+        atomic_store(&_hapticsSupported, 0);
+        atomic_store(&g_gamepad_haptics_ready, 0);
+        return;
+    }
+    if (![_hapticsPlayer sendParameters:@[parameter, sharpness] atTime:CHHapticTimeImmediate error:&error])
+        DM_LOG_ERROR("controller", "Could not update controller haptics: %s", error.localizedDescription.UTF8String ?: "unknown error");
+    else if (!atomic_exchange(&g_gamepad_haptics_render_logged, 1)) {
+        uint64_t elapsed_ns = 0;
+        double source_to_accept_ms = dm_vibration_elapsed_ns(
+            frame.timestamp_ns, vibration_now_ns(), &elapsed_ns)
+            ? (double)elapsed_ns / 1000000.0 : -1.0;
+        DM_LOG_INFO("controller", "Core Haptics parameters accepted: route=%s sequence=%llu timestamp_ns=%llu source_to_accept_ms=%.3f intensity=%.3f sharpness=%.3f",
+                    _hapticsDeviceLocal ? "device" : "controller",
+                    (unsigned long long)frame.sequence,
+                    (unsigned long long)frame.timestamp_ns,
+                    source_to_accept_ms,
+                    parameters.intensity, parameters.sharpness);
+    }
+}
+- (void)stopVibration {
+    NSError *error = nil;
+    if (_hapticsPlayer && ![_hapticsPlayer stopAtTime:CHHapticTimeImmediate error:&error])
+        DM_LOG_WARN("controller", "Could not stop controller haptics: %s", error.localizedDescription.UTF8String ?: "unknown error");
+    _hapticsPlaying = NO;
+}
+- (void)setVibrationEnabled:(BOOL)enabled {
+    atomic_store(&g_gamepad_vibration_enabled, enabled);
+    if (!enabled) { vibration_cancel_pending(); [self stopVibration]; }
+}
 
 // Controller handlers run on the main queue, so selection and settings never race callbacks.
 - (void)readController {
@@ -496,7 +707,10 @@ static CGPathRef arm(CGFloat angle) {
 }
 - (void)selectController:(NSInteger)index {
     if (index < 0 || index >= (NSInteger)_controllers.count) return;
+    vibration_cancel_pending();
+    [self discardHaptics];
     [self resetTouches]; clearPad(); _activeController = _controllers[index];
+    [self prepareHapticsForController:_activeController];
     [self updateVisibility]; [self readController];
     [NSNotificationCenter.defaultCenter postNotificationName:DmControllerChangedNotification object:self];
 }
@@ -507,6 +721,8 @@ static CGPathRef arm(CGFloat angle) {
     for (GCController *c in GCController.controllers) if (c.extendedGamepad) [controllers addObject:c];
     _controllers = controllers;
     if (![_controllers containsObject:_activeController]) _activeController = _controllers.firstObject;
+    vibration_cancel_pending(); [self discardHaptics];
+    [self prepareHapticsForController:_activeController];
     __weak DmGamepad *weakSelf = self;
     for (GCController *c in _controllers) {
         c.handlerQueue = dispatch_get_main_queue();
@@ -519,13 +735,66 @@ static CGPathRef arm(CGFloat angle) {
     [NSNotificationCenter.defaultCenter postNotificationName:DmControllerChangedNotification object:self];
 }
 - (void)dealloc {
+    vibration_cancel_pending();
+    [self discardHaptics];
     dm_input_swipe_cancel(0); dm_input_swipe_cancel(1);
     [NSNotificationCenter.defaultCenter removeObserver:self];
     for (GCController *c in _controllers) c.extendedGamepad.valueChangedHandler = nil;
 }
 @end
-UIView *dm_gamepad_view(CGRect frame) { DmGamepad *v = [[DmGamepad alloc] initWithFrame:frame]; g_view = v; return v; }
+UIView *dm_gamepad_view(CGRect frame) {
+    DmGamepad *v = [[DmGamepad alloc] initWithFrame:frame];
+    g_view = v;
+    atomic_store(&g_gamepad_vibration_enabled, DmAppVibrationEnabled());
+    return v;
+}
 void dm_gamepad_reset(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ [g_view resignActive]; });
     clearPad();
+}
+void dm_gamepad_vibration(DmVibrationFrame frame) {
+    pthread_mutex_lock(&g_vibration_queue_mu);
+    dm_vibration_queue_push(&g_vibration_queue, &frame);
+    int schedule = !g_vibration_queue.drain_scheduled;
+    if (schedule) g_vibration_queue.drain_scheduled = 1;
+    pthread_mutex_unlock(&g_vibration_queue_mu);
+    if (!schedule) return;
+    dispatch_async(dispatch_get_main_queue(), ^{ vibration_drain(); });
+}
+static void vibration_drain(void) {
+    while (1) {
+        pthread_mutex_lock(&g_vibration_queue_mu);
+        DmVibrationFrame frame = {0};
+        int have = dm_vibration_queue_pop(&g_vibration_queue, &frame);
+        if (!have) {
+            g_vibration_queue.drain_scheduled = 0;
+            g_vibration_timeline = (DmVibrationTimeline){0};
+        }
+        pthread_mutex_unlock(&g_vibration_queue_mu);
+        if (!have) return;
+        uint64_t now = vibration_now_ns();
+        uint64_t target = dm_vibration_timeline_schedule(&g_vibration_timeline, &frame, now);
+        if (target > now) {
+            uint64_t generation = atomic_load(&g_vibration_generation);
+            DmVibrationFrame scheduled = frame;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(target - now)),
+                           dispatch_get_main_queue(), ^{
+                if (atomic_load(&g_vibration_generation) != generation) return;
+                [g_view applyVibrationFrame:scheduled];
+                vibration_drain();
+            });
+            return;
+        }
+        [g_view applyVibrationFrame:frame];
+    }
+}
+int dm_gamepad_vibration_supported(void) {
+    return atomic_load(&g_gamepad_vibration_enabled) &&
+        atomic_load(&g_gamepad_haptics_ready);
+}
+void dm_gamepad_vibration_enabled(int enabled) {
+    atomic_store(&g_gamepad_vibration_enabled, enabled != 0);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [g_view setVibrationEnabled:enabled != 0];
+    });
 }

@@ -19,11 +19,25 @@ uint64_t dm_input_samples(void);   // Cumulative number of times the game has sa
 // Physical / virtual controller (iOS GameController, dm_gamepad.m): stored separately from touch input; when the game reads the controller, buttons are
 // ORed bitwise and a stick uses the controller's value if it is non-zero. All 0 when no controller is connected, so values are bit-for-bit the same as before
 void dm_pad_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);
+// Vibration requested by the guest. Amplitudes are normalized in [0, 1];
+// frequencies are Hz. sequence/timestamp_ns preserve guest-side ordering.
+typedef struct {
+    float low_amplitude;
+    float low_frequency;
+    float high_amplitude;
+    float high_frequency;
+    uint64_t sequence;
+    uint64_t timestamp_ns;
+} DmVibrationFrame;
+void dm_vibration_set(const DmVibrationFrame *frame);
+int dm_vibration_supported(void);
+void dm_vibration_set_enabled(int enabled);
 
 // Optional diagnostic DM_HID_RECEIPT_LOG=<writable JSONL path>: received samples of real GetNpadState returns.
-// Fields read_start_ns/time_ns use the same host now_ns(); the front-end publish window must use the same helper, and a read interval that spans a publish must not be force-matched.
+// Fields read_start_ns/read_end_ns/publish_ns use the same host now_ns(); a read interval that spans a publish is recorded as evidence, not force-matched to that publish.
 // State changes + at most one activity witness per second, limit_reached after 1024 entries; no file is written when the environment variable is not set.
-// The actual return includes id/style/sampling/buttons/four axes/attributes/script_mask; front-end output is not treated as received.
+// Each record includes id, requested/active style, sampling, buttons, four axes and attributes; front-end output is not treated as received.
+// Mac-only DM_CONTROLLER_INPUT_LOG=<writable JSONL path> records the selected GameController callback/poll samples before the game reads them. It is bounded and state-change/one-second rate-limited like the Npad receipt log.
 // No new line does not prove that a blank touch point was read; a valid connection / sampling activity / evidence from the original UI and command packets is required; the log has IO overhead and is not used for timing.
 
 // Private skill-aim-v1: takes only paired received samples of the right axis that GetNpad has actually returned, not values the front end has not yet had consumed.
