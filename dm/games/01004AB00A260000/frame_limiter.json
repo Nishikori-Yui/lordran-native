@@ -1,0 +1,8 @@
+{
+  "df3766a2bb651a3e822828abf10b6f7b": {
+    "offset": "0x706fa4",
+    "expected": "e10f1f32e00313aa39000094",
+    "replacement": "81078052",
+    "description": "Change the limiter call argument from 30 to 60; preserve the limiter function and its time-step bookkeeping."
+  }
+}

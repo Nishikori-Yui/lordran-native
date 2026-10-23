@@ -43,6 +43,51 @@ class CheatPatchTests(unittest.TestCase):
         image = image if image is not None else bytearray(0x800)
         return image, cheats.apply(image, 0x400, 0x500, BUILD, args)
 
+    def test_profile_limiter_build_instruction_and_atomic_guards(self):
+        import json
+        profile = ROOT / "dm/games/01004AB00A260000/frame_limiter.json"
+        build, entry = next(iter(json.loads(profile.read_text()).items()))
+        address = int(entry["offset"], 0)
+        expected = bytes.fromhex(entry["expected"])
+        image = bytearray(address + 0x100)
+        image[address:address + len(expected)] = expected
+        original = bytes(image)
+        end, audit = cheats.apply(image, len(image), len(image), build + '0' * 32,
+                                  options('--experimental-60fps'))
+        self.assertEqual(end, len(image))
+        self.assertEqual(audit['bytes_written'], 4)
+        self.assertEqual(image[address:address + 4], bytes.fromhex(entry['replacement']))
+        self.assertEqual(image[:address], original[:address])
+        self.assertEqual(image[address + 4:], original[address + 4:])
+        # A valid but different registered build must never inherit offsets.
+        for bid in (BUILD, '5a797a3a5da6c4f3468cb7c84e4dde63' + '0' * 32):
+            image[:] = original
+            with self.assertRaises(ValueError):
+                cheats.apply(image, len(image), len(image), bid, options('--experimental-60fps'))
+            self.assertEqual(image, original)
+        for delta in (0, 4, 8):
+            image[:] = original
+            image[address + delta] ^= 1
+            before = bytes(image)
+            with self.assertRaisesRegex(ValueError, 'instruction check'):
+                cheats.apply(image, len(image), len(image), build, options('--experimental-60fps'))
+            self.assertEqual(image, before)
+        image[:] = original
+        for extra in (('--runtime-cheats',), ('--cheat-file', str(self.file)),
+                      ('--cheat', '60 FPS'), ('--ips', str(self.file))):
+            with self.assertRaises(ValueError):
+                cheats.apply(image, len(image), len(image), build,
+                             options('--experimental-60fps', *extra))
+            self.assertEqual(image, original)
+        with self.assertRaises(ValueError):
+            cheats.prepare_runtime(image, len(image), len(image), build,
+                                   options('--experimental-60fps', '--runtime-cheats'))
+        self.assertEqual(cheats.arguments(options('--experimental-60fps')), ['--experimental-60fps'])
+        for end in (address, address + 4, address + 8):
+            with self.assertRaises(ValueError):
+                cheats.apply(image, end, len(image), build, options('--experimental-60fps'))
+            self.assertEqual(image, original)
+
     def test_disabled_by_default_and_no_implicit_enable(self):
         image, (end, audit) = self.apply(options())
         self.assertEqual(image, bytes(0x800))
