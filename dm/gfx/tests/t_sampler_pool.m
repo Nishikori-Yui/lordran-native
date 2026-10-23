@@ -199,6 +199,15 @@ int main(void) { @autoreleasepool {
     check_sample(shader, pipeline, texture, 1, "pool switching refreshes bindless cached arguments");
     select_pool(b);
     check_sample(shader, pipeline, texture, .5, "bindless handles remain unchanged when switching back");
+    handle = 256;
+    register_sampler(&second, 0, 0);
+    memcpy((uint8_t *)storage + 40000 + 48, &handle, sizeof handle);
+    check_sample(shader, pipeline, texture, 1, "bindless handle changes refresh cached arguments without rebinding");
+    CHECK("negative UBO offsets are empty", ubo_handle(1, 10, -1) == 0);
+    CHECK("out-of-range UBO offsets are empty", ubo_handle(1, 10, 61) == 0);
+    S.ubo[1][10].addr = UINT64_MAX - 16;
+    CHECK("overflowing UBO addresses are empty", ubo_handle(1, 10, 48) == 0);
+    S.ubo[1][10].addr = (uintptr_t)storage + 40000;
     h_nvnMemoryPoolFinalize(&memory);
     CHECK("finalizing storage removes its sampler descriptors", samp_by_id(256) == nil);
     free(storage);

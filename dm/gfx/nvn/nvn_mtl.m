@@ -3372,7 +3372,8 @@ static uint64_t zero_bank_gpu(void) { static uint64_t gpu; if (!gpu) gpu = zero_
 static uint32_t ubo_handle(int stage, int reg, int off) {
     if (stage < 0 || stage >= 6 || reg < 0 || reg >= 16) return 0;
     const p_bind_buf *u = &S.ubo[stage][reg];
-    if (!u->addr || (uint64_t)off + 4 > u->size) return 0;
+    if (!u->addr || off < 0 || u->size < 4 || (uint64_t)off > u->size - 4 ||
+        u->addr > UINT64_MAX - (uint64_t)off - 4) return 0;
     if (pend_hits(u->addr + off, 4)) RED_ONCE(47, "Bindless-handle uniform buffer has pending GPU writes: stage=%d slot=%d offset=%#x; reading current contents", stage, reg, off);
     void *mb; uint64_t mo; const uint8_t *base;
     if (!mtl_addr(u->addr + off, 4, &mb, &mo) || !(base = [(__bridge id<MTLBuffer>)mb contents])) return 0;
@@ -3385,7 +3386,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
     if (!sh->ae) return 1;
     uint64_t slots[NVN_REFL_MAXB] = {0};
     args_sync_dirty();
-    if (!passdump() && !g_args_dirty[nvn_stage] && sh->ab_buf && sh->ab_pass == g_pass.serial && nvn_stage != 5) {
+    if (!sh->rf.bindless && !passdump() && !g_args_dirty[nvn_stage] && sh->ab_buf && sh->ab_pass == g_pass.serial && nvn_stage != 5) {
         bind_args(en, nvn_stage, metal_vertex, sh->ab_buf, sh->ab_gpu, sh->ab_off, sh->rf.abi);
         g_stat_args_reuse++;
         return 1;
