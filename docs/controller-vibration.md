@@ -521,6 +521,21 @@ one-second activity limits with a 1024-record cap. Comparing the two files
 shows whether a nonzero NS Pro sample was published but never returned by
 the game's Npad read.
 
+The two files can be compared offline without exposing the game or controller
+to another tool:
+
+```sh
+python3 dm/tools/analyze_controller_trace.py \
+  --controller /tmp/nxnative-controller-input.jsonl \
+  --receipt /tmp/nxnative-npad-receipt.jsonl
+```
+
+The analyzer reports unmatched nonzero samples and the first
+publication-to-read latency. Its initial verdicts are
+`input_reached_game`, `game_read_missing`,
+`front_end_publication_missing` or `no_nonzero_input`; these are evidence
+classification results, not physical-controller claims.
+
 The first successful Core Haptics parameter submission now records
 `source_to_accept_ms`; the first successful raw Switch output callback records
 `source_to_completion_callback_ms`. Both are measured from the captured frame's
@@ -566,6 +581,10 @@ or incomparable timestamp rather than a zero-latency result.
   the game reads Npad state, with the same bounded state-change/activity
   policy as the receipt log. Together the two files separate host publication
   from game receipt without changing controller timing.
+- Added `dm/tools/analyze_controller_trace.py`, a reusable offline comparator
+  for the two JSONL files. It reports unmatched nonzero records and
+  publication-to-read latency, with unit tests for the three main input
+  boundary outcomes.
 - Added the shared `DmVibrationBands` normalization stage after HLE capture.
   Mac and iOS Core Haptics and the Switch raw-HID encoder now consume the same
   finite, clamped amplitudes and fallback frequencies before applying their
