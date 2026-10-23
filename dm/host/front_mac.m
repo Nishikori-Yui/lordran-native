@@ -13,6 +13,7 @@
 #include "hle.h"
 #import "perf_hud_mac.h"
 #import "cheats_mac.h"
+#import "metal_surface_mac.h"
 #include <signal.h>
 
 static CAMetalLayer *g_layer;
@@ -210,7 +211,14 @@ void front_run(void (*guest)(void)) {
         g_layer.device = MTLCreateSystemDefaultDevice();
         g_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
         g_layer.contentsScale = win.backingScaleFactor;
-        v.layer = g_layer;
+        g_layer.opaque = YES;
+        DmMetalSurface *surface = [[DmMetalSurface alloc] initWithFrame:v.bounds];
+        // Setting the layer before wantsLayer creates a layer-hosting view;
+        // AppKit must not replace its contents while redrawing native controls.
+        surface.layer = g_layer;
+        surface.wantsLayer = YES;
+        surface.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        [v addSubview:surface];
         win.acceptsMouseMovedEvents = YES;
         [win center];
         [NSApp activateIgnoringOtherApps:YES];
