@@ -2552,6 +2552,10 @@ static void treg_drop_pool_views(const void *pool) {
     for (int i = 0; i < g_ntreg; i++)
         if (g_treg[i].ok && (const void *)g_treg[i].t.pool == pool)
             treg_drop_views(&g_treg[i]);
+    for (uint32_t i = 0; i < g_treg_pool.cap; ++i) if (g_treg_pool.vals[i]) {
+        treg_t *r = g_treg_pool.vals[i];
+        if (r->ok && (const void *)r->t.pool == pool) treg_drop_views(r);
+    }
     uintptr_t *keys = malloc((size_t)g_treg_pool.n * sizeof *keys); size_t n = 0;
     if (g_treg_pool.n && !keys) MDIE("texture registry cleanup allocation failed");
     if (mp && mp->mem) {
@@ -2575,6 +2579,10 @@ static unsigned treg_view_count(void) {
     unsigned n = 0;
     rmu_lock();
     for (int i = 0; i < g_ntreg; i++) if (g_treg[i].view) n++;
+    for (uint32_t i = 0; i < g_treg_pool.cap; ++i) if (g_treg_pool.vals[i]) {
+        const treg_t *r = g_treg_pool.vals[i];
+        if (r->view) ++n;
+    }
     rmu_unlock();
     return n;
 }
