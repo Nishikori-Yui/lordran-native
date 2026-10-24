@@ -297,6 +297,16 @@ rendered frames. Check the log for loading, successful save commits, missing
 imports and fatal errors, then inspect captures from gameplay. Stop only the
 test process, and do not start it while the player's game is running.
 
+For the MetalFX roadmap, `DM_NVN_SCENE_META=1` records the real render-pass
+attachment formats and dimensions, draw counts, shader texture reads and the
+presented swapchain serial. At present it logs a candidate 3D color/depth pass
+by walking backwards through earlier shader reads, plus the existing runtime
+main-pass rule when it matches. `confidence=candidate` is a diagnostic hint,
+not proof that the textures satisfy MetalFX temporal requirements. The current
+scope excludes copy, compute and image-write dependencies; truncation is
+reported explicitly. The diagnostic is off by default and does not change
+rendering or presentation. See issue #47 for the staged validation plan.
+
 ## Build by hand (Mac)
 
 Run these commands from the repository root with the tools listed in the README. Use the prebuilt shader translator in `dm/gfx/tools/dmsh_xlate_bin`, which matches `dmsh_chain.lock`; a fresh `dotnet publish` produces different fingerprints.
