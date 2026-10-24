@@ -102,10 +102,9 @@ unsigned mtl_anisotropy_override(void) {
     return atomic_load_explicit(&g_anisotropy_override, memory_order_relaxed);
 }
 
-void mtl_set_graphics_overrides(unsigned msaa, unsigned anisotropy, int bloom) {
+void mtl_set_graphics_overrides(unsigned msaa, unsigned anisotropy) {
     atomic_store_explicit(&g_msaa_override, msaa, memory_order_relaxed);
     atomic_store_explicit(&g_anisotropy_override, anisotropy, memory_order_relaxed);
-    g_bloom_q = bloom >= 0 ? !!bloom : -1;
 }
 static id<MTLResidencySet> g_res;
 static int g_res_dirty;
