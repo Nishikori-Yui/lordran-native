@@ -329,7 +329,8 @@ anisotropy; a `DM_GAME_RES` diagnostic override is shown as `Override`.
 
 Mac also provides a **Graphics** menu for saved next-launch overrides: 50%,
 75%, Native, or 125% internal resolution; supported 2x/4x/8x MSAA; 2x/4x/8x/16x
-texture anisotropy. These settings are applied before the
+texture anisotropy; and optional MetalFX spatial upscaling for sub-native
+resolution presets on supported GPUs. These settings are applied before the
 guest creates graphics resources, so restart the game after changing them.
 
 Saves are in `save/`. Before reinstalling, back up `save/` and `pso_user.tsv`: some sideloading tools create a new app data folder. Restore both to retain your saves and pipeline prewarm list.
