@@ -516,21 +516,6 @@
   },
   {
     "file": "dm/host/graphics_settings_mac.m",
-    "source": "if (value == 0) return text(@\"Off\", @\"关闭\");",
-    "purpose": "Localized Mac graphics menu text"
-  },
-  {
-    "file": "dm/host/graphics_settings_mac.m",
-    "source": "if (value == 1) return text(@\"On\", @\"开启\");",
-    "purpose": "Localized Mac graphics menu text"
-  },
-  {
-    "file": "dm/host/graphics_settings_mac.m",
-    "source": "return text(@\"Game default\", @\"游戏默认\");",
-    "purpose": "Localized Mac graphics menu text"
-  },
-  {
-    "file": "dm/host/graphics_settings_mac.m",
     "source": "NSString *title = text(@\"Graphics\", @\"画质\");",
     "purpose": "Localized Mac graphics menu text"
   },
