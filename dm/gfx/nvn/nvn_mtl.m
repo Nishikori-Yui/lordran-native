@@ -6518,13 +6518,14 @@ static void present_pipeline(MTLPixelFormat format) {
 
 static id<MTL4FXSpatialScaler> g_spatial_scaler;
 static id<MTLTexture> g_spatial_output;
-static NSUInteger g_spatial_w, g_spatial_h;
+static NSUInteger g_spatial_in_w, g_spatial_in_h, g_spatial_out_w, g_spatial_out_h;
 
 static id<MTLTexture> spatial_upscale(id<MTL4CommandBuffer> cb, id<MTLTexture> src, NSUInteger cw, NSUInteger ch, NSUInteger content_w, NSUInteger content_h) {
     if (!atomic_load_explicit(&g_spatial_upscaling, memory_order_relaxed)) return nil;
     if (src.sampleCount != 1 || src.textureType != MTLTextureType2D) return nil;
     if (src.width >= cw || src.height >= ch) return nil;
-    if (!g_spatial_scaler || g_spatial_w != content_w || g_spatial_h != content_h) {
+    if (!g_spatial_scaler || g_spatial_in_w != content_w || g_spatial_in_h != content_h ||
+        g_spatial_out_w != cw || g_spatial_out_h != ch) {
         MTLFXSpatialScalerDescriptor *desc = [MTLFXSpatialScalerDescriptor new];
         desc.colorTextureFormat = src.pixelFormat;
         desc.outputTextureFormat = src.pixelFormat;
@@ -6542,7 +6543,8 @@ static id<MTLTexture> spatial_upscale(id<MTL4CommandBuffer> cb, id<MTLTexture> s
             return nil;
         }
         g_spatial_scaler = scaler;
-        g_spatial_w = content_w; g_spatial_h = content_h;
+        g_spatial_in_w = content_w; g_spatial_in_h = content_h;
+        g_spatial_out_w = cw; g_spatial_out_h = ch;
         { static int once; if (!once++) MLOG("MetalFX spatial upscaling enabled: input=%lux%lu output=%lux%lu", (unsigned long)content_w, (unsigned long)content_h, (unsigned long)cw, (unsigned long)ch); }
     }
     if (!g_spatial_output || g_spatial_output.width != cw || g_spatial_output.height != ch || g_spatial_output.pixelFormat != src.pixelFormat) {
