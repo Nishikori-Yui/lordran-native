@@ -5,6 +5,7 @@
 #undef nvn_game_fps
 #include "../nvn/hle_nvn.c"
 uint64_t g_t0_ns;   // process start time from host main.c (used by hle_nvn's per-frame @t_s); unit test stub
+int dm_guest_as_contains(uintptr_t p) { (void)p; return 0; }
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
 module_t g_mod[MAX_MOD]; int g_nmod;
@@ -39,7 +40,7 @@ static void finish(recording *r) {
     mtl_pool_del(r->mem);free(r->mem);
 }
 static void seed(const tex_t *t) {
-    id<MTLTexture> m=tex_mtl(t);id<MTLCommandBuffer> cb=[g_q commandBuffer];
+    id<MTLTexture> m=tex_mtl(t);id<MTLCommandBuffer> cb=q_cb();
     for(int l=0;l<t->d.levels;l++){MTLRenderPassDescriptor *p=[MTLRenderPassDescriptor renderPassDescriptor];
         if(t->d.format==NVN_FORMAT_RGBA8){p.colorAttachments[0].texture=m;p.colorAttachments[0].level=l;
             p.colorAttachments[0].loadAction=MTLLoadActionClear;p.colorAttachments[0].storeAction=MTLStoreActionStore;p.colorAttachments[0].clearColor=MTLClearColorMake(0,0,1,1);}
@@ -51,7 +52,7 @@ static void seed(const tex_t *t) {
 }
 static uint8_t *read_mip(const tex_t *t,int lv,int w,int h,int bpp) {
     NSUInteger row=(w*bpp+15)&~15u;id<MTLBuffer> buf=[g_dev newBufferWithLength:row*h options:MTLResourceStorageModeShared];
-    id<MTLCommandBuffer> cb=[g_q commandBuffer];id<MTLBlitCommandEncoder> b=[cb blitCommandEncoder];
+    id<MTLCommandBuffer> cb=q_cb();id<MTLBlitCommandEncoder> b=[cb blitCommandEncoder];
     id<MTLTexture> src=tex_mtl(t);MTLBlitOption opt=t->d.format==NVN_FORMAT_DEPTH32F_STENCIL8?(bpp==1?MTLBlitOptionStencilFromDepthStencil:MTLBlitOptionDepthFromDepthStencil):MTLBlitOptionNone;
     [b copyFromTexture:src sourceSlice:0 sourceLevel:lv sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(w,h,1)
       toBuffer:buf destinationOffset:0 destinationBytesPerRow:row destinationBytesPerImage:row*h options:opt];[b endEncoding];[cb commit];[cb waitUntilCompleted];EXPECT("逐纹素读回完成",4,cb.status);
