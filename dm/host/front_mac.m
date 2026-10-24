@@ -14,6 +14,7 @@
 #import "perf_hud_mac.h"
 #import "cheats_mac.h"
 #import "metal_surface_mac.h"
+#import "graphics_settings_mac.h"
 #include <signal.h>
 
 static CAMetalLayer *g_layer;
@@ -26,14 +27,20 @@ static uint64_t g_mouse_motion_seq;
 static GCController *g_pad_controller;
 static DmMacPerfHUD *g_perf_hud;
 static DmMacCheats *g_cheats;
+static DmMacGraphicsSettings *g_graphics_settings;
 
 void *front_metal_layer(void) { return (__bridge void *)g_layer; }
 static int ds_layout(void) { return !strcmp(DM_GAME_MAC_LAYOUT, "dark_souls_pc"); }
-// The original game's 16:9 constants, behavior unchanged; DM_GAME_RES=<width>x<height> (docked mode; handheld scaled by 720/900) is only for side-by-side comparison with iOS widescreen
+// The original game's 16:9 constants, behavior unchanged; DM_GAME_RES=<width>x<height>
+// remains an explicit diagnostic override. The Mac Graphics menu scales these defaults.
 uint64_t front_game_res(int docked) {
     unsigned w, h; const char *e = getenv("DM_GAME_RES");
     if (e && sscanf(e, "%ux%u", &w, &h) == 2) return docked ? (uint64_t)h << 32 | w : (uint64_t)(h * 4 / 5) << 32 | (w * 4 / 5 + 3) / 4 * 4;
-    return docked ? 900ull << 32 | 1600 : 720ull << 32 | 1280;
+    unsigned percent = dm_mac_graphics_resolution_percent();
+    unsigned base_w = docked ? 1600 : 1280, base_h = docked ? 900 : 720;
+    unsigned scaled_w = (base_w * percent / 100u + 3u) & ~3u;
+    unsigned scaled_h = (base_h * percent / 100u + 3u) & ~3u;
+    return (uint64_t)scaled_h << 32 | scaled_w;
 }
 
 static int32_t clamp_axis(long v) {
@@ -227,6 +234,8 @@ void front_run(void (*guest)(void)) {
         [win makeFirstResponder:v];
         g_perf_hud = [[DmMacPerfHUD alloc] initWithWindow:win device:g_layer.device];
         g_cheats = [[DmMacCheats alloc] initWithWindow:win];
+        dm_mac_graphics_apply();
+        g_graphics_settings = [[DmMacGraphicsSettings alloc] initWithWindow:win device:g_layer.device];
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
         [nc addObserverForName:GCControllerDidConnectNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
             (void)n; pad_refresh();

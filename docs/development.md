@@ -184,8 +184,10 @@ It uses the same `nvn_perf_snapshot` as the iOS HUD and refreshes twice per
 second. Its headline uses actual drawable presentation callbacks; before the
 first presentation it explicitly labels the fallback as `Game FPS`.
 The details show game FPS, delayed GPU time, process physical footprint,
-Metal allocations, swapchain resolution and thermal state. RAM and Metal
-overlap and must not be added together.
+Metal allocations, swapchain resolution, thermal state, and the active graphics
+settings: resolution preset, MSAA and texture anisotropy. A `DM_GAME_RES`
+diagnostic override is reported as `Override`. RAM and Metal overlap and must
+not be added together.
 
 `F5` cycles Simple, Detailed and Off (Fn-F5 on keyboards using media keys).
 The native View menu offers the same action and names the current mode.

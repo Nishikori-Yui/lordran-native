@@ -3,8 +3,17 @@
 #import <Metal/Metal.h>
 #include <TargetConditionals.h>
 
+#if !TARGET_OS_SIMULATOR
+unsigned mtl_msaa_override(void);
+#endif
+
 static inline NSUInteger dm_mtl_sample_count(id<MTLDevice> device, NSUInteger requested) {
     NSUInteger samples = requested ? requested : 1;
+#if !TARGET_OS_SIMULATOR
+    unsigned override = mtl_msaa_override();
+    if (samples > 1 && override > 1 && [device supportsTextureSampleCount:override])
+        samples = override;
+#endif
 #if TARGET_OS_SIMULATOR
     // Simulator may expose only 4x MSAA. Keep multisample textures and pipelines consistent.
     if (samples == 2 && ![device supportsTextureSampleCount:2] &&

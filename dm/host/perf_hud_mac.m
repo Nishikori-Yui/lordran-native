@@ -2,6 +2,7 @@
 #import <QuartzCore/QuartzCore.h>
 #include <mach/mach.h>
 #include "../gfx/nvn/nvn_perf.h"
+#import "graphics_settings_mac.h"
 
 @interface DmPerfTextView : NSView
 @end
@@ -30,7 +31,7 @@
     _headline = [NSTextField labelWithString:@"-- FPS   -- ms"];
     _headline.accessibilityLabel = @"Frame rate and frame time";
     _details = [NSTextField wrappingLabelWithString:@""];
-    _details.maximumNumberOfLines = 3;
+    _details.maximumNumberOfLines = 4;
     for (NSTextField *field in @[_headline, _details]) {
         field.translatesAutoresizingMaskIntoConstraints = NO;
         field.alignment = NSTextAlignmentRight;
@@ -43,7 +44,7 @@
         [_view.trailingAnchor constraintEqualToAnchor:window.contentView.trailingAnchor constant:-14],
         [_view.topAnchor constraintEqualToAnchor:window.contentView.topAnchor constant:14],
         [_view.widthAnchor constraintEqualToConstant:320],
-        [_view.heightAnchor constraintEqualToConstant:98],
+        [_view.heightAnchor constraintEqualToConstant:118],
         [_headline.leadingAnchor constraintEqualToAnchor:_view.leadingAnchor],
         [_headline.trailingAnchor constraintEqualToAnchor:_view.trailingAnchor],
         [_headline.topAnchor constraintEqualToAnchor:_view.topAnchor],
@@ -163,8 +164,17 @@
     NSUInteger state = (NSUInteger)NSProcessInfo.processInfo.thermalState;
     NSString *thermal = @[@"Nominal", @"Fair", @"Serious", @"Critical"][MIN(state, 3)];
     NSString *resolution = s.width && s.height ? [NSString stringWithFormat:@"%ux%u", s.width, s.height] : @"--x--";
-    [self setText:[NSString stringWithFormat:@"Game %.1f FPS   GPU %@\nRAM %@ MiB   Metal %llu MiB\n%@   Thermal %@",
-        s.game_fps, gpu, ram, (unsigned long long)(_device.currentAllocatedSize >> 20), resolution, thermal]
+    unsigned runResolutionPercent = dm_mac_graphics_resolution_percent();
+    const char *runResolutionOverride = getenv("DM_GAME_RES");
+    unsigned graphicsMSAA = dm_mac_graphics_msaa();
+    unsigned graphicsAnisotropy = dm_mac_graphics_anisotropy();
+    NSString *graphicsResolutionName = runResolutionOverride
+        ? @"Override" : runResolutionPercent == 100 ? @"Native" : [NSString stringWithFormat:@"%u%%", runResolutionPercent];
+    NSString *graphicsMSAAName = graphicsMSAA ? [NSString stringWithFormat:@"%ux", graphicsMSAA] : @"Default";
+    NSString *graphicsAnisotropyName = graphicsAnisotropy ? [NSString stringWithFormat:@"%ux", graphicsAnisotropy] : @"Default";
+    [self setText:[NSString stringWithFormat:@"Game %.1f FPS   GPU %@\nRAM %@ MiB   Metal %llu MiB\n%@   Thermal %@\nGraphics %@ · MSAA %@ · AF %@",
+        s.game_fps, gpu, ram, (unsigned long long)(_device.currentAllocatedSize >> 20), resolution, thermal,
+        graphicsResolutionName, graphicsMSAAName, graphicsAnisotropyName]
             field:_details size:12];
 }
 - (void)dealloc {
