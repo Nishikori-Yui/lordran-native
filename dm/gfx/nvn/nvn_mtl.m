@@ -2214,7 +2214,7 @@ static id<MTL4RenderCommandEncoder> rp_begin_ex_(int clear_only) {
     args_dirty_all();
     g_stat_pass++;
     if (scene_meta_on()) {
-        uint64_t color = 0, depth = R.rt.depth ? R.rt.depth->serial : 0;
+        uint64_t color = 0, depth = pd.depthAttachment.texture && R.rt.depth ? R.rt.depth->serial : 0;
         uint32_t color_format = 0;
         for (int i = 0; i < R.rt.n && i < 8; i++) if (R.rt.color[i] && pd.colorAttachments[i].texture) {
             color = R.rt.color[i]->serial;
@@ -3549,7 +3549,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             treg_t *tr = treg_current(tid);
             if (t && g_fb_n && g_fb_seq == g_draw_seq && nvn_stage == 1) for (int q = 0; q < g_fb_n; q++) if (t == g_fb_src[q]) { t = g_fb_use[q]; trid = g_fb_rid[q]; break; }   // same-pass feedback sampling: read the snapshot instead (see fb_prepare)
             if (t && passdump() && tr) PD("R %llu st%d ser=%llu", g_stat_pass, nvn_stage, tr->t.serial);
-            if (t && tr && scene_meta_on()) nvn_scene_meta_read(atomic_load(&g_cur_frame), g_stat_pass, tr->t.serial);
+            if (t && tr && tr->ok && scene_meta_on()) nvn_scene_meta_read(atomic_load(&g_cur_frame), g_stat_pass, tr->t.serial);
             if (bl) PD("B %llu st%d tex reg%d tid=%d %s ser=%llu fmt=%lu %lux%lux%lu view_lv=%lu+%lu view_sl=%lu array=%lu target=%lu swz=%d%d%d%d mtl=%p aid=%d kind=%u off=%u handle=%#llx",
                        g_stat_pass, nvn_stage, reg, tid, t ? "real" : "dummy", t && tr ? tr->t.serial : 0ull,
                        (unsigned long)t.pixelFormat, (unsigned long)t.width, (unsigned long)t.height, (unsigned long)t.depth,
