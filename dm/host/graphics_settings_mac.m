@@ -1,5 +1,8 @@
 #import "graphics_settings_mac.h"
 #include "../gfx/nvn/nvn_mtl.h"
+#ifdef MAC_GRAPHICS_TEST_STUB
+void mtl_set_graphics_overrides(unsigned msaa, unsigned anisotropy) { (void)msaa; (void)anisotropy; }
+#endif
 #include <stdlib.h>
 #include <strings.h>
 
@@ -36,10 +39,18 @@ static unsigned saved_msaa(void) {
     return value == 2 || value == 4 || value == 8 ? (unsigned)value : 0;
 }
 
+unsigned dm_mac_graphics_msaa(void) {
+    return saved_msaa();
+}
+
 static unsigned saved_anisotropy(void) {
     register_defaults();
     NSInteger value = [NSUserDefaults.standardUserDefaults integerForKey:kAnisotropy];
     return value == 2 || value == 4 || value == 8 || value == 16 ? (unsigned)value : 0;
+}
+
+unsigned dm_mac_graphics_anisotropy(void) {
+    return saved_anisotropy();
 }
 
 void dm_mac_graphics_apply(void) {

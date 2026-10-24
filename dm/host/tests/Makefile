@@ -18,6 +18,11 @@ mac-cheats-test: $(B)/t_cheats_mac
 	$(B)/t_cheats_mac
 $(B)/t_cheats_mac: t_cheats_mac.m ../cheats_mac.m ../cheats_mac.h ../cheats.c ../cheats.h $(GAME_H) | $(B)
 	clang -O1 -g -Wall -Wextra -Werror -fobjc-arc $(GINC) -o $@ t_cheats_mac.m ../cheats_mac.m ../cheats.c -framework Cocoa -framework QuartzCore
+.PHONY: mac-perf-test
+mac-perf-test: $(B)/t_mac_perf_hud
+	$(B)/t_mac_perf_hud
+$(B)/t_mac_perf_hud: t_mac_perf_hud.m ../perf_hud_mac.m ../perf_hud_mac.h ../graphics_settings_mac.m ../graphics_settings_mac.h ../../gfx/nvn/nvn_perf.c ../../gfx/nvn/nvn_perf.h ../../gfx/nvn/nvn_mtl.h | $(B)
+	clang -O1 -g -Wall -Wextra -Werror -fobjc-arc -o $@ t_mac_perf_hud.m ../perf_hud_mac.m ../graphics_settings_mac.m ../../gfx/nvn/nvn_perf.c -DMAC_GRAPHICS_TEST_STUB -framework Cocoa -framework Metal -framework QuartzCore
 MOVIE_B = ../../../game/$(GAME)-work/build/movie-tests
 movie-avc-build: $(MOVIE_B)/t_movie_avc $(MOVIE_B)/t_movie_sps
 $(MOVIE_B):

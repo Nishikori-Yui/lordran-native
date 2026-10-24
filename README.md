@@ -324,6 +324,8 @@ corner, with no background or buttons. Press **F5** to cycle
 **Simple → Detailed → Off**; some Mac keyboards require **Fn-F5**.
 The same action is available in the **View** menu. The mode is saved.
 The text does not intercept mouse or keyboard input.
+In Detailed mode it also shows the saved resolution preset, MSAA and texture
+anisotropy; a `DM_GAME_RES` diagnostic override is shown as `Override`.
 
 Mac also provides a **Graphics** menu for saved next-launch overrides: 50%,
 75%, Native, or 125% internal resolution; supported 2x/4x/8x MSAA; 2x/4x/8x/16x
