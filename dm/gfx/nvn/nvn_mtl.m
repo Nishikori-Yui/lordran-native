@@ -17,6 +17,7 @@
 #endif
 #include "nvn_mtl.h"
 #include "nvn_perf.h"
+#include "nvn_scene_meta.h"
 #include "nvn_obj.h"
 #include "../tex/nvn_fmt_mtl.h"
 #include "../tex/nvn_deswizzle.h"
@@ -1714,6 +1715,35 @@ static int passdump(void) {
     long f = (long)atomic_load(&g_cur_frame); return a0 >= 0 && f >= a0 && f <= a1;
 }
 #define PD(fmt, ...) do { if (passdump()) DM_LOG_DEBUG("metal.pass", "[pass] F%llu " fmt, (unsigned long long)atomic_load(&g_cur_frame), ##__VA_ARGS__); } while (0)
+static int scene_meta_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_SCENE_META"); v = e && atoi(e); } return v; }
+static void scene_meta_present_summary(uint64_t frame, uint64_t serial) {
+    if (!scene_meta_on()) return;
+    const nvn_scene_frame *f = nvn_scene_meta_last();
+    if (f->frame != frame) return;
+    if (f->dropped_passes || f->dropped_reads)
+        DM_LOG_INFO("metal.scene", "frame=%llu scene_metadata_truncated=1 dropped_passes=%u dropped_reads=%u; read-chain confidence may be reduced",
+                    (unsigned long long)frame, f->dropped_passes, f->dropped_reads);
+    nvn_scene_candidate candidate;
+    nvn_scene_meta_analyze(f, serial, &candidate);
+    if (candidate.status == NVN_SCENE_NO_PRESENT_PRODUCER) {
+        DM_LOG_INFO("metal.scene", "frame=%llu present_serial=%llu scene_candidate=unknown reason=no_present_producer passes=%u",
+                    (unsigned long long)frame, (unsigned long long)serial, f->pass_count);
+        return;
+    }
+    if (candidate.status == NVN_SCENE_NO_DEPTH_IN_READ_CHAIN) {
+        DM_LOG_INFO("metal.scene", "frame=%llu present_serial=%llu present_pass=%llu scene_candidate=unknown reason=no_depth_in_read_chain chain_passes=%d",
+                    (unsigned long long)frame, (unsigned long long)serial,
+                    (unsigned long long)candidate.present->pass, candidate.chain_passes);
+        return;
+    }
+    const nvn_scene_pass *scene = candidate.scene;
+    DM_LOG_INFO("metal.scene", "frame=%llu present_serial=%llu present_pass=%llu scene_candidate_pass=%llu color_serial=%llu depth_serial=%llu color_format=%u depth_format=%u size=%ux%u samples=%u draws=%u read_chain_passes=%d confidence=candidate",
+                (unsigned long long)frame, (unsigned long long)serial,
+                (unsigned long long)candidate.present->pass, (unsigned long long)scene->pass,
+                (unsigned long long)scene->color, (unsigned long long)scene->depth,
+                scene->color_format, scene->depth_format, scene->width, scene->height,
+                scene->samples, scene->draws, candidate.chain_passes);
+}
 static void blit_note(void) { if (g_enc) PD("E %llu copy or buffer update ended the render pass", g_stat_pass); }
 __attribute__((weak)) void dm_guest_frame_tick(void) {}   // hle_os.c provides the strong definition (DM_DETCLOCK deterministic guest clock); a no-op when graphics unit tests do not link the host   // diag.c provides the strong definition (DM_TICK_HOLD=E:SHOT unfreeze); a no-op when graphics unit tests do not link the host
 __attribute__((weak)) int dm_detclock_enabled(void) { return 0; }   // Same as above: the host's hle_os.c provides the strong definition; when graphics unit tests do not link the host, the deterministic clock is treated as off
@@ -2183,6 +2213,25 @@ static id<MTL4RenderCommandEncoder> rp_begin_ex_(int clear_only) {
     g_enc = enc_r_begin(pd);
     args_dirty_all();
     g_stat_pass++;
+    if (scene_meta_on()) {
+        uint64_t color = 0, depth = pd.depthAttachment.texture && R.rt.depth ? R.rt.depth->serial : 0;
+        uint32_t color_format = 0;
+        for (int i = 0; i < R.rt.n && i < 8; i++) if (R.rt.color[i] && pd.colorAttachments[i].texture) {
+            color = R.rt.color[i]->serial;
+            color_format = (uint32_t)pd.colorAttachments[i].texture.pixelFormat;
+            break;
+        }
+        nvn_scene_meta_pass(atomic_load(&g_cur_frame), g_stat_pass, color, depth,
+                            color_format, g_pass.dfmt, (uint32_t)g_pass.tw, (uint32_t)g_pass.th,
+                            g_pass.samples);
+        if (R.rt.n == 1 && R.rt.color[0] && R.rt.depth &&
+            color_format == MTLPixelFormatRG11B10Float && g_pass.dfmt == MTLPixelFormatDepth32Float_Stencil8 &&
+            g_pass.tw >= 500 && g_pass.tw != g_pass.th)
+            DM_LOG_INFO("metal.scene", "frame=%llu main_pass_candidate=%llu color_serial=%llu depth_serial=%llu color_format=%u depth_format=%u size=%ux%u samples=%u basis=existing_runtime_pass_rule",
+                        (unsigned long long)atomic_load(&g_cur_frame), (unsigned long long)g_stat_pass,
+                        (unsigned long long)color, (unsigned long long)depth, color_format, g_pass.dfmt,
+                        (unsigned)g_pass.tw, (unsigned)g_pass.th, g_pass.samples);
+    }
     if (enc_label_on()) { id<MTLTexture> lt = pd.colorAttachments[0].texture ?: pd.depthAttachment.texture ?: pd.stencilAttachment.texture; g_el_w = (int)lt.width; g_el_h = (int)lt.height; g_el_draws = 0; g_el_key[0] = 0; }
     return g_enc;
 }
@@ -3500,6 +3549,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             treg_t *tr = treg_current(tid);
             if (t && g_fb_n && g_fb_seq == g_draw_seq && nvn_stage == 1) for (int q = 0; q < g_fb_n; q++) if (t == g_fb_src[q]) { t = g_fb_use[q]; trid = g_fb_rid[q]; break; }   // same-pass feedback sampling: read the snapshot instead (see fb_prepare)
             if (t && passdump() && tr) PD("R %llu st%d ser=%llu", g_stat_pass, nvn_stage, tr->t.serial);
+            if (t && tr && tr->ok && scene_meta_on()) nvn_scene_meta_read(atomic_load(&g_cur_frame), g_stat_pass, tr->t.serial);
             if (bl) PD("B %llu st%d tex reg%d tid=%d %s ser=%llu fmt=%lu %lux%lux%lu view_lv=%lu+%lu view_sl=%lu array=%lu target=%lu swz=%d%d%d%d mtl=%p aid=%d kind=%u off=%u handle=%#llx",
                        g_stat_pass, nvn_stage, reg, tid, t ? "real" : "dummy", t && tr ? tr->t.serial : 0ull,
                        (unsigned long)t.pixelFormat, (unsigned long)t.width, (unsigned long)t.height, (unsigned long)t.depth,
@@ -5305,6 +5355,7 @@ frz_plain:;
         }
     }
     g_stat_draw++;
+    if (scene_meta_on()) nvn_scene_meta_draw(atomic_load(&g_cur_frame), g_stat_pass);
     if (enc_label_on() && !g_el_draws++ && pr->sh[1]) { memcpy(g_el_key, pr->sh[1]->key, 8); g_el_key[8] = 0; }
     if (passdump()) {   // Characteristics of a render pass's first draw (to judge whether the load can be omitted: full screen, no blending, writes all channels, does not depend on depth); with DM_NVN_PASSDUMP_ALL every draw is recorded
         static uint64_t last_pass = ~0ull; static int all = -1; if (all < 0) all = getenv("DM_NVN_PASSDUMP_ALL") != NULL;
@@ -6960,6 +7011,11 @@ void mtl_link_pause(int on);
 void mtl_present_discard(int on) { atomic_store(&g_present_discard, on != 0); if (on) present_drop_for_suspend(); }
 uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
     if (atomic_load(&g_present_discard)) return 0;   // Ticket number 0 = no pending present; the swapchain texture acquire does not wait
+    if (scene_meta_on()) {
+        uint64_t frame = atomic_load(&g_cur_frame);
+        nvn_scene_meta_present(frame, t->serial, t->d.width, t->d.height);
+        scene_meta_present_summary(frame, t->serial);
+    }
     if (t) { xv_check(t->serial, 0, 0, "present"); if (g_xv_npresent < 128) g_xv_present[g_xv_npresent++] = t->serial; }
     static pthread_once_t once = PTHREAD_ONCE_INIT; pthread_once(&once, present_start);
     link_sync();
