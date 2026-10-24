@@ -147,6 +147,25 @@ Back up `save/` before removing or replacing the app if you want to keep
 progress. The app is configured for one running instance and opens the normal
 Mac game window. The first shader build and app assembly can take a long time.
 
+### Mac graphics settings
+
+Open the **Graphics** menu while the game is running. The menu saves these
+preferences for the next launch:
+
+- **Resolution:** 50%, 75%, Native, or 125% of the game's default internal
+  render size.
+- **MSAA:** game default or a supported 2x, 4x, or 8x override. The override
+  applies to multisample targets the game already creates; it does not turn
+  every single-sample target into an MSAA target.
+- **Texture filtering:** game default, 2x, 4x, 8x, or 16x anisotropy.
+- **Bloom:** game default, on, or off.
+
+These settings are applied before the guest creates its graphics resources, so
+changing them requires a restart. The menu shows the available MSAA levels for
+the current Metal device and provides a reset-to-defaults action. Resolution
+settings are ignored when the diagnostic `DM_GAME_RES` environment override is
+present.
+
 The setup script refuses to overwrite an existing `.app`. To replace it
 deliberately, use the packer directly after setup:
 

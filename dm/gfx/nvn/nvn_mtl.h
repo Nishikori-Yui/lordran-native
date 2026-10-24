@@ -6,6 +6,9 @@
 #include <stddef.h>
 
 void mtl_init(void);
+void mtl_set_graphics_overrides(unsigned msaa, unsigned anisotropy, int bloom);
+unsigned mtl_msaa_override(void);
+unsigned mtl_anisotropy_override(void);
 void mtl_set_origin_lower_left(int on);   // NVN window origin: 1 = lower left (GL, NVN's default), 0 = upper left (D3D / Metal); see nvn_mtl.m
 void bf_want_note(const char *key);
 

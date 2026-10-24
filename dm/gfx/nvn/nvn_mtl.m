@@ -54,6 +54,8 @@ static void warm_start(void);
 static void warm_claim(void);
 
 static id<MTLDevice> g_dev;
+static _Atomic unsigned g_msaa_override;
+static _Atomic unsigned g_anisotropy_override;
 static NSMutableArray *g_l3_gpu_leaks;
 static int g_nvn_deswz_gpu;
 static id<MTLCommandQueue> g_q;
@@ -91,6 +93,20 @@ int g_dm_present_link;   // Present pacing mode (runtime value of DM_PRESENT_LIN
 static int g_present_latency = 1;
 static uint64_t g_pq_done;
 static uint64_t g_pq_read;
+
+unsigned mtl_msaa_override(void) {
+    return atomic_load_explicit(&g_msaa_override, memory_order_relaxed);
+}
+
+unsigned mtl_anisotropy_override(void) {
+    return atomic_load_explicit(&g_anisotropy_override, memory_order_relaxed);
+}
+
+void mtl_set_graphics_overrides(unsigned msaa, unsigned anisotropy, int bloom) {
+    atomic_store_explicit(&g_msaa_override, msaa, memory_order_relaxed);
+    atomic_store_explicit(&g_anisotropy_override, anisotropy, memory_order_relaxed);
+    g_bloom_q = bloom >= 0 ? !!bloom : -1;
+}
 static id<MTLResidencySet> g_res;
 static int g_res_dirty;
 static id<MTLSharedEvent> g_ev;
@@ -2826,7 +2842,8 @@ static id<MTLSamplerState> samp_state(sreg_t *r) {
     d.reductionMode = (MTLSamplerReductionMode)p.reduction;
     d.sAddressMode = wrapm(p.ws); d.tAddressMode = wrapm(p.wt); d.rAddressMode = wrapm(p.wr);
     d.lodMinClamp = p.lod_min < 0 ? 0 : p.lod_min; d.lodMaxClamp = p.lod_max;
-    d.maxAnisotropy = p.aniso < 1 ? 1 : p.aniso > 16 ? 16 : (NSUInteger)p.aniso;
+    unsigned aniso = mtl_anisotropy_override();
+    d.maxAnisotropy = aniso ? aniso : (p.aniso < 1 ? 1 : p.aniso > 16 ? 16 : (NSUInteger)p.aniso);
     if (p.cmp_mode) d.compareFunction = (MTLCompareFunction)(p.cmp_func - 1);
     d.borderColor = p.border[3] > 0.5f ? (p.border[0] > 0.5f ? MTLSamplerBorderColorOpaqueWhite : MTLSamplerBorderColorOpaqueBlack) : MTLSamplerBorderColorTransparentBlack;
     d.supportArgumentBuffers = YES;

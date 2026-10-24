@@ -503,5 +503,65 @@
     "file": "dm/ios/Sources/DmControlOverlay.m",
     "source": "preset < 0 ? T(@\"Custom\", @\"自定义\") : names[preset]];",
     "purpose": "Localized touch camera preferences; not a runtime log"
+  },
+  {
+    "file": "dm/host/graphics_settings_mac.m",
+    "source": "return text(@\"Native\", @\"原生\");",
+    "purpose": "Localized Mac graphics menu text"
+  },
+  {
+    "file": "dm/host/graphics_settings_mac.m",
+    "source": "return value ? [NSString stringWithFormat:@\"%ux\", value] : text(@\"Game default\", @\"游戏默认\");",
+    "purpose": "Localized Mac graphics menu text"
+  },
+  {
+    "file": "dm/host/graphics_settings_mac.m",
+    "source": "if (value == 0) return text(@\"Off\", @\"关闭\");",
+    "purpose": "Localized Mac graphics menu text"
+  },
+  {
+    "file": "dm/host/graphics_settings_mac.m",
+    "source": "if (value == 1) return text(@\"On\", @\"开启\");",
+    "purpose": "Localized Mac graphics menu text"
+  },
+  {
+    "file": "dm/host/graphics_settings_mac.m",
+    "source": "return text(@\"Game default\", @\"游戏默认\");",
+    "purpose": "Localized Mac graphics menu text"
+  },
+  {
+    "file": "dm/host/graphics_settings_mac.m",
+    "source": "NSString *title = text(@\"Graphics\", @\"画质\");",
+    "purpose": "Localized Mac graphics menu text"
+  },
+  {
+    "file": "dm/host/graphics_settings_mac.m",
+    "source": "NSMenuItem *reset = [[NSMenuItem alloc] initWithTitle:text(@\"Reset graphics settings\", @\"恢复画质默认设置\")",
+    "purpose": "Localized Mac graphics menu text"
+  },
+  {
+    "file": "dm/host/graphics_settings_mac.m",
+    "source": "_resolutionItem.title = [NSString stringWithFormat:@\"%@: %@\", text(@\"Resolution\", @\"分辨率\"), [self resolutionName:resolution]];",
+    "purpose": "Localized Mac graphics menu text"
+  },
+  {
+    "file": "dm/host/graphics_settings_mac.m",
+    "source": "_anisotropyItem.title = [NSString stringWithFormat:@\"%@: %@\", text(@\"Texture filtering\", @\"纹理过滤\"), [self anisotropyName:anisotropy]];",
+    "purpose": "Localized Mac graphics menu text"
+  },
+  {
+    "file": "dm/host/graphics_settings_mac.m",
+    "source": "alert.messageText = text(@\"Graphics setting saved\", @\"画质设置已保存\");",
+    "purpose": "Localized Mac graphics menu text"
+  },
+  {
+    "file": "dm/host/graphics_settings_mac.m",
+    "source": "alert.informativeText = text(@\"Restart the game for this setting to take effect.\", @\"请重启游戏使设置生效。\");",
+    "purpose": "Localized Mac graphics menu text"
+  },
+  {
+    "file": "dm/host/graphics_settings_mac.m",
+    "source": "[alert addButtonWithTitle:text(@\"OK\", @\"确定\")];",
+    "purpose": "Localized Mac graphics menu text"
   }
 ]

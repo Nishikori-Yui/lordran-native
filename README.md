@@ -325,6 +325,11 @@ corner, with no background or buttons. Press **F5** to cycle
 The same action is available in the **View** menu. The mode is saved.
 The text does not intercept mouse or keyboard input.
 
+Mac also provides a **Graphics** menu for saved next-launch overrides: 50%,
+75%, Native, or 125% internal resolution; supported 2x/4x/8x MSAA; 2x/4x/8x/16x
+texture anisotropy; and Bloom on/off. These settings are applied before the
+guest creates graphics resources, so restart the game after changing them.
+
 Saves are in `save/`. Before reinstalling, back up `save/` and `pso_user.tsv`: some sideloading tools create a new app data folder. Restore both to retain your saves and pipeline prewarm list.
 
 The first visit to a scene can stutter while Metal compiles new pipelines. The app records them in `pso_user.tsv` for prewarming on later launches.
