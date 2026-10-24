@@ -6520,15 +6520,15 @@ static id<MTL4FXSpatialScaler> g_spatial_scaler;
 static id<MTLTexture> g_spatial_output;
 static NSUInteger g_spatial_w, g_spatial_h;
 
-static id<MTLTexture> spatial_upscale(id<MTL4CommandBuffer> cb, id<MTLTexture> src, NSUInteger cw, NSUInteger ch) {
+static id<MTLTexture> spatial_upscale(id<MTL4CommandBuffer> cb, id<MTLTexture> src, NSUInteger cw, NSUInteger ch, NSUInteger content_w, NSUInteger content_h) {
     if (!atomic_load_explicit(&g_spatial_upscaling, memory_order_relaxed)) return nil;
     if (src.sampleCount != 1 || src.textureType != MTLTextureType2D) return nil;
     if (src.width >= cw || src.height >= ch) return nil;
-    if (!g_spatial_scaler || g_spatial_w != src.width || g_spatial_h != src.height) {
+    if (!g_spatial_scaler || g_spatial_w != content_w || g_spatial_h != content_h) {
         MTLFXSpatialScalerDescriptor *desc = [MTLFXSpatialScalerDescriptor new];
         desc.colorTextureFormat = src.pixelFormat;
         desc.outputTextureFormat = src.pixelFormat;
-        desc.inputWidth = src.width; desc.inputHeight = src.height;
+        desc.inputWidth = content_w; desc.inputHeight = content_h;
         desc.outputWidth = cw; desc.outputHeight = ch;
         desc.colorProcessingMode = MTLFXSpatialScalerColorProcessingModePerceptual;
         NSError *error = nil;
@@ -6542,8 +6542,8 @@ static id<MTLTexture> spatial_upscale(id<MTL4CommandBuffer> cb, id<MTLTexture> s
             return nil;
         }
         g_spatial_scaler = scaler;
-        g_spatial_w = src.width; g_spatial_h = src.height;
-        { static int once; if (!once++) MLOG("MetalFX spatial upscaling enabled: input=%lux%lu output=%lux%lu", (unsigned long)src.width, (unsigned long)src.height, (unsigned long)cw, (unsigned long)ch); }
+        g_spatial_w = content_w; g_spatial_h = content_h;
+        { static int once; if (!once++) MLOG("MetalFX spatial upscaling enabled: input=%lux%lu output=%lux%lu", (unsigned long)content_w, (unsigned long)content_h, (unsigned long)cw, (unsigned long)ch); }
     }
     if (!g_spatial_output || g_spatial_output.width != cw || g_spatial_output.height != ch || g_spatial_output.pixelFormat != src.pixelFormat) {
         MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:src.pixelFormat width:cw height:ch mipmapped:NO];
@@ -6557,8 +6557,8 @@ static id<MTLTexture> spatial_upscale(id<MTL4CommandBuffer> cb, id<MTLTexture> s
         }
     }
     g_spatial_scaler.colorTexture = src;
-    g_spatial_scaler.inputContentWidth = src.width;
-    g_spatial_scaler.inputContentHeight = src.height;
+    g_spatial_scaler.inputContentWidth = content_w;
+    g_spatial_scaler.inputContentHeight = content_h;
     g_spatial_scaler.outputTexture = g_spatial_output;
     [g_spatial_scaler encodeToCommandBuffer:cb];
     return g_spatial_output;
@@ -6736,15 +6736,16 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     id<MTL4CommandBuffer> cb = g_present_cb[alloc_i];
     [cb beginCommandBufferWithAllocator:g_present_alloc4[alloc_i]];
     id<MTLTexture> presented = src;
-    NSUInteger cw = crop && crop[2] ? (NSUInteger)crop[2] : src.width;
-    NSUInteger ch = crop && crop[3] ? (NSUInteger)crop[3] : src.height;
-    double scale = fmin((double)dr.texture.width / cw, (double)dr.texture.height / ch);
-    NSUInteger upscale_w = (NSUInteger)(src.width * scale + 0.5);
-    NSUInteger upscale_h = (NSUInteger)(src.height * scale + 0.5);
+    NSUInteger content_w = crop && crop[2] ? (NSUInteger)crop[2] : src.width;
+    NSUInteger content_h = crop && crop[3] ? (NSUInteger)crop[3] : src.height;
+    double scale = fmin((double)dr.texture.width / content_w, (double)dr.texture.height / content_h);
+    NSUInteger upscale_w = (NSUInteger)(content_w * scale + 0.5);
+    NSUInteger upscale_h = (NSUInteger)(content_h * scale + 0.5);
     if (atomic_load_explicit(&g_spatial_upscaling, memory_order_relaxed) && src.textureType == MTLTextureType2D && src.sampleCount == 1 &&
-        (upscale_w > src.width || upscale_h > src.height))
-        presented = spatial_upscale(cb, src, upscale_w, upscale_h) ?: src;
-    if (!present_encode_m4(cb, presented, dr.texture, crop, alloc_i)) {
+        (upscale_w > content_w || upscale_h > content_h))
+        presented = spatial_upscale(cb, src, upscale_w, upscale_h, content_w, content_h) ?: src;
+    const int *present_crop = presented == src ? crop : NULL;
+    if (!present_encode_m4(cb, presented, dr.texture, present_crop, alloc_i)) {
         [cb endCommandBuffer];
 #if !TARGET_OS_SIMULATOR
         [g_q4 signalDrawable:dr];
