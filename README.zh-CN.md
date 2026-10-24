@@ -150,6 +150,10 @@ python3 scripts/build_ipa_from_nsp.py game/01004AB00A260000 -k game/01004AB00A26
 
 运行 `python3 scripts/build_ipa_from_nsp.py -h` 可查看选项，包括用 `-o` 指定输出路径、用 `--app-name` 指定主屏幕名称。版本选择和 Mac 手动构建步骤见[开发文档](docs/development.md)。
 
+另有默认关闭的打包选项 `--experimental-60fps`，仅为已核验的 1.0.3 构建调整限帧参数，
+同时检查 build ID 和原始指令。它保留限帧函数，不保证游戏计时正确或稳定达到 60 FPS，
+不能与导入的金手指、补丁一起使用。
+
 构建时可实验性地导入本地金手指和 IPS/IPS32 补丁（包括 60 FPS 候选），并可启用游玩中开关。
 补丁必须匹配 main NSO 构建 ID。运行时模式默认全部关闭；iOS 从浮动菜单进入「金手指」，Mac 按 F6 打开菜单、F7/F8 选择、F9 切换。
 支持的格式和使用方法见[开发文档](docs/development.md#experimental-static-cheats-and-60-fps-patches)。

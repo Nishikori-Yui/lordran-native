@@ -1,12 +1,15 @@
 """Explicit, build-bound static code patches applied before native rewriting."""
 import argparse
 import hashlib
+import json
 import re
 import struct
 from pathlib import Path
 
 
 def add_arguments(parser):
+    parser.add_argument("--experimental-60fps", action="store_true",
+                        help="Opt in to the profile-verified 60 Hz limiter argument (1.0.3 only; not a gameplay guarantee)")
     parser.add_argument("--cheat-file", type=Path,
                         help="Local Atmosphere text file named after the main NSO build ID")
     parser.add_argument("--cheat", action="append", default=[], metavar="NAME",
@@ -20,6 +23,8 @@ def add_arguments(parser):
 def arguments(args):
     """Forward only explicit selections to the main module's rewriter."""
     result = []
+    if getattr(args, "experimental_60fps", False):
+        result += ["--experimental-60fps"]
     if args.cheat_file:
         result += ["--cheat-file", str(args.cheat_file)]
     for name in args.cheat:
@@ -116,8 +121,40 @@ def ips_writes(contents):
     return result
 
 
+def frame_limiter_patch(image, text_end, ro_off, build_id, args):
+    """Apply an explicit profile patch only after build and instruction checks."""
+    if args.cheat_file or args.cheat or args.ips or args.runtime_cheats:
+        raise ValueError("--experimental-60fps cannot be combined with imported or runtime patches")
+    # Keep all title/build-specific instruction knowledge in the game profile.
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "games"))
+    import game
+    profile = game.load()
+    if not any(build.get("main") == build_id[:32].lower() for build in profile.builds().values()):
+        raise ValueError("60 Hz limiter patch requires a registered main build")
+    data = profile.table("frame_limiter.json").read_bytes()
+    entry = json.loads(data).get(build_id[:32].lower())
+    if entry is None:
+        raise ValueError("60 Hz limiter patch is not verified for this main build")
+    offset = int(entry["offset"], 0)
+    expected = bytes.fromhex(entry["expected"])
+    replacement = bytes.fromhex(entry["replacement"])
+    if (offset < 0x100 or offset % 4 or not replacement or len(replacement) % 4
+            or len(replacement) > len(expected)
+            or offset + len(expected) > min(text_end, ro_off, len(image))):
+        raise ValueError("Invalid limiter patch range")
+    if image[offset:offset + len(expected)] != expected:
+        raise ValueError("60 Hz limiter original instruction check failed")
+    image[offset:offset + len(replacement)] = replacement
+    return text_end, dict(schema=1, build_id=build_id, bytes_written=len(replacement),
+                          enabled=[dict(kind="profile", name="Experimental 60 Hz limiter",
+                                        sha256=hashlib.sha256(data).hexdigest())])
+
+
 def apply(image, text_end, ro_off, build_id, args):
     """Validate every write before mutating; return text extent and private audit."""
+    if getattr(args, "experimental_60fps", False):
+        return frame_limiter_patch(image, text_end, ro_off, build_id, args)
     if args.cheat and not args.cheat_file:
         raise ValueError("--cheat requires --cheat-file")
     groups = {}
@@ -160,6 +197,8 @@ def apply(image, text_end, ro_off, build_id, args):
 
 def prepare_runtime(image, text_end, ro_off, build_id, args):
     """Keep original instructions and compile every imported group, initially off."""
+    if getattr(args, "experimental_60fps", False):
+        raise ValueError("--experimental-60fps does not support live switching")
     groups = []
     selected = set(args.cheat)
     if args.cheat_file:

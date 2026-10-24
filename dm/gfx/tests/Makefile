@@ -39,6 +39,8 @@ t_fuse_check: t_fuse_check.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_fuse_check.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_present_crop: t_present_crop.m ../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_present_crop.m ../../host/crash.c ../../host/hle_bigstack.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_present_focus: t_present_focus.m present_focus_stub.c ../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_present_focus.m present_focus_stub.c ../../host/crash.c ../../host/hle_bigstack.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
 t_reorder_chain: t_reorder_chain.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_reorder_chain.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_defer_chain: t_defer_chain.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -49,8 +51,8 @@ t_xv: t_xv.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_xv.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_ub: t_ub.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_ub.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_mip_extent: t_mip_extent.m ../nvn/hle_nvn.c ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_mip_extent.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_mip_extent: t_mip_extent.m ../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_mip_extent.m ../../host/crash.c ../../host/hle_bigstack.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
 t_rt_range_shape: t_rt_range_shape.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_rt_range_shape.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_rt_range_ro: t_rt_range_ro.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -79,7 +81,7 @@ t_sampler_pool: t_sampler_pool.m ../nvn/hle_nvn.c ../../host/crash.c ../../host/
 	clang $(CFLAGS) -fobjc-arc -o $@ t_sampler_pool.m ../../host/crash.c ../../host/hle_bigstack.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
 t_visibility: t_visibility.m ../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_visibility.m ../../host/crash.c ../../host/hle_bigstack.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
-run: t_nvn t_dirty_slots t_dirty_race t_builtin t_deswz_gpu t_pace t_perf t_refl t_hmap t_cover t_fuse_check t_present_crop t_reorder_chain t_defer_chain t_zskip t_xv t_ub t_mip_extent t_rt_range_shape t_rt_range_ro t_shader_map t_rt_range t_rt_depth_ro t_pso_skey t_sim_packed16 t_pfv t_tex_registry t_vertex_fetch t_alpha t_sampler_reduction t_sampler_pool t_visibility
+run: t_nvn t_dirty_slots t_dirty_race t_builtin t_deswz_gpu t_pace t_perf t_refl t_hmap t_cover t_fuse_check t_present_crop t_present_focus t_reorder_chain t_defer_chain t_zskip t_xv t_ub t_mip_extent t_rt_range_shape t_rt_range_ro t_shader_map t_rt_range t_rt_depth_ro t_pso_skey t_sim_packed16 t_pfv t_tex_registry t_vertex_fetch t_alpha t_sampler_reduction t_sampler_pool t_visibility
 	./t_nvn
 	./t_dirty_slots
 	./t_dirty_race
@@ -92,6 +94,7 @@ run: t_nvn t_dirty_slots t_dirty_race t_builtin t_deswz_gpu t_pace t_perf t_refl
 	./t_cover
 	./t_fuse_check
 	./t_present_crop
+	./t_present_focus
 	MTL_DEBUG_LAYER=1 ./t_reorder_chain
 	MTL_DEBUG_LAYER=1 ./t_defer_chain
 	./t_zskip

@@ -70,26 +70,32 @@ def glslc_shaders(data, label, required=True):
     out = []
     for magic in re.finditer(b'\x91\x68\x86\x19', data):
         header = magic.start()
+        # A magic match may be arbitrary data or a truncated final header.
+        if len(data) - header < 0xcc:
+            continue
         size = struct.unpack_from('<I', data, header + 0x44)[0]
-        control = data.find(CTL_MAGIC, header, header + size) if 0x880 < size <= len(data) - header else -1
-        if control < 0 or data.find(CTL_MAGIC, control + 4, header + size) >= 0:
+        if not 0xcc <= size <= len(data) - header:
             continue
-        nctl = struct.unpack_from('<I', data, control + 0x20)[0]
-        ncode = struct.unpack_from('<I', data, control + 0x704)[0]
-        if nctl < 0x880 or control + nctl + ncode > header + size:
+        output = memoryview(data)[header:header + size]
+        control_off = struct.unpack_from('<I', output, 0x94)[0]
+        code_off, ncode = struct.unpack_from('<II', output, 0xc4)
+        if not 0xcc <= control_off <= size - 0x880:
             continue
-        code_start = control + nctl
-        # SDK 4.5 puts a texture-linkage table between some fragment controls and code.
-        if data[code_start:code_start + 4] not in (GFX_MAGIC, CS_MAGIC) and size >= 0xd0:
-            control_off = struct.unpack_from('<I', data, header + 0x94)[0]
-            code_off, code_size = struct.unpack_from('<II', data, header + 0xc4)
-            if (control_off == control - header and code_off >= nctl and
-                    code_size == ncode and control + code_off + ncode <= header + size):
-                code_start = control + code_off
-        ctl, code = data[control:control + nctl], data[code_start:code_start + ncode]
+        nctl = struct.unpack_from('<I', output, control_off + 0x20)[0]
+        if not 0x880 <= nctl <= size - control_off:
+            continue
+        # Code offsets are relative to the control section, not the output.
+        # Linkage bytes can themselves look like shader magic: never scan them.
+        if code_off < nctl or code_off > size - control_off:
+            continue
+        code_start = control_off + code_off
+        if not 4 <= ncode <= size - code_start:
+            continue
+        ctl = bytes(output[control_off:control_off + nctl])
+        code = bytes(output[code_start:code_start + ncode])
         if code[:4] == CS_MAGIC:
             stage = 'cs'
-        elif code[:4] == GFX_MAGIC:
+        elif code[:4] == GFX_MAGIC and len(code) >= 0x80:
             stage = SPH_STAGE.get((struct.unpack_from('<I', code, 0x30)[0] >> 10) & 0xf)
         else:
             stage = None

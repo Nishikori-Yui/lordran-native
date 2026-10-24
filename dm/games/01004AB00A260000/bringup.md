@@ -32,6 +32,11 @@ the SDK's service-manager object null and crashed at `sdk+0xa0974`; that hook
 was removed. Do not bypass service initialization without also handling the
 actual service client.
 
+Offline socket waits preserve timeout behavior. Empty `Poll` and `Select`
+requests consume their requested timeout and return zero, while requests that
+contain descriptors still take the unavailable-network failure path. This
+prevents the game's offline networking threads from retrying in a tight loop.
+
 ## Validation
 
 The game's work folder is `<NSP folder>/01004AB00A260000-work`.
@@ -367,3 +372,61 @@ the UTC export time and a unique suffix; older retained logs remain intact.
 Tests cover fragmented writes, concurrent writers, keeping the emergency
 crash descriptor open, timestamped export names and independent exports.
 Validation logs remain under `run/launchfix-*.log` in the game's work folder.
+
+## Runtime hardening (2026-10-23)
+
+- GLSLC extraction uses explicit control-relative code offsets rather than
+  searching linkage data. Synthetic coverage includes truncated headers,
+  offset overflow, inconsistent lengths and decoy magic. Both registered
+  versions retain the same 3,099 unique stage/control/code tuples and keys;
+  the shader tables and chain are unchanged.
+- The offline profanity filter installs all seven SDK virtual slots and keeps
+  the guest RTTI prefix. Direct UTF-8, UTF-16 and char16_t aliases share the
+  same no-match behavior; caller text and work buffers are not modified.
+  Constructor overloads, initialization and finalization avoid the system
+  word-list heap. Deleting destruction uses the guest operator delete, not
+  the host allocator. Concurrent construction and virtual calls are tested.
+- Texture and sampler pool commands capture storage base and capacity when
+  recorded, so reusing a wrapper cannot redirect an existing command. UBO
+  bindless handles are reread before argument reuse and invalid offsets or
+  overflowing addresses resolve as empty bindings.
+- Empty SDK 4.5 and newer socket Poll/Select entry points, plus nnsocketPoll,
+  honor finite timeouts. Select reads two signed 64-bit guest timeval fields;
+  invalid values and negative descriptor counts fail. Infinite offline waits
+  remain unsupported (negative Poll timeouts return immediately; null Select
+  timeouts fail). Nonempty waits remain unavailable.
+- `--experimental-60fps` is opt-in for the registered 1.0.3 build only. It
+  verifies the original rate argument and following call instructions, then
+  changes just the 30 Hz argument to 60 Hz. The limiter function is not cut.
+  Imported/runtime patches cannot be combined with this option. This is a
+  rewrite-level check, not a gameplay, performance or device acceptance result.
+
+Validation covers synthetic host tests, Metal descriptor/UBO tests and the
+local registered inputs. Subsequent Mac testing reached title/menu, save
+loading and gameplay using a separate copied save. Rapid flicker recurred
+during death -> loading -> gameplay on `66d2843` with an additional local
+AppKit surface-isolation experiment; that experiment is not a confirmed fix.
+Gameplay acceptance remains incomplete. No physical iOS test, character-name
+acceptance or optional 60 FPS gameplay test is claimed.
+
+The affected session contains intervals with continued guest draw recording
+but zero backend passes/draws while presentation continues near 30 FPS. A
+separate headless focus-loss/recovery test reproduces synchronization-only
+submitted command lists while unfocused, followed by resumed drawing on
+focus recovery. Its title-screen captures are identical, so that test does
+not reproduce visible flicker or establish the death-transition root cause.
+Presenting different stale swapchain contents remains a hypothesis requiring
+transition-frame evidence. An FPS counter alone is not visual acceptance.
+
+### Independent texture identity regression
+
+The fixed-chain Metal test previously failed 30 of 155 checks on both main
+and the runtime branch. Poolless textures were incorrectly shared by the
+`(null pool, zero offset, description)` alias key, so equal-shaped independent
+attachments resolved to one Metal texture. This made copies, uniform-update
+ordering, inherited program state and CALL/JUMP counterexamples appear wrong.
+Poolless textures now retain serial identity; real pool/offset aliases still
+share storage. All 155 original checks pass without changing their expected
+pixels (three repeated runs). The deliberately incorrect `--all-independent`
+control still fails 13 checks, so dependency detection remains effective.
+The texture-registry test also checks both independent and shared identities.

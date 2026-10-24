@@ -2,6 +2,7 @@
 // Only entry points that go to a service are hooked; library functions that only read and write the game's own buffers (prepo Add / Array / Struct, err ErrorResultVariant, friends getters, socket byte-order conversion) keep running in the SDK.
 // Return convention as in hle_friends.c: Result returns RES_FAIL ("saved / submitted" kinds return RES_OK so the game does not retry); bool returns false; events get a bound SystemEvent that never fires.
 #include "hle.h"
+#include "hle_net_wait.h"
 
 static _Alignas(16) uint8_t g_ev_ldn[0x100];
 
@@ -52,7 +53,16 @@ HLE_FORCE("_ZN2nn6socket12GetLastErrnoEv", "离线：ENETDOWN", int, h_sk_Errno,
 HLE_FORCE("_ZN2nn6socket6SocketEiii", "离线（剪）：-1", int, h_sk_Socket3i, int a, int b, int c) { (void)a; (void)b; (void)c; return -1; }
 HLE_FORCE("_ZN2nn6socket8ShutdownEii", "离线（剪）", int, h_sk_Shutdown, int s, int h) { (void)s; (void)h; return -1; }
 HLE_FORCE("_ZN2nn6socket4BindEiPK8sockaddrj", "离线（剪）", int, h_sk_Bind, int s, const void *a, unsigned n) { (void)s; (void)a; (void)n; return -1; }
-HLE_FORCE("_ZN2nn6socket4PollEP6pollfdmi", "离线（剪）", int, h_sk_Poll, void *p, uint64_t n, int t) { (void)p; (void)n; (void)t; return -1; }
+HLE_FORCE("_ZN2nn6socket4PollEP6pollfdmi", "离线：空等待遵守 timeout；有 descriptor 时返回失败", int, h_sk_Poll, void *p, uint64_t n, int t) {
+    (void)p;
+    if (!n) { dm_net_wait_timeout_ms(t); return 0; }
+    return -1;
+}
+HLE_FORCE("_ZN2nn6socket6SelectEiP6fd_setS2_S2_P7timeval", "Offline empty select honors the guest timeout", int, h_sk_SelectLegacy,
+          int n, void *r, void *w, void *e, const void *timeout) {
+    (void)r; (void)w; (void)e;
+    return dm_net_empty_select(n, timeout);
+}
 HLE_FORCE("_ZN2nn6socket6SendToEiPKvmiPK8sockaddrj", "离线（剪）", long, h_sk_SendTo, int s, const void *b, unsigned long n, int f, const void *a, unsigned al) { (void)s; (void)b; (void)n; (void)f; (void)a; (void)al; return -1; }
 HLE_FORCE("_ZN2nn6socket6SendToEiPKvmNS0_7MsgFlagEPKNS0_8SockAddrEj", "离线（剪）", long, h_sk_SendTo2, int s, const void *b, unsigned long n, int f, const void *a, unsigned al) { (void)s; (void)b; (void)n; (void)f; (void)a; (void)al; return -1; }
 HLE_FORCE("_ZN2nn6socket8RecvFromEiPvmiP8sockaddrPj", "离线（剪）", long, h_sk_RecvFrom2, int s, void *b, unsigned long n, int f, void *a, unsigned *al) { (void)s; (void)b; (void)n; (void)f; (void)a; (void)al; return -1; }
@@ -90,23 +100,6 @@ HLE_FORCE("_ZN2nn7friends25EnsureFriendListAvailableEPNS0_12AsyncContextERKNS_7a
 HLE_FORCE("_ZN2nn7friends12AsyncContext7HasDoneEPb", "异步上下文：恒已完成", Result, h_fr_AcHasDone, void *self, uint8_t *done) { (void)self; *done = 1; return RES_OK; }
 HLE_FORCE("_ZN2nn7friends14AddPlayHistoryERKNS_7account3UidERKNS0_26PlayHistoryRegistrationKeyERKNS0_15InAppScreenNameESA_", "游玩记录不登记（剪）",
           Result, h_fr_PlayHist2, const void *uid, const void *key, const void *a, const void *b) { (void)uid; (void)key; (void)a; (void)b; return RES_FAIL; }
-
-// ---------- ngc: newer SDK overloads (with bool). Always judged as no profanity ----------
-HLE_FORCE("_ZN2nn3ngc15ProfanityFilter10InitializeEPvmb", "敏感词过滤初始化；宿主无词库", Result, h_ngc_Init3, void *self, void *work, uint64_t sz, unsigned check) { (void)self; (void)work; (void)sz; (void)check; return RES_OK; }
-HLE_FORCE("_ZN2nn3ngc15ProfanityFilter19CheckProfanityWordsEPjjPPKDsm", "敏感词检查：全部无敏感词", Result, h_ngc_Check16, void *self, uint32_t *out, unsigned mask, const void **words, uint64_t n) {
-    (void)self; (void)mask; (void)words; for (uint64_t i = 0; out && i < n; i++) out[i] = 0; return RES_OK;
-}
-// Masking also goes through the filter's private work heap. The offline host
-// has no system word-list save, so bypass both text overloads instead of
-// entering the SDK with an uninitialized filter object.
-HLE_FORCE("_ZN2nn3ngc15ProfanityFilter24MaskProfanityWordsInTextEPiPtj", "敏感词替换：宿主无词库，不修改 UTF-16 文本", Result, h_ngc_Mask16, void *self, int *out, uint16_t *text, unsigned length) {
-    (void)self; (void)text; (void)length; if (out) *out = 0; return RES_OK;
-}
-HLE_FORCE("_ZN2nn3ngc15ProfanityFilter24MaskProfanityWordsInTextEPiPcj", "敏感词替换：宿主无词库，不修改 UTF-8 文本", Result, h_ngc_Mask8, void *self, int *out, char *text, unsigned length) {
-    (void)self; (void)text; (void)length; if (out) *out = 0; return RES_OK;
-}
-HLE_FORCE("_ZN2nn3ngc15ProfanityFilter11SetMaskModeENS1_8MaskModeE", "敏感词替换模式：离线过滤器忽略", void, h_ngc_SetMaskMode, void *self, int mode) { (void)self; (void)mode; }
-HLE_FORCE("_ZN2nn3ngc15ProfanityFilter8FinalizeEv", "敏感词过滤结束：宿主无词库", void, h_ngc_Finalize, void *self) { (void)self; }
 
 // ---------- err: error display applet. Only logged, no UI is shown ----------
 HLE_FORCE("_ZN2nn3err9ShowErrorENS0_9ErrorCodeE", "错误显示小程序；宿主只记日志", void, h_err_ShowCode, uint64_t code) { LOG("Guest requested error display: %04u-%04u", (unsigned)(code & 0xffffffff), (unsigned)(code >> 32)); }

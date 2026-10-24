@@ -48,6 +48,65 @@ class Archives(unittest.TestCase):
                 struct.pack_into('<I', data, 0xc8, ncode + 1)
                 self.assertEqual(shader_split.glslc_shaders(data, 'fixture', required=False), [])
 
+    def test_glslc_metadata_is_authoritative_and_bounded(self):
+        import shader_split
+        control, nctl, gap, ncode = 0x240, 0x880, 0x100, 0x100
+        code = control + nctl + gap
+        valid = bytearray(code + ncode)
+        valid[:4] = bytes.fromhex('91688619')
+        struct.pack_into('<I', valid, 0x44, len(valid))
+        struct.pack_into('<I', valid, 0x94, control)
+        struct.pack_into('<II', valid, 0xc4, nctl + gap, ncode)
+        valid[control:control + 4] = shader_split.CTL_MAGIC
+        struct.pack_into('<I', valid, control + 0x20, nctl)
+        struct.pack_into('<I', valid, control + 0x704, ncode)
+        valid[code:code + 4] = shader_split.GFX_MAGIC
+        struct.pack_into('<I', valid, code + 0x30, 5 << 10)
+        # Decoy control and graphics magic in non-code data must not hide or
+        # replace the metadata-selected shader.
+        valid[0x100:0x104] = shader_split.CTL_MAGIC
+        valid[control + nctl:control + nctl + 4] = shader_split.GFX_MAGIC
+        struct.pack_into('<I', valid, control + nctl + 0x30, 1 << 10)
+        rows = shader_split.glslc_shaders(valid, 'fixture')
+        self.assertEqual(rows[0][1], 'ps')
+        self.assertEqual(rows[0][3], valid[code:])
+        # Embedded output offsets stay relative to their own header.
+        rows = shader_split.glslc_shaders(b'prefix' + valid, 'fixture')
+        self.assertEqual(rows[0][3], valid[code:])
+        for end in range(len(valid)):
+            self.assertEqual(shader_split.glslc_shaders(valid[:end], 'fixture', False), [])
+        for offset, value in ((0x44, 0xffffffff), (0x94, 0xfffffff0),
+                              (0x94, len(valid) - 4), (0xc4, nctl - 4),
+                              (0xc4, 0xffffffff), (0xc8, ncode + 1),
+                              (control + 0x20, 0x100),
+                              (control + 0x704, ncode - 1)):
+            bad = bytearray(valid)
+            struct.pack_into('<I', bad, offset, value)
+            with self.subTest(offset=offset, value=value):
+                self.assertEqual(shader_split.glslc_shaders(bad, 'fixture', False), [])
+        # A damaged output must not prevent extracting a following valid one.
+        self.assertEqual(len(shader_split.glslc_shaders(bad + valid, 'fixture')), 1)
+        with self.assertRaises(SystemExit):
+            shader_split.glslc_shaders(b'\x91\x68\x86\x19', 'required')
+
+    def test_glslc_compute_and_short_graphics_code(self):
+        import shader_split
+        control, nctl = 0x240, 0x880
+        for magic, ncode, expected in ((shader_split.CS_MAGIC, 4, 1),
+                                        (shader_split.GFX_MAGIC, 4, 0),
+                                        (shader_split.GFX_MAGIC, 0x34, 0)):
+            code = control + nctl
+            data = bytearray(code + ncode)
+            data[:4] = bytes.fromhex('91688619')
+            struct.pack_into('<I', data, 0x44, len(data))
+            struct.pack_into('<I', data, 0x94, control)
+            struct.pack_into('<II', data, 0xc4, nctl, ncode)
+            data[control:control + 4] = shader_split.CTL_MAGIC
+            struct.pack_into('<I', data, control + 0x20, nctl)
+            struct.pack_into('<I', data, control + 0x704, ncode)
+            data[code:code + 4] = magic
+            self.assertEqual(len(shader_split.glslc_shaders(data, 'fixture', False)), expected)
+
     def test_dcx_and_corrupt_lengths(self):
         raw = b'BND3' + bytes(range(256))
         data = compressed(raw)

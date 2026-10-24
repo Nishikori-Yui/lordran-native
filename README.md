@@ -190,6 +190,12 @@ This command writes `game/01004AB00A260000/LordranNative.ipa`. Without `-o`, the
 
 Run `python3 scripts/build_ipa_from_nsp.py -h` for options, including `-o` for the output path and `--app-name` for the home-screen name. See the [development guide](docs/development.md) for version selection and manual Mac builds.
 
+A separate opt-in `--experimental-60fps` packaging option adjusts the limiter
+argument for the verified 1.0.3 build, with build-ID and instruction checks.
+It preserves the limiter function, stays off by default, and is not a guarantee
+of correct gameplay timing or sustained 60 FPS. Do not combine it with imported
+cheats or patches.
+
 Experimental local cheats and IPS/IPS32 patches (including a 60 FPS candidate)
 can be imported when building, with an optional in-game switchable mode. Patch
 files must match the main NSO build ID. Runtime groups start off by default;

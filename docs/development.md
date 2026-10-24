@@ -12,7 +12,7 @@ and [support skill](../skills/lordran-native-support/SKILL.md).
 |---|---|
 | Rewriter (`dm/tools/patch_nso.py`, `DM_RULESET=native`) | Rewrites kernel-dependent instructions in the registered module builds for the target title. User-selected static code patches are applied before rewriting; none are enabled by default. No built-in game-specific code cuts, observation gates or resolution patches are applied |
 | Host (`dm/host`) | Provides Horizon kernel and system services: threads, synchronization, memory, transactional saves, HID, audio, movies, software keyboard, focus and lifecycle |
-| Graphics (`dm/gfx`) | Implements NVN on Metal. `shader_split.py` extracts the target title's BNSH / GLSLC shader corpus for offline translation and compilation into the profile cache |
+| Graphics (`dm/gfx`) | Implements NVN on Metal. `shader_split.py` extracts the target title's BND3 / GLSLC shader corpus for offline translation and compilation into the profile cache |
 | Audio | AudioOut and the SDK audio renderer are hosted in-process. Output goes through Core Audio (default on iOS, `DM_AUDIO=1` on the Mac) |
 | Input | iOS: the touch gamepad and physical controllers. Mac: scripted input (`DM_KEYS=<seconds>:<button>,…`, with `DM_KBD=<text>` answering the system keyboard) or `DM_WINDOW=1` for a window with keyboard input |
 | iOS app | One unsigned IPA for iPhone and iPad. The rewritten code is embedded in the executable; the shader libraries, the RomFS and the game icon are inside the app |
@@ -76,7 +76,18 @@ On the device, diagnostic environment switches go in `Documents/env.txt` (one `K
 
 The rewriter and both NSP packagers accept user-supplied static code patches.
 Nothing is enabled or downloaded automatically. Keep patch files and build
-outputs under `game/`. Patch files are not part of the repository.
+outputs under `game/`. Imported patch files are not part of the repository.
+
+For the registered 1.0.3 main build, `--experimental-60fps` provides a separate,
+opt-in limiter adjustment without an external patch file. Both NSP packagers
+and `patch_nso.py` accept it. It changes the rate argument from 30 to 60,
+retaining the limiter function and its time-step bookkeeping. The profile's
+`frame_limiter.json` supplies the build ID, offset and expected instructions;
+a mismatched build or instruction sequence is rejected before any write.
+The base 1.0.0 build is not supported by this option. It cannot be combined
+with `--cheat-file`, `--cheat`, `--ips` or `--runtime-cheats`, and does not
+provide a live switch. The normal build is unchanged. This does not guarantee
+60 FPS or correct gameplay timing; gameplay and device validation remain open.
 
 List a local Atmosphere text file before selecting sections:
 
@@ -141,7 +152,7 @@ audit contains no input paths or patch bytes. It stays in the private rewrite
 output directory.
 
 Static selections are fixed in the generated module images. Rebuild from the
-original NSOs without `--cheat-file`, `--cheat` or `--ips` to disable all
+original NSOs without `--experimental-60fps`, `--cheat-file`, `--cheat` or `--ips` to disable all
 patches, then replace the module directory or reinstall the unsigned IPA.
 Runtime groups can be switched in memory during play; disabling a group does
 not undo changes already made to game state or saves. Use a separate save copy

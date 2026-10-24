@@ -10,6 +10,57 @@ module_t g_mod[MAX_MOD]; int g_nmod;
 void svc_thread_dump(void) {}
 uint64_t now_ns(void) { return bp_now(); }
 
+static void test_storage_identity(void) {
+    tex_t a = {.magic = MAGIC('T', 'E', 'X', 0), .serial = 79001};
+    a.d = (nvn_texdesc){.width = 8, .height = 8, .depth = 1, .levels = 1,
+        .target = NVN_TEXTURE_TARGET_2D, .format = NVN_FORMAT_RGBA8, .samples = 1};
+    tex_t b = a; b.serial = 79002;
+    id<MTLTexture> first = tex_mtl(&a), second = tex_mtl(&b);
+    assert(first && second && first != second);
+    assert(tex_mtl(&a) == first && tex_mtl(&b) == second);
+    tex_t copied = a;
+    assert(tex_mtl(&copied) == first);
+    mtl_tex_release(&a); mtl_tex_release(&b);
+
+    uint8_t storage[4096] = {0};
+    pool_t pool = {.mem = storage, .size = sizeof storage};
+    a.serial = 79003; a.pool = &pool;
+    b = a; b.serial = 79004;
+    tex_t different_offset = a; different_offset.serial = 79005; different_offset.off = 2048;
+    first = tex_mtl(&a); second = tex_mtl(&b);
+    assert(first && first == second);
+    assert(tex_mtl(&different_offset) != first);
+    mtl_tex_release(&a); mtl_tex_release(&b); mtl_tex_release(&different_offset);
+    mtl_alias_drop_pool(&pool);
+    puts("texture identity: poolless serials stay distinct; real storage aliases still share");
+}
+
+static void test_separate_backing_pool(void) {
+    uint8_t descriptors[64] = {0}, backing[64] = {0};
+    pool_t descriptor_pool = {.mem = descriptors, .size = sizeof descriptors};
+    pool_t backing_pool = {.mem = backing, .size = sizeof backing};
+    dpool_t pool = {&descriptor_pool, 0, 2};
+    tex_t source = {.serial = 79000, .pool = &backing_pool};
+    mtl_reg_tex_pool(&pool, 1, &source, NULL);
+    uintptr_t key = (uintptr_t)descriptors + 32;
+    treg_t *entry = nvn_hm_get(&g_treg_pool, &key); assert(entry);
+    unsigned before = treg_view_count();
+    MTLTextureDescriptor *description = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:
+        MTLPixelFormatRGBA8Unorm width:1 height:1 mipmapped:NO];
+    id<MTLTexture> view = [g_dev newTextureWithDescriptor:description]; assert(view);
+    entry->view = (void *)CFBridgingRetain(view);
+    entry->alt = (void *)CFBridgingRetain(view);
+    assert(treg_view_count() == before + 1);
+    treg_drop_pool_views(&backing_pool);
+    assert(nvn_hm_get(&g_treg_pool, &key) == entry);
+    assert(!entry->view && !entry->alt && entry->ok);
+    assert(treg_view_count() == before);
+    treg_drop_pool_views(&backing_pool);
+    treg_drop_pool_views(&descriptor_pool);
+    assert(!nvn_hm_get(&g_treg_pool, &key));
+    puts("pool-local texture registry: separate backing-pool invalidation passed");
+}
+
 static void test_feedback_pool(void) {
     __block __weak id probe;
     void *(*autorelease_raw)(void *) = dlsym(RTLD_DEFAULT, "objc_autorelease");
@@ -114,6 +165,8 @@ int main(int argc, char **argv) { @autoreleasepool {
     alarm(30);
     mtl_init();
     test_memory_text();
+    test_storage_identity();
+    test_separate_backing_pool();
     test_feedback_pool();
     if (argc == 2 && !strcmp(argv[1], "--pools-only")) {
         puts("GPU feedback: autoreleased objects are released between work items");

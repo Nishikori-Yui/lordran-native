@@ -19,7 +19,7 @@ Two conventions that run through the whole table:
 | Texture | `MTLTexture` | The game's packaged textures are in block-linear layout and are deswizzled at upload; format mapping and deswizzling are in `tex/`. After the game rewrites pool memory the texture is uploaded again, which is detected by the write-protection dirty page tracking of `nvn/nvn_dirty.c`. `ReadTexels`: packaged textures are deswizzled and read directly from pool memory, and textures written by the GPU are read back from the `MTLTexture` |
 | TextureView | `newTextureViewWithPixelFormat:textureType:levels:slices:` | — |
 | Sampler | `MTLSamplerState` | For border color Metal has only three presets (transparent black, opaque black, opaque white); the nearest one to the border color NVN gives is chosen |
-| TexturePool / SamplerPool | A host-side table: descriptor number → texture / sampler | The value of a separate texture handle is the descriptor number |
+| TexturePool / SamplerPool | Host-side tables keyed by descriptor storage address | Descriptor numbers are local to the pool selected by the command stream. Registrations use the pool's descriptor address, so identical IDs in different pools remain distinct; wrappers over the same descriptor storage share entries |
 | Program | One `MTLFunction` per stage | Keyed by the hash of the shader's control section plus code area and loaded from the offline-translated `<key>_b.metallib`; nothing is translated at run time. For the translation chain see the README |
 | State objects (Blend / Color / ChannelMask / Multisample / Polygon / DepthStencil / VertexAttrib / VertexStream) | Fields of the render pipeline descriptor + `MTLDepthStencilState` + encoder state | The game copies these small structures by value, and the host side packs them in place with bit fields. Render pipelines and depth-stencil states are cached by state hash |
 | CommandBuffer | A record stream recorded in the game's command memory | Replayed at submit time. The host's record inside the game's `NVNcommandBuffer` leaves byte +0x10 alone: the game's inlined NVN code writes it directly. When a recording outgrows the game's memory the host lends a segment, released only when the game re-grants the memory the recording started in; `GetCommandMemoryUsed` counts the bytes in both |
@@ -27,6 +27,10 @@ Two conventions that run through the whole table:
 | Sync | The fence value of a submission | `FenceSync` records the fence value of the most recent submission; `SyncWait` lets the caller through only after the GPU has actually completed up to that value (the completed value of an `MTLSharedEvent`). Waiting on a sync object that was never fenced returns a timeout directly |
 | Event | A 32-bit value in game memory | The value is written after the GPU completes |
 | Window | The game's own swapchain textures ↔ `CAMetalLayer` | `AcquireTexture` returns the index of a swapchain texture, and the wait for vertical sync happens here; `QueuePresentTexture` only puts the presentation into a queue and returns immediately, and the presentation thread draws that texture onto the drawable using the crop region given by `WindowSetCrop`. It draws the stored bytes as the Switch's scan-out sends them: an sRGB swapchain texture is sampled through a non-sRGB view (`present_raw_src`) |
+
+GPU-only textures without a guest memory pool are identified by serial, not
+by a null storage address. Equal dimensions and formats do not establish an
+alias relationship. Actual pool/offset registrations retain storage sharing.
 
 ## 2. Commands
 
@@ -45,7 +49,7 @@ Two conventions that run through the whole table:
 | CopyBufferToTexture / CopyTextureToBuffer / CopyTextureToTexture | Texture copies | Some forms of texture-to-texture are not implemented and report red when encountered |
 | ReportCounter / ResetCounter | The counter's value is written back after the GPU completes | The "samples passed" kind is implemented with Metal's visibility result buffer |
 | SignalEvent | The event's value is written, which happens after the GPU completes | — |
-| SetTexturePool / SetSamplerPool | Recorded into the command stream, noting the descriptor pool currently in use | — |
+| SetTexturePool / SetSamplerPool | Storage base and capacity captured in the command stream, applied at replay | Reusing the pool wrapper cannot redirect recorded commands. The active pools determine bindless handle resolution |
 
 The following are empty implementations (`g_nops` in `hle_nvn.c`); calling them neither reports red nor has any effect:
 
@@ -68,6 +72,20 @@ Switch shaders obtain their resources through a few constant sections maintained
 | `SUPPORT` | Auxiliary constants used by the translator itself |
 
 A texture slot with nothing bound is given a dummy texture, whose type and pixel class are taken from the reflection.
+
+Bindless texture and sampler handles are resolved against the active descriptor
+pools at replay time. The low texture ID and high sampler ID are pool-local;
+they are not global resource IDs. This matters for Dark Souls, which switches
+descriptor pools inside a frame and reuses IDs between them. The host also
+applies the same pool selection when reading handles from uniform buffers
+(`NVN_RB_TEXU` / `NVN_RB_SAMPU`).
+
+Bindless uniforms are reread before argument reuse; negative offsets, short
+ranges and address overflow resolve as empty bindings. Pending GPU writes to
+a handle remain unsupported and are diagnosed rather than synchronized here.
+The optional store-lookahead index declines submissions with texture-pool
+selection, because its cached slot serials cannot prove later handle remapping.
+TBDR optimizations remain disabled by default.
 
 ## 4. Adding a function that is not implemented yet
 
