@@ -28,4 +28,4 @@ game_profile: $(GAME_H)
 $(GAME_H): $(GAME_DIR)/game.tsv ../games/game.py
 	python3 ../games/game.py header $(GAME) $@
 dmhost: Makefile $(SRC) $(GFX) $(wildcard *.h) ../ios/Sources/dm_touch_controls.[ch] ../ios/vphone/*.h $(GFX_H) $(GAME_H) $(GAME_DIR)/dmsh_chain.h $(VPX_LIB)
-	clang $(CFLAGS) -I../gfx/nvn/include -I$(dir $(GAME_H)) -I$(GAME_DIR) -I$(VPX) -I../third_party/stb_vorbis -fobjc-arc -o $@ $(SRC) $(GFX) $(VPX_LIB) -framework Cocoa -framework GameController -framework QuartzCore -framework Metal -framework AudioToolbox -framework ImageIO -framework UniformTypeIdentifiers -framework VideoToolbox -framework CoreMedia
+	clang $(CFLAGS) -I../gfx/nvn/include -I$(dir $(GAME_H)) -I$(GAME_DIR) -I$(VPX) -I../third_party/stb_vorbis -fobjc-arc -o $@ $(SRC) $(GFX) $(VPX_LIB) -framework Cocoa -framework GameController -framework QuartzCore -framework Metal -framework MetalFX -framework AudioToolbox -framework ImageIO -framework UniformTypeIdentifiers -framework VideoToolbox -framework CoreMedia

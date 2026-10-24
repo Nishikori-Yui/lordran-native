@@ -172,9 +172,10 @@
         ? @"Override" : runResolutionPercent == 100 ? @"Native" : [NSString stringWithFormat:@"%u%%", runResolutionPercent];
     NSString *graphicsMSAAName = graphicsMSAA ? [NSString stringWithFormat:@"%ux", graphicsMSAA] : @"Default";
     NSString *graphicsAnisotropyName = graphicsAnisotropy ? [NSString stringWithFormat:@"%ux", graphicsAnisotropy] : @"Default";
-    [self setText:[NSString stringWithFormat:@"Game %.1f FPS   GPU %@\nRAM %@ MiB   Metal %llu MiB\n%@   Thermal %@\nGraphics %@ · MSAA %@ · AF %@",
+    NSString *upscaling = dm_mac_graphics_upscaling() ? @" · MFX" : @"";
+    [self setText:[NSString stringWithFormat:@"Game %.1f FPS   GPU %@\nRAM %@ MiB   Metal %llu MiB\n%@   Thermal %@\nGraphics %@%@ · MSAA %@ · AF %@",
         s.game_fps, gpu, ram, (unsigned long long)(_device.currentAllocatedSize >> 20), resolution, thermal,
-        graphicsResolutionName, graphicsMSAAName, graphicsAnisotropyName]
+        graphicsResolutionName, upscaling, graphicsMSAAName, graphicsAnisotropyName]
             field:_details size:12];
 }
 - (void)dealloc {

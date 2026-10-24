@@ -187,7 +187,8 @@ The details show game FPS, delayed GPU time, process physical footprint,
 Metal allocations, swapchain resolution, thermal state, and the active graphics
 settings: resolution preset, MSAA and texture anisotropy. A `DM_GAME_RES`
 diagnostic override is reported as `Override`. RAM and Metal overlap and must
-not be added together.
+not be added together. MetalFX spatial upscaling is encoded in the presentation
+command buffer when a sub-native swapchain source is presented.
 
 `F5` cycles Simple, Detailed and Off (Fn-F5 on keyboards using media keys).
 The native View menu offers the same action and names the current mode.

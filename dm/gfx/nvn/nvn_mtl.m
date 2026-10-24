@@ -3,6 +3,7 @@
 #import "nvn_sim_metal.h"
 #include "nvn_sim_packed16.h"
 #import <QuartzCore/CAMetalLayer.h>
+#import <MetalFX/MetalFX.h>
 #import <QuartzCore/CAMetalDisplayLink.h>
 #import <ImageIO/ImageIO.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
@@ -105,6 +106,21 @@ unsigned mtl_anisotropy_override(void) {
 void mtl_set_graphics_overrides(unsigned msaa, unsigned anisotropy) {
     atomic_store_explicit(&g_msaa_override, msaa, memory_order_relaxed);
     atomic_store_explicit(&g_anisotropy_override, anisotropy, memory_order_relaxed);
+}
+
+static _Atomic int g_spatial_upscaling;
+static int g_spatial_upscaling_supported = -1;
+static int g_spatial_upscaling_wanted;
+
+int mtl_spatial_upscaling_supported(void) {
+    if (g_spatial_upscaling_supported < 0)
+        g_spatial_upscaling_supported = g_dev != nil && [MTLFXSpatialScalerDescriptor supportsDevice:g_dev];
+    return g_spatial_upscaling_supported;
+}
+
+void mtl_set_spatial_upscaling(int on) {
+    g_spatial_upscaling_wanted = on != 0;
+    atomic_store_explicit(&g_spatial_upscaling, on && mtl_spatial_upscaling_supported(), memory_order_relaxed);
 }
 static id<MTLResidencySet> g_res;
 static int g_res_dirty;
@@ -363,6 +379,11 @@ void mtl_init(void) {
     }
     g_ev = [g_dev newSharedEvent];
     g_keep = [NSMutableArray array];
+    if (g_spatial_upscaling_wanted) {
+        g_spatial_upscaling_supported = -1;
+        mtl_set_spatial_upscaling(1);
+        MLOG("MetalFX spatial upscaling initialized: supported=%d enabled=%d", mtl_spatial_upscaling_supported(), atomic_load_explicit(&g_spatial_upscaling, memory_order_relaxed));
+    }
     int force_cpu_deswz = getenv("DM_NVN_DESWZ_CPU") != NULL;
     g_nvn_deswz_gpu = !force_cpu_deswz && nvn_deswz_gpu_init(g_dev) == 0;
     dm_res_report_register(mtl_res_counts);
@@ -2948,13 +2969,13 @@ static void state_reset(void) {
 // Other mismatches (integer input with a normalized / half format, float input with an integer format) cannot keep the bit pattern: report once and keep the format.
 static MTLVertexFormat vfmt_for_ct(MTLVertexFormat f, int ct, int nvn_fmt, const char *vs_key, int attr) {
     static const MTLVertexFormat U[] = { MTLVertexFormatUChar, MTLVertexFormatUChar2, MTLVertexFormatUChar3, MTLVertexFormatUChar4, MTLVertexFormatUShort, MTLVertexFormatUShort2, MTLVertexFormatUShort3, MTLVertexFormatUShort4, MTLVertexFormatUInt, MTLVertexFormatUInt2, MTLVertexFormatUInt3, MTLVertexFormatUInt4 };
-    static const MTLVertexFormat I[] = { MTLVertexFormatChar, MTLVertexFormatChar2, MTLVertexFormatChar3, MTLVertexFormatChar4, MTLVertexFormatShort, MTLVertexFormatShort2, MTLVertexFormatShort3, MTLVertexFormatShort4, MTLVertexFormatInt, MTLVertexFormatInt2, MTLVertexFormatInt3, MTLVertexFormatInt4 };
+    static const MTLVertexFormat SIGNED[] = { MTLVertexFormatChar, MTLVertexFormatChar2, MTLVertexFormatChar3, MTLVertexFormatChar4, MTLVertexFormatShort, MTLVertexFormatShort2, MTLVertexFormatShort3, MTLVertexFormatShort4, MTLVertexFormatInt, MTLVertexFormatInt2, MTLVertexFormatInt3, MTLVertexFormatInt4 };
     static const MTLVertexFormat F[] = { MTLVertexFormatFloat, MTLVertexFormatFloat2, MTLVertexFormatFloat3, MTLVertexFormatFloat4 };
     int iu = -1, ii = -1, iff = -1;
-    for (int i = 0; i < 12; i++) { if (U[i] == f) iu = i; if (I[i] == f) ii = i; }
+    for (int i = 0; i < 12; i++) { if (U[i] == f) iu = i; if (SIGNED[i] == f) ii = i; }
     for (int i = 0; i < 4; i++) if (F[i] == f) iff = i;
     if (ct == NVN_CT_UINT) { if (iu >= 0) return f; if (ii >= 0) return U[ii]; if (iff >= 0) return U[8 + iff]; }
-    else if (ct == NVN_CT_INT) { if (ii >= 0) return f; if (iu >= 0) return I[iu]; if (iff >= 0) return I[8 + iff]; }
+    else if (ct == NVN_CT_INT) { if (ii >= 0) return f; if (iu >= 0) return SIGNED[iu]; if (iff >= 0) return SIGNED[8 + iff]; }
     else { if (iu < 0 && ii < 0) return f; }
     RED_ONCE(66, "Vertex attribute format=%#x incompatible with shader_input=%s; bit pattern cannot be preserved; using original format: vertex_shader=%s attribute=%d",
              nvn_fmt, ct == NVN_CT_UINT ? "uint" : ct == NVN_CT_INT ? "int" : "float", vs_key, attr);
@@ -6490,6 +6511,54 @@ static void present_pipeline(MTLPixelFormat format) {
         g_blit_samp = [g_dev newSamplerStateWithDescriptor:sd];
     }
 }
+
+static id<MTL4FXSpatialScaler> g_spatial_scaler;
+static id<MTLTexture> g_spatial_output;
+static NSUInteger g_spatial_w, g_spatial_h;
+
+static id<MTLTexture> spatial_upscale(id<MTL4CommandBuffer> cb, id<MTLTexture> src, NSUInteger cw, NSUInteger ch) {
+    if (!atomic_load_explicit(&g_spatial_upscaling, memory_order_relaxed)) return nil;
+    if (src.sampleCount != 1 || src.textureType != MTLTextureType2D) return nil;
+    if (src.width >= cw || src.height >= ch) return nil;
+    if (!g_spatial_scaler || g_spatial_w != src.width || g_spatial_h != src.height) {
+        MTLFXSpatialScalerDescriptor *desc = [MTLFXSpatialScalerDescriptor new];
+        desc.colorTextureFormat = src.pixelFormat;
+        desc.outputTextureFormat = src.pixelFormat;
+        desc.inputWidth = src.width; desc.inputHeight = src.height;
+        desc.outputWidth = cw; desc.outputHeight = ch;
+        desc.colorProcessingMode = MTLFXSpatialScalerColorProcessingModePerceptual;
+        NSError *error = nil;
+        id<MTL4Compiler> compiler = [g_dev newCompilerWithDescriptor:[MTL4CompilerDescriptor new] error:&error];
+        id<MTL4FXSpatialScaler> scaler = compiler ? [desc newSpatialScalerWithDevice:g_dev compiler:compiler] : nil;
+        if (!scaler) {
+            DM_LOG_ERROR("metal", "MetalFX spatial scaler creation failed: input=%lux%lu output=%lux%lu error=%s",
+                         (unsigned long)src.width, (unsigned long)src.height, (unsigned long)cw, (unsigned long)ch,
+                         error.localizedDescription.UTF8String);
+            atomic_store_explicit(&g_spatial_upscaling, 0, memory_order_relaxed);
+            return nil;
+        }
+        g_spatial_scaler = scaler;
+        g_spatial_w = src.width; g_spatial_h = src.height;
+        { static int once; if (!once++) MLOG("MetalFX spatial upscaling enabled: input=%lux%lu output=%lux%lu", (unsigned long)src.width, (unsigned long)src.height, (unsigned long)cw, (unsigned long)ch); }
+    }
+    if (!g_spatial_output || g_spatial_output.width != cw || g_spatial_output.height != ch || g_spatial_output.pixelFormat != src.pixelFormat) {
+        MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:src.pixelFormat width:cw height:ch mipmapped:NO];
+        d.usage = g_spatial_scaler.outputTextureUsage;
+        d.storageMode = MTLStorageModePrivate;
+        g_spatial_output = [g_dev newTextureWithDescriptor:d];
+        if (!g_spatial_output) {
+            DM_LOG_ERROR("metal", "MetalFX output texture creation failed: size=%lux%lu", (unsigned long)cw, (unsigned long)ch);
+            atomic_store_explicit(&g_spatial_upscaling, 0, memory_order_relaxed);
+            return nil;
+        }
+    }
+    g_spatial_scaler.colorTexture = src;
+    g_spatial_scaler.inputContentWidth = src.width;
+    g_spatial_scaler.inputContentHeight = src.height;
+    g_spatial_scaler.outputTexture = g_spatial_output;
+    [g_spatial_scaler encodeToCommandBuffer:cb];
+    return g_spatial_output;
+}
 // Present samples only the valid source rectangle declared by NVN; kept separate from the raw swapchain readback screenshot. Edges are clamped to the texel centers of the valid area, so bilinear does not read the black texels outside.
 // Present samples the raw bytes stored in the swapchain texture (the Switch's scan-out sends the stored bytes as they are): an sRGB source is replaced by a non-sRGB view of the same storage,
 // otherwise sampling decodes to linear first, the BGRA8Unorm layer does not encode again, and the whole picture comes out dark. Other formats are returned as they are (Mario's swapchain is RGBA8 and does not come here).
@@ -6662,7 +6731,16 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
 #endif
     id<MTL4CommandBuffer> cb = g_present_cb[alloc_i];
     [cb beginCommandBufferWithAllocator:g_present_alloc4[alloc_i]];
-    if (!present_encode_m4(cb, src, dr.texture, crop, alloc_i)) {
+    id<MTLTexture> presented = src;
+    NSUInteger cw = crop && crop[2] ? (NSUInteger)crop[2] : src.width;
+    NSUInteger ch = crop && crop[3] ? (NSUInteger)crop[3] : src.height;
+    double scale = fmin((double)dr.texture.width / cw, (double)dr.texture.height / ch);
+    NSUInteger upscale_w = (NSUInteger)(src.width * scale + 0.5);
+    NSUInteger upscale_h = (NSUInteger)(src.height * scale + 0.5);
+    if (atomic_load_explicit(&g_spatial_upscaling, memory_order_relaxed) && src.textureType == MTLTextureType2D && src.sampleCount == 1 &&
+        (upscale_w > src.width || upscale_h > src.height))
+        presented = spatial_upscale(cb, src, upscale_w, upscale_h) ?: src;
+    if (!present_encode_m4(cb, presented, dr.texture, crop, alloc_i)) {
         [cb endCommandBuffer];
 #if !TARGET_OS_SIMULATOR
         [g_q4 signalDrawable:dr];
