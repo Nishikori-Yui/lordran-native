@@ -4,6 +4,10 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#ifdef __OBJC__
+#import <Metal/Metal.h>
+int mtl_spatial_upscaling_supported_on_device(id<MTLDevice> device);   // Front-end menu probe, independent of graphics initialization order
+#endif
 
 void mtl_init(void);
 void mtl_set_graphics_overrides(unsigned msaa, unsigned anisotropy);

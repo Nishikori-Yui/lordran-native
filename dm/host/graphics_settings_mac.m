@@ -5,6 +5,7 @@
 void mtl_set_graphics_overrides(unsigned msaa, unsigned anisotropy) { (void)msaa; (void)anisotropy; }
 void mtl_set_spatial_upscaling(int on) { (void)on; }
 int mtl_spatial_upscaling_supported(void) { return 0; }
+int mtl_spatial_upscaling_supported_on_device(id<MTLDevice> device) { (void)device; return 0; }
 #endif
 #include <stdlib.h>
 #include <strings.h>
@@ -78,6 +79,7 @@ void dm_mac_graphics_apply(void) {
     NSMenuItem *_msaaItem;
     NSMenuItem *_anisotropyItem;
     NSMenuItem *_upscalingItem;
+    BOOL _upscalingSupported;
 }
 
 - (instancetype)initWithWindow:(NSWindow *)window device:(id<MTLDevice>)device {
@@ -92,8 +94,8 @@ void dm_mac_graphics_apply(void) {
         if ([_device supportsTextureSampleCount:value]) [msaa addObject:@(value)];
     }
     _msaaValues = msaa;
-    BOOL upscalingSupported = mtl_spatial_upscaling_supported();
-    if (!upscalingSupported) DM_LOG_INFO("metal", "MetalFX spatial upscaling unavailable on this device");
+    _upscalingSupported = mtl_spatial_upscaling_supported_on_device(_device);
+    if (!_upscalingSupported) DM_LOG_INFO("metal", "MetalFX spatial upscaling unavailable on this device");
     [self installMenu];
     [self updateTitles];
     return self;
@@ -141,7 +143,7 @@ void dm_mac_graphics_apply(void) {
     _anisotropyItem.target = self;
     _upscalingItem = [[NSMenuItem alloc] initWithTitle:@"" action:@selector(cycleUpscaling:) keyEquivalent:@""];
     _upscalingItem.target = self;
-    _upscalingItem.hidden = !mtl_spatial_upscaling_supported();
+    _upscalingItem.hidden = !_upscalingSupported;
     [menu addItem:_resolutionItem];
     [menu addItem:_msaaItem];
     [menu addItem:_anisotropyItem];
@@ -160,7 +162,7 @@ void dm_mac_graphics_apply(void) {
     _resolutionItem.title = [NSString stringWithFormat:@"%@: %@", text(@"Resolution", @"分辨率"), [self resolutionName:resolution]];
     _msaaItem.title = [NSString stringWithFormat:@"%@: %@", text(@"MSAA", @"MSAA"), [self msaaName:msaa]];
     _anisotropyItem.title = [NSString stringWithFormat:@"%@: %@", text(@"Texture filtering", @"纹理过滤"), [self anisotropyName:anisotropy]];
-    if (!mtl_spatial_upscaling_supported()) return;
+    if (!_upscalingSupported) return;
     _upscalingItem.title = [NSString stringWithFormat:@"%@: %@", text(@"Upscaling", @"超分辨率"), [self upscalingName:dm_mac_graphics_upscaling()]];
 }
 
@@ -208,7 +210,7 @@ void dm_mac_graphics_apply(void) {
 
 - (void)cycleUpscaling:(id)sender {
     (void)sender;
-    if (!mtl_spatial_upscaling_supported()) return;
+    if (!_upscalingSupported) return;
     [NSUserDefaults.standardUserDefaults setInteger:dm_mac_graphics_upscaling() ? 0 : 1 forKey:kUpscaling];
     [self changed];
 }

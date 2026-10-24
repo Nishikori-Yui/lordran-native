@@ -118,6 +118,10 @@ int mtl_spatial_upscaling_supported(void) {
     return g_spatial_upscaling_supported;
 }
 
+int mtl_spatial_upscaling_supported_on_device(id<MTLDevice> device) {
+    return device != nil && [MTLFXSpatialScalerDescriptor supportsDevice:device];
+}
+
 void mtl_set_spatial_upscaling(int on) {
     g_spatial_upscaling_wanted = on != 0;
     atomic_store_explicit(&g_spatial_upscaling, on && mtl_spatial_upscaling_supported(), memory_order_relaxed);
